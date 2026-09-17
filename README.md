@@ -53,7 +53,7 @@ The trained model checkpoints are already included in this repo (`local/models/`
 
 ## Step 3: Check the Results
 
-This step does not train anything -- it just loads the already-trained models and runs them against the test data, so it's quick.
+This step does not train anything -- it just loads our already-trained models and runs them against the test data, so it's quick.
 
 ```bash
 ./run_evaluation.sh        # Linux / macOS
@@ -73,16 +73,30 @@ Both commands are just a shortcut for `python learning/evaluate_ensemble.py <ckp
 
 Training builds a new model from the data instead of using the checkpoints already in this repo. The paper reports this takes about 16 GPU-hours in total for all 5 models (on 2x RTX 2080 Ti) -- your hardware may be faster or slower.
 
+This trains one model per run. We used seeds 2023, 2024, 2025, 2026, and 2027 for our 5-model ensemble:
+
 ```bash
 cd learning
-python train.py
+python train.py --seed 2023
+python train.py --seed 2024
+python train.py --seed 2025
+python train.py --seed 2026
+python train.py --seed 2027
 ```
 
-This trains one model per run, using a random seed that you can set with `--seed`. To build a 5-model ensemble like ours, run it 5 times with 5 different seeds, then put the 5 resulting checkpoint files together in one folder.
+Then put the 5 resulting checkpoint files together in one folder.
 
-## Optional: See a Picture of a Prediction
+**Important:** your new checkpoints are saved as new files in `learning/data/checkpoints/`, separate from the `ensemble_5/` folder already in this repo. The commands in the sections above and below default to `ensemble_5/`, which is our result, not yours. To check or visualize your own trained model instead of ours, point the commands at your new files:
 
-This produces one image showing the true CO2 levels next to the model's predicted CO2 levels for one test sample, along with the error between them -- similar to Figure 5 in the paper.
+```bash
+ls -t learning/data/checkpoints/*.pt | head -5   # find your newest checkpoints
+./run_evaluation.sh learning/data/checkpoints/<your_files>.pt
+python visualize_prediction.py data/checkpoints/<your_file>.pt --out my_prediction.png
+```
+
+## Optional: Visualize a Prediction (Uses Our Model by Default)
+
+This produces one image showing the true CO2 levels next to the model's predicted CO2 levels for one test sample, along with the error between them -- similar to Figure 5 in the paper. By default it uses our included model (`ensemble_5`), not a model you trained yourself -- see the note above if you trained your own and want to see that instead.
 
 ```bash
 cd learning
@@ -119,7 +133,7 @@ The dataset and code are for research use only.
 ```bibtex
 @article{bian2025data,
   title={Data-driven operator learning for energy-efficient building control},
-  author={Bian, Yuexin and Shi, Yuanyuan},
+  author={Bian, Yuexin and Shi, Yuanyuan Shi},
   journal={arXiv preprint arXiv:2504.21243},
   year={2025}
 }
