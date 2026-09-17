@@ -13,3 +13,8 @@ local/steady_case_data/
 __pycache__/
 *.pyc
 .ipynb_checkpoints/
+
+# Loose .pt files directly in checkpoints/ are typically stray duplicates of
+# local/models/ -- only the ensemble_5/ subfolder (our retrained ensemble)
+# should be tracked here.
+learning/data/checkpoints/*.pt
