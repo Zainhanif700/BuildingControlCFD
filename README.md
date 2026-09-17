@@ -1,86 +1,80 @@
 # BuildingControlCFD
 
-This repository accompanies the paper:  
-**_Data-driven operator learning for energy-efficient building control_** 
+This repository accompanies the paper:
+**_Data-driven operator learning for energy-efficient building control_**
+[arXiv:2504.21243](https://arxiv.org/abs/2504.21243) -- Yuexin Bian, Yuanyuan Shi
 
-The code integrates CFD-based airflow simulation, operator learning (neural operator models), and optimization-based control with neural operators to enable energy-efficient and ventilation control. 
-
-
+The code integrates CFD-based airflow simulation, operator learning (neural operator models), and optimization-based control with neural operators to enable energy-efficient and ventilation control.
 
 <p align="center">
   <img src="images/framework.png" alt="Framework" width="600">
 </p>
-</p><p align="center"><em>Figure 1. Our Framework</em></p>
-
+<p align="center"><em>Figure 1. Our Framework</em></p>
 
 <p align="center">
   <img src="images/predict2.png" alt="1" width="600">
-</p><p align="center"><em>Figure 2. Predicted indoor airflow distribution from the learned operator model. Proposed Ensemble Neural Operator increases accuracy and facilitate downstream control</em></p>
-
+</p>
+<p align="center"><em>Figure 2. Predicted indoor airflow distribution from the learned operator model. Proposed Ensemble Neural Operator increases accuracy and facilitates downstream control</em></p>
 
 ## ⚙️ Installation
 
-### Setup
 ```bash
-git clone https://github.com/yourusername/BuildingControlCFD.git
+git clone https://github.com/Zainhanif700/BuildingControlCFD.git
 cd BuildingControlCFD
+pip install -r requirements.txt
 ```
-Make sure you follow https://github.com/HaoZhongkai/GNOT to install dgl and related requirement package to train neural operator transformers. 
 
-### Usage
-### 1. Run CFD Simulation (Optional)
-We already provide dataset from seed = 0 to 300   
-However, if you want to generate transient airflow fields for a building geometry:
+`requirements.txt` includes the exact pinned `torch`/`dgl` CUDA builds this project was developed with (CUDA 11.8) -- if your machine uses a different CUDA version, see https://github.com/HaoZhongkai/GNOT for how to pick matching builds instead.
+
+## 🚀 Quick Start: Reproduce Ensemble Results (No Training Needed)
+
+Evaluates our own retrained 5-model ensemble (`learning/data/checkpoints/ensemble_5/`) on the held-out test set and prints each model's test error plus the ensemble average -- same metric as the paper's Table 3 (reported ensemble test error: **10.90%**). No CFD, no training (~30 GPU-hours for 5 models) -- just evaluation, minutes not hours.
+
+```bash
+./run_evaluation.sh        # Linux / macOS
+run_evaluation.bat         # Windows
+```
+
+To instead evaluate the paper authors' own pretrained checkpoints (`local/models/`):
+```bash
+./run_evaluation.sh ../local/models/*.pt
+```
+
+Both wrap `python learning/evaluate_ensemble.py <ckpt1.pt> ... <ckpt5.pt>`, which you can also call directly with any 5 checkpoint paths.
+
+## Full Pipeline (Optional)
+
+### 1. Run CFD Simulation
+We already provide the dataset for seed = 0 to 300. To generate additional transient airflow fields for a building geometry:
 ```bash
 python simulation/transient_simulation.py --seed 0
 ```
 
 ### 2. Train Neural Operator
-Train data-driven surrogate models on CFD data:
+Train data-driven surrogate models on CFD data from scratch:
 ```bash
-python learning/train.py 
+python learning/train.py
 ```
 
 ### 3. Optimize Control Strategy and Visualize
-Use optimization-based control (MPC) with learned operators:
 ```bash
 control/control_optimization.ipynb
-```
-Inspect spatial-temporal air distribution and control performance:
-```bash
 control/visualize.ipynb
 ```
-=======
-**_Data-driven operator learning for energy-efficient building control_**  
 
 ## 📂 Dataset Access
 
-We release our computational fluid dynamics (CFD) dataset on [Hugging Face 🤗 Datasets](https://huggingface.co/datasets/alwaysbyx/Bear-CFD-dataset).  
-The dataset is designed to support research in **scientific machine learning**, especially for learning **neural operators** and **data-driven PDE solvers**.
+We release our CFD dataset on [Hugging Face 🤗 Datasets](https://huggingface.co/datasets/alwaysbyx/Bear-CFD-dataset).
 
-### 🔧 Dataset Details
-
-- **Simulation Tool:** ANSYS FLUENT 2023R2  
-- **Data Types:**  
-  - Steady-state flow simulations  
-  - Transient (time-dependent) flow simulations  
-- **Domain:** Indoor air flow and CO₂ concentration in ventilated building environments  
-- **Applications:**  
-  - Neural operator learning  
-  - Spatiotemporal modeling  
-  - Model-based control for HVAC systems
+- **Simulation Tool:** ANSYS FLUENT 2023R2
+- **Data Types:** Steady-state and transient (time-dependent) flow simulations
+- **Domain:** Indoor air flow and CO₂ concentration in ventilated building environments
+- **Applications:** Neural operator learning, spatiotemporal modeling, model-based HVAC control
 
 ## 📜 License & Citation
 
 The dataset and code are released for **research purposes only**.
 
-If you use this dataset in your published work, please cite the following paper:
-
-> **Data-driven operator learning for energy-efficient building control**  
-> *Yuexin Bian, Yuanyuan Shi*  
-> [arXiv:2504.21243](https://arxiv.org/abs/2504.21243)
-
-### 📚 BibTeX
 ```bibtex
 @article{bian2025data,
   title={Data-driven operator learning for energy-efficient building control},
@@ -92,5 +86,4 @@ If you use this dataset in your published work, please cite the following paper:
 
 ## 📫 Contact
 
-For questions or collaborations, feel free to reach out via [Email](yubian@ucsd.edu). I am happy to answer any questions and collaborate! 
-
+Original authors: [Email](yubian@ucsd.edu)
