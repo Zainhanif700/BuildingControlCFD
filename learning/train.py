@@ -399,7 +399,7 @@ if __name__ == "__main__":
     # wandb.login(key="Your Key")
     # wandb_init_args = dict(name=wandb_name)
     # wandb.init(**wandb_init_args)
-
+    wandb.init(mode="disabled")
     BASE_DIR = os.path.dirname(os.path.abspath(__file__))
     train_path, test_path = os.path.join(BASE_DIR, "dataset/train_data_norm.pkl"), os.path.join(BASE_DIR, "dataset/test_data_norm.pkl")
     dataset_name = "co2"
@@ -425,9 +425,7 @@ if __name__ == "__main__":
     get_seed(args.seed)
     torch.cuda.empty_cache()
 
-    loss_func = LogLoss(normalizer=args.normalizer)
-    metric_func = LogLoss(normalizer=args.normalizer)
-
+    loss_func = get_loss_func(name=args.loss_name, args=args, regularizer=False, normalizer=args.normalizer)
     metric_func = get_loss_func(name='rel2', args=args, regularizer=False, normalizer=args.normalizer)
 
     model = get_model(args)

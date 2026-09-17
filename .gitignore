@@ -1,0 +1,15 @@
+CLAUDE.md
+.CLAUDE.md
+
+# Only these are excluded -- multiple GB each, GitHub hard-rejects files
+# over 100MB and these need Git LFS otherwise. Everything else (code,
+# checkpoints, small data files) is tracked so the repo is self-contained.
+learning/dataset/*.pkl
+local/processed_data/
+local/raw_data/
+local/steady_case_data/
+
+# Python build artifacts -- never belong in version control.
+__pycache__/
+*.pyc
+.ipynb_checkpoints/
