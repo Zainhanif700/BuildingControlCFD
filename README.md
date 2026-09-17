@@ -6,6 +6,27 @@ This repository accompanies the paper:
 
 The code integrates CFD-based airflow simulation, operator learning (neural operator models), and optimization-based control with neural operators to enable energy-efficient and ventilation control.
 
+## ⚠️ Before You Start: Download the Dataset
+
+This repo's code (not GitHub-hostable -- ~2.7GB combined) expects two files at exactly these paths:
+
+Download them from the paper's Hugging Face dataset and place them there:
+
+```bash
+mkdir -p learning/dataset
+curl -L -o learning/dataset/train_data_norm.pkl \
+  https://huggingface.co/datasets/alwaysbyx/Bear-CFD-dataset/resolve/main/processed_data/train_data_norm.pkl
+curl -L -o learning/dataset/test_data_norm.pkl \
+  https://huggingface.co/datasets/alwaysbyx/Bear-CFD-dataset/resolve/main/processed_data/test_data_norm.pkl
+```
+
+Verify the download by checking file size matches exactly (sizes above) -- a truncated/corrupted download is the most common cause of a failed run:
+```bash
+ls -l learning/dataset/
+```
+
+The pretrained checkpoints needed for evaluation are already included in this repo (`local/models/`, `learning/data/checkpoints/ensemble_5/`) -- no separate download needed for those.
+
 <p align="center">
   <img src="images/framework.png" alt="Framework" width="600">
 </p>
@@ -28,7 +49,7 @@ pip install -r requirements.txt
 
 ## 🚀 Quick Start: Reproduce Ensemble Results (No Training Needed)
 
-Evaluates our own retrained 5-model ensemble (`learning/data/checkpoints/ensemble_5/`) on the held-out test set and prints each model's test error plus the ensemble average -- same metric as the paper's Table 3 (reported ensemble test error: **10.90%**). No CFD, no training (~30 GPU-hours for 5 models) -- just evaluation, minutes not hours.
+Once the dataset is downloaded (above), evaluate our own retrained 5-model ensemble (`learning/data/checkpoints/ensemble_5/`) on the held-out test set and print each model's test error plus the ensemble average -- same metric as the paper's Table 3 (reported ensemble test error: **10.90%**). No CFD, no training (~30 GPU-hours for 5 models) -- just evaluation, minutes not hours.
 
 ```bash
 ./run_evaluation.sh        # Linux / macOS
@@ -64,7 +85,7 @@ control/visualize.ipynb
 
 ## 📂 Dataset Access
 
-We release our CFD dataset on [Hugging Face 🤗 Datasets](https://huggingface.co/datasets/alwaysbyx/Bear-CFD-dataset).
+Full dataset (including raw simulation data and steady-state cases, not just the normalized files above) is on [Hugging Face 🤗 Datasets](https://huggingface.co/datasets/alwaysbyx/Bear-CFD-dataset).
 
 - **Simulation Tool:** ANSYS FLUENT 2023R2
 - **Data Types:** Steady-state and transient (time-dependent) flow simulations
