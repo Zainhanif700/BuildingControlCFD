@@ -19,6 +19,9 @@ The code has three parts: CFD airflow simulation, a neural operator model that l
 ## Step 1: Clone and Install
 
 ```bash
+Requires Python 3.10.
+
+```bash
 git clone https://github.com/Zainhanif700/BuildingControlCFD.git
 cd BuildingControlCFD
 pip install -r requirements.txt
