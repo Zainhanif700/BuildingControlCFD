@@ -1,8 +1,8 @@
 """
-Evaluates your own 5-model ensemble on the real test set, the same way the
-paper's Table 3 does: run all 5 independently-trained models on each test
-sample, average their predictions (Eq. 9a), then compute the relative-L2
-metric on that averaged prediction.
+Evaluates your own 5-model ensemble on both the training and test sets, the
+same way the paper's Table 3 does: run all 5 independently-trained models on
+each sample, average their predictions (Eq. 9a), then compute the
+relative-L2 metric on that averaged prediction.
 
 Uses the exact same metric class (WeightedLpRelLoss, via get_loss_func('rel2'))
 that train.py's validate_epoch() uses to print "val metric" / "best val" during
@@ -17,6 +17,44 @@ import torch
 import numpy as np
 
 from data_utils import get_model, MIODataset, MIODataLoader, get_loss_func
+
+
+def evaluate(loader, models, metric_func):
+    """Run all models (plus their average) over one data loader, no training.
+    This is the exact same loop that already worked for the test set --
+    just factored out so it can also run on the training set."""
+    per_model_metric = [[] for _ in models]
+    ensemble_metric = []
+    with torch.no_grad():
+        for data in loader:
+            g, u_p, g_u = data
+            device = next(models[0].parameters()).device
+            g, g_u, u_p = g.to(device), g_u.to(device), u_p.to(device)
+            y = g.ndata["y"].squeeze()
+
+            preds = []
+            for i, m in enumerate(models):
+                out = m(g, u_p, g_u)
+                pred = out[0].squeeze() if isinstance(out, tuple) else out.squeeze()
+                preds.append(pred)
+                _, _, metric = metric_func(g, pred, y)
+                per_model_metric[i].append(metric)
+
+            ensemble_pred = torch.stack(preds, dim=0).mean(dim=0)
+            _, _, metric = metric_func(g, ensemble_pred, y)
+            ensemble_metric.append(metric)
+    return per_model_metric, ensemble_metric
+
+
+def print_results(title, checkpoint_paths, seeds, per_model_metric, ensemble_metric):
+    print(f"\n=== {title} relative L2 error (%), same metric as Table 3 ===")
+    for i, (p, s) in enumerate(zip(checkpoint_paths, seeds)):
+        val = np.mean(per_model_metric[i], axis=0)
+        val_scalar = np.mean(val) if hasattr(val, "__len__") else val
+        print(f"Model {i+1} (seed {s}): {100*val_scalar:.2f}%")
+    ens = np.mean(ensemble_metric, axis=0)
+    ens_scalar = np.mean(ens) if hasattr(ens, "__len__") else ens
+    print(f"Your 5-model ensemble: {100*ens_scalar:.2f}%")
 
 
 def main():
@@ -53,6 +91,9 @@ def main():
         y_normalizer=train_dataset.y_normalizer, x_normalizer=train_dataset.x_normalizer,
         up_normalizer=train_dataset.up_normalizer,
     )
+    # shuffle=False for both -- order doesn't affect evaluation, and keeps
+    # results directly comparable run to run.
+    train_loader = MIODataLoader(train_dataset, batch_size=args.val_batch_size, shuffle=False, drop_last=False)
     test_loader = MIODataLoader(test_dataset, batch_size=args.val_batch_size, shuffle=False, drop_last=False)
 
     normalizer = args.normalizer.to(device) if getattr(args, "normalizer", None) is not None else None
@@ -65,37 +106,13 @@ def main():
         m.eval()
         models.append(m)
 
-    per_model_metric = [[] for _ in models]
-    ensemble_metric = []
+    train_per_model, train_ensemble = evaluate(train_loader, models, metric_func)
+    test_per_model, test_ensemble = evaluate(test_loader, models, metric_func)
 
-    with torch.no_grad():
-        for data in test_loader:
-            g, u_p, g_u = data
-            g, g_u, u_p = g.to(device), g_u.to(device), u_p.to(device)
-            y = g.ndata["y"].squeeze()
+    print_results("Training-set", checkpoint_paths, seeds, train_per_model, train_ensemble)
+    print_results("Test-set", checkpoint_paths, seeds, test_per_model, test_ensemble)
 
-            preds = []
-            for i, m in enumerate(models):
-                out = m(g, u_p, g_u)
-                pred = out[0].squeeze() if isinstance(out, tuple) else out.squeeze()
-                preds.append(pred)
-                _, _, metric = metric_func(g, pred, y)
-                per_model_metric[i].append(metric)
-
-            ensemble_pred = torch.stack(preds, dim=0).mean(dim=0)
-            _, _, metric = metric_func(g, ensemble_pred, y)
-            ensemble_metric.append(metric)
-
-    print("\n=== Test-set relative L2 error (%), same metric as Table 3 ===")
-    for i, (p, s) in enumerate(zip(checkpoint_paths, seeds)):
-        val = np.mean(per_model_metric[i], axis=0)
-        val_scalar = np.mean(val) if hasattr(val, "__len__") else val
-        print(f"Model {i+1} (seed {s}): {100*val_scalar:.2f}%")
-
-    ens = np.mean(ensemble_metric, axis=0)
-    ens_scalar = np.mean(ens) if hasattr(ens, "__len__") else ens
-    print(f"\nYour 5-model ensemble: {100*ens_scalar:.2f}%")
-    print("Paper's reported ensemble (Table 3): 10.90%")
+    print("\nPaper's reported ensemble (Table 3) -- train: 5.9%, test: 10.90%")
 
 
 if __name__ == "__main__":
