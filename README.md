@@ -86,11 +86,12 @@ python train.py --seed 2027
 
 Then put the 5 resulting checkpoint files together in one folder.
 
-**Important:** your new checkpoints are saved as new files in `learning/data/checkpoints/`, separate from the `ensemble_5/` folder already in this repo. The commands in the sections above and below default to `ensemble_5/`, which is our result, not yours. To check or visualize your own trained model instead of ours, point the commands at your new files:
+**Important:** your new checkpoints are saved as new files in `learning/data/checkpoints/`, separate from the `ensemble_5/` folder already in this repo. The commands above and below default to `ensemble_5/`, which is our result, not yours. To check or visualize your own trained model instead of ours, point the commands at your new files (run from the repo root, then `cd learning` for the last one):
 
 ```bash
-ls -t learning/data/checkpoints/*.pt | head -5   # find your newest checkpoints
-./run_evaluation.sh learning/data/checkpoints/<your_files>.pt
+ls -t learning/data/checkpoints/*.pt | head -5
+./run_evaluation.sh data/checkpoints/<your_files>.pt
+cd learning
 python visualize_prediction.py data/checkpoints/<your_file>.pt --out my_prediction.png
 ```
 
