@@ -63,7 +63,7 @@ This step does not train anything -- it just loads our already-trained models an
 run_evaluation.bat         # Windows
 ```
 
-By default this checks our own retrained 5-model ensemble (`learning/data/checkpoints/ensemble_5/`) and prints each model's error plus the ensemble's error. The paper reports 10.90% for the ensemble on this same test set (Table 3), so you can compare directly.
+By default this checks our own retrained 5-model ensemble (`learning/data/checkpoints/ensemble_5/`) and prints each model's error plus the ensemble's error, on both the training and test sets. The paper reports 5.9% (train) and 10.90% (test) for the ensemble (Table 3), so you can compare directly.
 
 To check the paper authors' own checkpoints instead:
 ```bash
