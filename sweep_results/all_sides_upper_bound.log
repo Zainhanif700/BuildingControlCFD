@@ -1,0 +1,40 @@
+[forward solve] grid 64x64, dt=0.00252, steps=397, snapshots=22
+[forward solve] concentration range: [0.0000, 0.6453] (should be finite and bounded, not exploding)
+[domain] gradient-rich box: x in [0.048, 1.000], y in [0.190, 0.810]
+[data] 25 fixed sensors x 22 time snapshots = 550 training points for the data loss
+[data] known-velocity sides: ['left', 'right', 'top', 'bottom']
+[data] 200 boundary points with known true velocity given (the 'window' inlet, mirroring the paper's own measured-inlet approach)
+[train] using device: cuda:0
+[train] training for 20000 epochs, 20000 collocation points/epoch, lambda_pde=10.0, lambda_aux=10.0, lambda_mom=10.0, lambda_bc=10.0
+  epoch      1  lr=1.0e-03  data=8.457506e-01  bc=2.065957e-01  transport=3.141493e-01  aux=3.014876e-01  momentum=1.264886e-03  total=9.080724e+00
+  epoch   1000  lr=1.0e-03  data=7.319694e-03  bc=3.274473e-04  transport=9.564399e-04  aux=1.022046e-03  momentum=4.720357e-04  total=3.509939e-02
+  epoch   2000  lr=1.0e-03  data=6.705567e-03  bc=1.040006e-04  transport=5.164133e-04  aux=5.031437e-04  momentum=1.715180e-04  total=1.965632e-02
+  epoch   3000  lr=1.0e-03  data=6.289373e-03  bc=1.132185e-04  transport=4.693483e-04  aux=4.600140e-04  momentum=2.449022e-04  total=1.916420e-02
+  epoch   4000  lr=1.0e-03  data=5.874685e-03  bc=8.974352e-05  transport=1.985544e-04  aux=1.981282e-04  momentum=7.886297e-05  total=1.152758e-02
+  epoch   5000  lr=1.0e-03  data=5.429859e-03  bc=7.100369e-05  transport=1.527719e-04  aux=1.510118e-04  momentum=6.089135e-05  total=9.786647e-03
+  epoch   6000  lr=1.0e-03  data=5.042540e-03  bc=6.968254e-05  transport=2.010695e-04  aux=1.994156e-04  momentum=6.781327e-05  total=1.042235e-02
+  epoch   7000  lr=1.0e-03  data=4.571531e-03  bc=7.433461e-05  transport=1.567392e-04  aux=1.563978e-04  momentum=6.023816e-05  total=9.048630e-03
+  epoch   8000  lr=1.0e-03  data=3.976312e-03  bc=5.973431e-05  transport=9.667820e-05  aux=9.614268e-05  momentum=4.172245e-05  total=6.919088e-03
+  epoch   9000  lr=1.0e-03  data=3.392608e-03  bc=6.409278e-05  transport=2.341931e-04  aux=2.361848e-04  momentum=9.054625e-05  total=9.642778e-03
+  epoch  10000  lr=1.0e-04  data=2.926031e-03  bc=6.553438e-05  transport=1.221860e-04  aux=1.285125e-04  momentum=4.660896e-05  total=6.554449e-03
+  epoch  11000  lr=1.0e-04  data=2.817590e-03  bc=5.202467e-05  transport=7.087956e-05  aux=7.301988e-05  momentum=3.446500e-05  total=5.121481e-03
+  epoch  12000  lr=1.0e-04  data=2.721788e-03  bc=5.056545e-05  transport=7.157002e-05  aux=7.418115e-05  momentum=3.487632e-05  total=5.033717e-03
+  epoch  13000  lr=1.0e-04  data=2.580640e-03  bc=4.893354e-05  transport=6.964325e-05  aux=7.266987e-05  momentum=3.385471e-05  total=4.831654e-03
+  epoch  14000  lr=1.0e-04  data=2.414220e-03  bc=4.580015e-05  transport=6.403985e-05  aux=6.581136e-05  momentum=3.203385e-05  total=4.491073e-03
+  epoch  15000  lr=1.0e-05  data=2.241503e-03  bc=4.295532e-05  transport=5.935680e-05  aux=6.265200e-05  momentum=2.980222e-05  total=4.189167e-03
+  epoch  16000  lr=1.0e-05  data=2.218219e-03  bc=4.243932e-05  transport=6.251328e-05  aux=6.563975e-05  momentum=2.905534e-05  total=4.214696e-03
+  epoch  17000  lr=1.0e-05  data=2.193510e-03  bc=4.195909e-05  transport=5.924455e-05  aux=6.200068e-05  momentum=2.882321e-05  total=4.113785e-03
+  epoch  18000  lr=1.0e-05  data=2.157317e-03  bc=4.118049e-05  transport=6.067654e-05  aux=6.381096e-05  momentum=2.830781e-05  total=4.097076e-03
+  epoch  19000  lr=1.0e-05  data=2.124802e-03  bc=4.032905e-05  transport=5.701812e-05  aux=5.974073e-05  momentum=2.750873e-05  total=3.970768e-03
+  epoch  20000  lr=1.0e-05  data=2.088807e-03  bc=3.996016e-05  transport=5.951041e-05  aux=6.301586e-05  momentum=2.667284e-05  total=3.980399e-03
+
+=== RESULT: recovered vs. true velocity, INSIDE THE GRADIENT-RICH BOX ONLY ===
+  t=0.30 (frac=0.3): u err=1.93%  v err=1471659280.11%  speed err=1.93%
+  t=0.50 (frac=0.5): u err=1.29%  v err=979147435.42%  speed err=1.29%
+  t=0.70 (frac=0.7): u err=1.48%  v err=1294565536.70%  speed err=1.48%
+  t=1.00 (frac=1.0): u err=2.60%  v err=2181161074.43%  speed err=2.60%  (near training-window edge)
+
+  Primary result (mid-time, t=0.50): speed error 1.29%
+  Boundary condition given on: ['left', 'right', 'top', 'bottom'] (default 'left' = window/inlet only)
+
+Saved comparison figure to sweep_results/all_sides_upper_bound.png

@@ -1,0 +1,8 @@
+run_name,bc_sides,lambda_mom,lambda_bc,n_bc,mid_time_speed_err_pct,status
+left_baseline,"['left']",10.0,10.0,200,N/A,OK
+left_right,"['left', 'right']",10.0,10.0,200,N/A,OK
+left_top,"['left', 'top']",10.0,10.0,200,N/A,OK
+all_sides_upper_bound,"['left', 'right', 'top', 'bottom']",10.0,10.0,200,N/A,OK
+left_more_bc_points,"['left']",10.0,10.0,400,N/A,OK
+left_higher_bc_weight,"['left']",10.0,50.0,200,N/A,OK
+left_higher_mom_weight,"['left']",50.0,10.0,200,N/A,OK
