@@ -145,7 +145,7 @@ class GNOTOperator(nn.Module):
         door_val = torch.zeros(B, door_pos.shape[1], 1, device=device)    # doors have no "value"
         door_type = torch.ones(B, door_pos.shape[1], dtype=torch.long, device=device)
 
-        occ_pos = self.room_center.unsqueeze(0).expand(B, 1, -1).squeeze(1).unsqueeze(1)  # (B,1,3)
+        occ_pos = self.room_center.unsqueeze(0).expand(B, -1, -1)  # (B,1,3)
         occ_val = N_people.view(B, 1, 1)
         occ_type = torch.full((B, 1), 2, dtype=torch.long, device=device)
 

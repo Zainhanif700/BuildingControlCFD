@@ -107,8 +107,8 @@ def sample_walls(n, device="cpu"):
     n_each = n // 6
     all_x, all_y, all_z = [], [], []
 
-    def reject_openings(x, y, z, openings, wall_y):
-        # openings: list of (x_lo,x_hi,z_lo,z_hi) on the plane y == wall_y
+    def reject_openings(x, y, z, openings):
+        # openings: list of (x_lo,x_hi,z_lo,z_hi) cutouts to reject
         bad = torch.zeros_like(x, dtype=torch.bool)
         for xlo, xhi, zlo, zhi in openings:
             in_open = (x >= xlo) & (x <= xhi) & (z >= zlo) & (z <= zhi)
@@ -120,14 +120,14 @@ def sample_walls(n, device="cpu"):
     x = _rand(n_each * 2, *ROOM_X, device)
     z = _rand(n_each * 2, *ROOM_Z, device)
     y = torch.full_like(x, ROOM_Y[0])
-    x, y, z = reject_openings(x, y, z, DOORS, ROOM_Y[0])
+    x, y, z = reject_openings(x, y, z, DOORS)
     all_x.append(x[:n_each]); all_y.append(y[:n_each]); all_z.append(z[:n_each])
 
     # y = ROOM_Y[1] face (has 8 window cutouts)
     x = _rand(n_each * 3, *ROOM_X, device)
     z = _rand(n_each * 3, *ROOM_Z, device)
     y = torch.full_like(x, ROOM_Y[1])
-    x, y, z = reject_openings(x, y, z, WINDOWS, ROOM_Y[1])
+    x, y, z = reject_openings(x, y, z, WINDOWS)
     all_x.append(x[:n_each]); all_y.append(y[:n_each]); all_z.append(z[:n_each])
 
     # x = 0 and x = ROOM_X[1] faces (no cutouts)
@@ -147,6 +147,28 @@ def sample_walls(n, device="cpu"):
     x = torch.cat(all_x, dim=0)
     y = torch.cat(all_y, dim=0)
     z = torch.cat(all_z, dim=0)
+    t, V, N_people = sample_scenario(x.shape[0], device)
+    return x, y, z, t, V, N_people
+
+
+def sample_columns_surface(n_per_column, device="cpu"):
+    """No-slip points on the 4 columns' curved (cylindrical) side surfaces.
+
+    FIX (found by audit): the 4 columns are solid floor-to-ceiling pillars,
+    so air must not flow through them -- but sample_interior() only ever
+    EXCLUDES points from inside the columns, it never adds points ON their
+    surface for a no-slip loss. Without this, nothing in training actually
+    stops the network from predicting flow straight through a column.
+    Parametrizes each cylinder's side wall by angle theta in [0, 2*pi) and
+    height z in [z_lo, z_hi]."""
+    all_x, all_y, all_z = [], [], []
+    for cx, cy, r, zlo, zhi in COLUMNS:
+        theta = _rand(n_per_column, 0.0, 2 * torch.pi, device)
+        z = _rand(n_per_column, zlo, zhi, device)
+        x = cx + r * torch.cos(theta)
+        y = cy + r * torch.sin(theta)
+        all_x.append(x); all_y.append(y); all_z.append(z)
+    x = torch.cat(all_x, dim=0); y = torch.cat(all_y, dim=0); z = torch.cat(all_z, dim=0)
     t, V, N_people = sample_scenario(x.shape[0], device)
     return x, y, z, t, V, N_people
 

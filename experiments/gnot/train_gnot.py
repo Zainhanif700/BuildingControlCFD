@@ -19,6 +19,7 @@ import torch
 from gnot_model import GNOTOperator
 from point_sampler import (
     sample_interior, sample_walls, sample_doors, sample_windows, sample_ic,
+    sample_columns_surface,
     ROOM_X, ROOM_Y, ROOM_Z, NUM_WINDOWS,
 )
 
@@ -44,6 +45,7 @@ SOURCE_Y = (ROOM_Y[0] + ROOM_Y[1]) / 2
 # the smoke test in the chat history before changing these further.
 POINTS_INTERIOR = 1500
 POINTS_WALLS = 600
+POINTS_COLUMNS_PER = 40   # x 4 columns = 160 -- no-slip on the columns' curved surfaces
 POINTS_WINDOWS_PER = 40   # x 8 windows = 320
 POINTS_DOORS = 200
 POINTS_IC = 400
@@ -62,18 +64,12 @@ def grad(y, x):
 
 
 def get_velocity_and_derivs(model, x, y, z, t, V, N_people):
-    """Forward pass + curl trick + all first/second derivatives needed for
-    the Navier-Stokes residuals. x,y,z,t must have requires_grad=True."""
+    """Forward pass + curl trick (via the model's OWN velocity_from_potential
+    method -- not a re-implemented copy -- so training and inference can
+    never silently drift apart if the curl-trick formula ever changes).
+    x,y,z,t must have requires_grad=True."""
     A1, A2, A3, C, p = model(x, y, z, t, V, N_people)
-
-    dA3_dy = grad(A3, y); dA2_dz = grad(A2, z)
-    dA1_dz = grad(A1, z); dA3_dx = grad(A3, x)
-    dA2_dx = grad(A2, x); dA1_dy = grad(A1, y)
-
-    u = dA3_dy - dA2_dz
-    v = dA1_dz - dA3_dx
-    w = dA2_dx - dA1_dy
-
+    u, v, w = model.velocity_from_potential(A1, A2, A3, x, y, z)
     return u, v, w, C, p
 
 
@@ -114,10 +110,20 @@ def physics_loss(model, device):
 
 
 def walls_loss(model, device):
+    # planar room faces (walls, floor, ceiling; door/window openings excluded)
     x, y, z, t, V, N_people = sample_walls(POINTS_WALLS, device)
     x.requires_grad_(True); y.requires_grad_(True); z.requires_grad_(True)
     u, v, w, c, p = get_velocity_and_derivs(model, x, y, z, t, V, N_people)
-    return (u ** 2).mean() + (v ** 2).mean() + (w ** 2).mean()
+    loss = (u ** 2).mean() + (v ** 2).mean() + (w ** 2).mean()
+
+    # FIX (found by audit): the 4 columns are solid, floor-to-ceiling pillars --
+    # no-slip must also hold on their curved surfaces, or nothing stops the
+    # network from predicting flow straight through them.
+    xc, yc, zc, tc, Vc, Nc = sample_columns_surface(POINTS_COLUMNS_PER, device)
+    xc.requires_grad_(True); yc.requires_grad_(True); zc.requires_grad_(True)
+    uc, vc, wc, cc, pc = get_velocity_and_derivs(model, xc, yc, zc, tc, Vc, Nc)
+    loss = loss + (uc ** 2).mean() + (vc ** 2).mean() + (wc ** 2).mean()
+    return loss
 
 
 def windows_loss(model, device):
