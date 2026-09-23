@@ -1,0 +1,183 @@
+"""
+Physics-only training loop for GNOT on the real room.
+
+No simulation data anywhere -- exactly like pino_parametric_3d_test.py and
+Alexander's own train_parametric_multi_window_tanh.py. The network is
+checked against the Navier-Stokes + CO2 transport equations at random
+points, with random (t, V1..V8, N_people) resampled every iteration.
+
+Physical constants below are copied from Alexander's own
+config_multi_window_tanh.yaml so our physics matches his setup (useful for
+later cross-checking against his trained model):
+    nu=0.01, rho=1.0, diffusivity=0.005, emission_per_person=1.15e-4,
+    sigma=2.5, breathing_height=1.10, tau_ramp=2.0
+"""
+import os
+import time
+import torch
+
+from gnot_model import GNOTOperator
+from point_sampler import (
+    sample_interior, sample_walls, sample_doors, sample_windows, sample_ic,
+    ROOM_X, ROOM_Y, ROOM_Z, NUM_WINDOWS,
+)
+
+# --- physical constants (matching Alexander's config exactly) ---
+NU = 0.01
+RHO = 1.0
+DIFFUSIVITY = 0.005
+EMISSION_PER_PERSON = 1.15e-4
+SIGMA = 2.5
+BREATHING_HEIGHT = 1.10
+TAU_RAMP = 2.0
+SOURCE_X = (ROOM_X[0] + ROOM_X[1]) / 2
+SOURCE_Y = (ROOM_Y[0] + ROOM_Y[1]) / 2
+
+# --- training config ---
+POINTS_INTERIOR = 4000
+POINTS_WALLS = 1500
+POINTS_WINDOWS_PER = 100   # x 8 windows = 800
+POINTS_DOORS = 500
+POINTS_IC = 1000
+MAX_ITERS = 20000
+LOG_EVERY = 10
+CKPT_EVERY = 1000
+LR = 1e-3
+
+HERE = os.path.dirname(os.path.abspath(__file__))
+CKPT_DIR = os.path.join(HERE, "checkpoints")
+os.makedirs(CKPT_DIR, exist_ok=True)
+
+
+def grad(y, x):
+    return torch.autograd.grad(y, x, grad_outputs=torch.ones_like(y), create_graph=True)[0]
+
+
+def get_velocity_and_derivs(model, x, y, z, t, V, N_people):
+    """Forward pass + curl trick + all first/second derivatives needed for
+    the Navier-Stokes residuals. x,y,z,t must have requires_grad=True."""
+    A1, A2, A3, C, p = model(x, y, z, t, V, N_people)
+
+    dA3_dy = grad(A3, y); dA2_dz = grad(A2, z)
+    dA1_dz = grad(A1, z); dA3_dx = grad(A3, x)
+    dA2_dx = grad(A2, x); dA1_dy = grad(A1, y)
+
+    u = dA3_dy - dA2_dz
+    v = dA1_dz - dA3_dx
+    w = dA2_dx - dA1_dy
+
+    return u, v, w, C, p
+
+
+def physics_loss(model, device):
+    x, y, z, t, V, N_people = sample_interior(POINTS_INTERIOR, device)
+    x.requires_grad_(True); y.requires_grad_(True); z.requires_grad_(True); t.requires_grad_(True)
+
+    u, v, w, c, p = get_velocity_and_derivs(model, x, y, z, t, V, N_people)
+
+    # first derivatives needed for convection + pressure gradient
+    du_dx, du_dy, du_dz, du_dt = grad(u, x), grad(u, y), grad(u, z), grad(u, t)
+    dv_dx, dv_dy, dv_dz, dv_dt = grad(v, x), grad(v, y), grad(v, z), grad(v, t)
+    dw_dx, dw_dy, dw_dz, dw_dt = grad(w, x), grad(w, y), grad(w, z), grad(w, t)
+    dc_dx, dc_dy, dc_dz, dc_dt = grad(c, x), grad(c, y), grad(c, z), grad(c, t)
+    dp_dx, dp_dy, dp_dz = grad(p, x), grad(p, y), grad(p, z)
+
+    # second derivatives (Laplacians) for viscosity/diffusion terms
+    d2u = grad(du_dx, x) + grad(du_dy, y) + grad(du_dz, z)
+    d2v = grad(dv_dx, x) + grad(dv_dy, y) + grad(dv_dz, z)
+    d2w = grad(dw_dx, x) + grad(dw_dy, y) + grad(dw_dz, z)
+    d2c = grad(dc_dx, x) + grad(dc_dy, y) + grad(dc_dz, z)
+
+    conv_u = u * du_dx + v * du_dy + w * du_dz
+    conv_v = u * dv_dx + v * dv_dy + w * dv_dz
+    conv_w = u * dw_dx + v * dw_dy + w * dw_dz
+    conv_c = u * dc_dx + v * dc_dy + w * dc_dz
+
+    res_u = du_dt + conv_u + (1.0 / RHO) * dp_dx - NU * d2u
+    res_v = dv_dt + conv_v + (1.0 / RHO) * dp_dy - NU * d2v
+    res_w = dw_dt + conv_w + (1.0 / RHO) * dp_dz - NU * d2w
+
+    # CO2 source: Gaussian around room center at breathing height, scaled by occupancy
+    dist2 = (x - SOURCE_X) ** 2 + (y - SOURCE_Y) ** 2 + (z - BREATHING_HEIGHT) ** 2
+    S = N_people * EMISSION_PER_PERSON * torch.exp(-dist2 / (SIGMA ** 2))
+    res_c = dc_dt + conv_c - DIFFUSIVITY * d2c - S
+
+    return (res_u ** 2).mean() + (res_v ** 2).mean() + (res_w ** 2).mean() + (res_c ** 2).mean()
+
+
+def walls_loss(model, device):
+    x, y, z, t, V, N_people = sample_walls(POINTS_WALLS, device)
+    x.requires_grad_(True); y.requires_grad_(True); z.requires_grad_(True)
+    u, v, w, c, p = get_velocity_and_derivs(model, x, y, z, t, V, N_people)
+    return (u ** 2).mean() + (v ** 2).mean() + (w ** 2).mean()
+
+
+def windows_loss(model, device):
+    x, y, z, t, V, N_people, window_idx = sample_windows(POINTS_WINDOWS_PER, device)
+    x.requires_grad_(True); y.requires_grad_(True); z.requires_grad_(True)
+    u, v, w, c, p = get_velocity_and_derivs(model, x, y, z, t, V, N_people)
+
+    V_at_point = V.gather(1, window_idx)  # (B,1) -- this point's own window's speed
+    target_v = -V_at_point * torch.tanh(3.0 * t / TAU_RAMP)  # inflow into the room (-y direction)
+
+    return (u ** 2).mean() + ((v - target_v) ** 2).mean() + (w ** 2).mean() + (c ** 2).mean()
+
+
+def doors_loss(model, device):
+    x, y, z, t, V, N_people = sample_doors(POINTS_DOORS, device)
+    _, _, _, _, p = model(x, y, z, t, V, N_people)
+    return (p ** 2).mean()
+
+
+def ic_loss(model, device):
+    x, y, z, t, V, N_people = sample_ic(POINTS_IC, device)
+    x.requires_grad_(True); y.requires_grad_(True); z.requires_grad_(True)
+    u, v, w, c, p = get_velocity_and_derivs(model, x, y, z, t, V, N_people)
+    return (u ** 2).mean() + (v ** 2).mean() + (w ** 2).mean() + (p ** 2).mean() + (c ** 2).mean()
+
+
+def main():
+    device = "cuda" if torch.cuda.is_available() else "cpu"
+    print(f"Using device: {device}")
+
+    model = GNOTOperator().to(device)
+    n_params = sum(p.numel() for p in model.parameters())
+    print(f"GNOT parameters: {n_params:,}")
+
+    optimizer = torch.optim.Adam(model.parameters(), lr=LR)
+
+    start = time.time()
+    for it in range(MAX_ITERS + 1):
+        optimizer.zero_grad()
+
+        L_phy = physics_loss(model, device)
+        L_walls = walls_loss(model, device)
+        L_windows = windows_loss(model, device)
+        L_doors = doors_loss(model, device)
+        L_ic = ic_loss(model, device)
+
+        total = L_phy + L_walls + L_windows + L_doors + L_ic
+        total.backward()
+        optimizer.step()
+
+        if it % LOG_EVERY == 0:
+            elapsed = time.time() - start
+            speed = (it + 1) / elapsed if elapsed > 0 else 0.0
+            print(f"[Iter {it:05d}/{MAX_ITERS}] Total={total.item():.5f} | "
+                  f"Phy={L_phy.item():.5f} Walls={L_walls.item():.5f} "
+                  f"Windows={L_windows.item():.5f} Doors={L_doors.item():.5f} "
+                  f"IC={L_ic.item():.5f} | {speed:.2f} it/s")
+
+        if it % CKPT_EVERY == 0 and it > 0:
+            ckpt_path = os.path.join(CKPT_DIR, f"gnot_iter{it}.pth")
+            torch.save({"iter": it, "model_state": model.state_dict(),
+                        "optimizer_state": optimizer.state_dict()}, ckpt_path)
+            print(f"  -> saved checkpoint: {ckpt_path}")
+
+    final_path = os.path.join(CKPT_DIR, "gnot_final.pth")
+    torch.save({"iter": MAX_ITERS, "model_state": model.state_dict()}, final_path)
+    print(f"Training complete. Final checkpoint: {final_path}")
+
+
+if __name__ == "__main__":
+    main()
