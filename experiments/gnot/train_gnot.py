@@ -146,24 +146,43 @@ def main():
 
     optimizer = torch.optim.Adam(model.parameters(), lr=LR)
 
+    # NOTE on memory: each loss term below is backward()-ed IMMEDIATELY after
+    # being computed (instead of summing all 5 into one `total` and calling
+    # backward() once at the end). Gradients still accumulate correctly into
+    # .grad either way -- the only difference is that this way, each term's
+    # computation graph (which can be large: curl-trick + second derivatives
+    # through the attention layers) is freed right after its own backward()
+    # instead of all 5 graphs being held in memory simultaneously. This cut
+    # peak GPU memory a lot and fixed an out-of-memory error we hit even
+    # though nvidia-smi showed several GB still free (classic "several
+    # medium graphs at once" problem, not a hard memory ceiling).
     start = time.time()
     for it in range(MAX_ITERS + 1):
         optimizer.zero_grad()
 
         L_phy = physics_loss(model, device)
-        L_walls = walls_loss(model, device)
-        L_windows = windows_loss(model, device)
-        L_doors = doors_loss(model, device)
-        L_ic = ic_loss(model, device)
+        L_phy.backward()
 
-        total = L_phy + L_walls + L_windows + L_doors + L_ic
-        total.backward()
+        L_walls = walls_loss(model, device)
+        L_walls.backward()
+
+        L_windows = windows_loss(model, device)
+        L_windows.backward()
+
+        L_doors = doors_loss(model, device)
+        L_doors.backward()
+
+        L_ic = ic_loss(model, device)
+        L_ic.backward()
+
         optimizer.step()
+
+        total_val = L_phy.item() + L_walls.item() + L_windows.item() + L_doors.item() + L_ic.item()
 
         if it % LOG_EVERY == 0:
             elapsed = time.time() - start
             speed = (it + 1) / elapsed if elapsed > 0 else 0.0
-            print(f"[Iter {it:05d}/{MAX_ITERS}] Total={total.item():.5f} | "
+            print(f"[Iter {it:05d}/{MAX_ITERS}] Total={total_val:.5f} | "
                   f"Phy={L_phy.item():.5f} Walls={L_walls.item():.5f} "
                   f"Windows={L_windows.item():.5f} Doors={L_doors.item():.5f} "
                   f"IC={L_ic.item():.5f} | {speed:.2f} it/s")
