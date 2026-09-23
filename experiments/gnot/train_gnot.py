@@ -34,11 +34,19 @@ SOURCE_X = (ROOM_X[0] + ROOM_X[1]) / 2
 SOURCE_Y = (ROOM_Y[0] + ROOM_Y[1]) / 2
 
 # --- training config ---
-POINTS_INTERIOR = 4000
-POINTS_WALLS = 1500
-POINTS_WINDOWS_PER = 100   # x 8 windows = 800
-POINTS_DOORS = 500
-POINTS_IC = 1000
+# NOTE: these are much smaller than Alexander's own point counts (8000
+# interior, etc.) on purpose. His trainer uses a plain MLP; ours uses
+# cross-attention, and computing the Laplacian terms needs SECOND-order
+# autograd through that attention -- measured to need roughly 4x more GPU
+# memory per point than a plain MLP would. Confirmed on the RTX A2000 (12GB):
+# 300 interior points (+ proportionally smaller boundary batches) peaked at
+# 1.1GB. These defaults scale that up ~5x for a healthy safety margin -- see
+# the smoke test in the chat history before changing these further.
+POINTS_INTERIOR = 1500
+POINTS_WALLS = 600
+POINTS_WINDOWS_PER = 40   # x 8 windows = 320
+POINTS_DOORS = 200
+POINTS_IC = 400
 MAX_ITERS = 20000
 LOG_EVERY = 10
 CKPT_EVERY = 1000
