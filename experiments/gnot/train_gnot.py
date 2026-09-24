@@ -95,14 +95,31 @@ LR = 1e-3
 # EMA-smoothed with alpha=0.1 (their recommended value; higher alpha here than
 # the old 0.01 since gradient norms are a much more reliable signal, so faster
 # adaptation is safe).
+# SECOND ATTEMPT AT THIS FIX ALSO FAILED (smoke-tested before committing to a
+# full run, per our "verify everything" rule): updating the gradient-norm
+# weight EVERY iteration created a feedback loop -- a big weight jump
+# immediately reshapes the shared trunk, which changes the next gradient
+# reading, producing another big jump, compounding into outright divergence
+# (observed: Windows/IC losses spiking into the hundreds within 25 iterations
+# once the weight started climbing). Wang et al. 2021's actual algorithm
+# updates this weight only PERIODICALLY (their paper anneals every several
+# iterations, not every single step) for exactly this reason -- updating
+# every step was our own oversimplification, not what the paper does.
 CO2_WEIGHT_MIN = 1.0
-CO2_WEIGHT_MAX = 10_000.0    # clamp range so a bad ratio can't destabilize training
+CO2_WEIGHT_MAX = 200.0       # lowered from 10,000 after empirically observing
+# divergence at weights in the 1,000-9,000 range during smoke testing --
+# this is a much more conservative ceiling now that we have real evidence
+# of where instability kicks in.
 CO2_WEIGHT_EMA_ALPHA = 0.1   # Wang et al. 2021's recommended EMA rate
 CO2_WEIGHT_WARMUP_ITERS = 500  # keep weight=1.0 until the network has learned
 # *something* first -- early-training gradients (like early loss ratios) are
 # noisy/unreliable, and the literature on curriculum/staged PINN training
 # (e.g. causality-based and R3 adaptive-sampling methods) supports delaying
 # aggressive reweighting until training has stabilized a bit.
+CO2_WEIGHT_UPDATE_EVERY = 100  # only recompute/EMA-update the weight every N
+# iterations (matches Wang et al.'s actual periodic-annealing practice) --
+# give the network time to adapt to a given weight before revising it again,
+# instead of compounding a fresh, possibly-noisy weight every single step.
 GRAD_CLIP_MAX_NORM = 10.0  # defense-in-depth: caps how much any single
 # iteration's combined gradient can move the shared trunk, regardless of root
 # cause. Standard practice in general deep learning (RNN/transformer training)
@@ -325,11 +342,15 @@ def main():
 
         optimizer.step()
 
-        # Rebalance the CO2 weight for the NEXT iteration using gradient-norm
-        # ratios (Wang et al. 2021), not raw loss values -- see module-level
-        # comment for why the loss-value version caused a training collapse.
-        # Held at a neutral 1.0 during the warm-up window.
-        if it >= CO2_WEIGHT_WARMUP_ITERS:
+        # Rebalance the CO2 weight using gradient-norm ratios (Wang et al.
+        # 2021), not raw loss values -- see module-level comment for why the
+        # loss-value version caused a training collapse. Held at a neutral 1.0
+        # during the warm-up window, and only RECOMPUTED periodically after
+        # that (every CO2_WEIGHT_UPDATE_EVERY iterations) -- updating every
+        # single iteration created its own feedback-loop divergence (see
+        # module-level comment), matching Wang et al.'s actual periodic
+        # annealing schedule rather than our earlier every-step version.
+        if it >= CO2_WEIGHT_WARMUP_ITERS and it % CO2_WEIGHT_UPDATE_EVERY == 0:
             co2_weight = gradnorm_weight_update(grad_ns, grad_co2, co2_weight)
 
         total_val = (L_ns.item() + co2_weight * L_co2.item() + L_walls.item()
