@@ -19,7 +19,7 @@ import matplotlib.pyplot as plt
 import matplotlib.patches as patches
 
 from gnot_model import GNOTOperator
-from point_sampler import ROOM_X, ROOM_Y, ROOM_Z, WINDOWS, DOORS, COLUMNS, NUM_WINDOWS
+from point_sampler import ROOM_X, ROOM_Y, ROOM_Z, WINDOWS, DOORS, COLUMNS, NUM_WINDOWS, BREATHING_HEIGHT
 
 # EDIT THIS to switch which trained version you're visualizing.
 #   "v1_smooth_co2" -- original run, KNOWN BAD CO2 (room-wide smooth gradient,
@@ -37,7 +37,7 @@ SCENARIO = {
     "N_people": 20.0,
     "t": 60.0,
 }
-SLICE_Z = 1.10  # breathing height -- where the CO2 source is centered
+SLICE_Z = BREATHING_HEIGHT  # single source of truth lives in point_sampler.py now
 GRID_N = 40      # resolution of the 2D slice (GRID_N x GRID_N)
 
 

@@ -20,7 +20,7 @@ from gnot_model import GNOTOperator
 from point_sampler import (
     sample_interior, sample_walls, sample_doors, sample_windows, sample_ic,
     sample_columns_surface,
-    ROOM_X, ROOM_Y, ROOM_Z, NUM_WINDOWS, CO2_SOURCE_SIGMA,
+    ROOM_X, ROOM_Y, ROOM_Z, NUM_WINDOWS, CO2_SOURCE_SIGMA, BREATHING_HEIGHT,
 )
 
 # --- physical constants (matching Alexander's config exactly) ---
@@ -29,7 +29,6 @@ RHO = 1.0
 DIFFUSIVITY = 0.005
 EMISSION_PER_PERSON = 1.15e-4
 SIGMA = CO2_SOURCE_SIGMA  # single source of truth lives in point_sampler.py now
-BREATHING_HEIGHT = 1.10
 TAU_RAMP = 2.0
 SOURCE_X = (ROOM_X[0] + ROOM_X[1]) / 2
 SOURCE_Y = (ROOM_Y[0] + ROOM_Y[1]) / 2

@@ -25,11 +25,12 @@ ROOM_X = (0.0, 15.53)
 ROOM_Y = (0.0, 9.16)
 ROOM_Z = (0.0, 3.15)
 
-# CO2 source spatial spread (matches Alexander's config exactly -- see
-# train_gnot.py's physics constants). Lives here, not duplicated in
+# CO2 source spatial spread + height (matches Alexander's config exactly --
+# see train_gnot.py's physics constants). Lives here, not duplicated in
 # gnot_model.py or train_gnot.py, since both already import from this file --
 # a second hardcoded copy would risk silently drifting out of sync.
 CO2_SOURCE_SIGMA = 2.5
+BREATHING_HEIGHT = 1.10
 
 # (x_lo, x_hi, z_lo, z_hi) on the y = ROOM_Y[0] wall
 DOORS = [
