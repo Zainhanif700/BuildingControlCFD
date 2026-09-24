@@ -39,11 +39,22 @@ SOURCE_Y = (ROOM_Y[0] + ROOM_Y[1]) / 2
 # interior, etc.) on purpose. His trainer uses a plain MLP; ours uses
 # cross-attention, and computing the Laplacian terms needs SECOND-order
 # autograd through that attention -- measured to need roughly 4x more GPU
-# memory per point than a plain MLP would. Confirmed on the RTX A2000 (12GB):
-# 300 interior points (+ proportionally smaller boundary batches) peaked at
-# 1.1GB. These defaults scale that up ~5x for a healthy safety margin -- see
-# the smoke test in the chat history before changing these further.
-POINTS_INTERIOR = 1500
+# memory per point than a plain MLP would.
+#
+# RE-MEASURED after adding the multi-octave Fourier feature encoding (see
+# FourierFeatures in gnot_model.py): the extra sin/cos nonlinearities roughly
+# DOUBLE the second-order-autograd memory cost per interior point (~7.2MB/pt
+# now vs ~3.75MB/pt before), measured directly via torch.cuda.max_memory_allocated()
+# on the RTX A2000 (12GB) by sweeping POINTS_INTERIOR in isolation:
+#   200 -> 1.45GB, 500 -> 3.60GB, 1000 -> 7.18GB, 1500 -> OOM
+# Also confirmed empirically that ONLY the interior/Laplacian term (physics_loss)
+# is expensive -- walls/columns/windows/doors/IC only need FIRST-order autograd
+# (the curl trick), so they cost almost nothing by comparison: running the full
+# pipeline with POINTS_INTERIOR=1000 and walls/columns/windows/doors/IC all at
+# their original (larger) sizes below still peaked at exactly 7.18GB, stable
+# with no growth across 10 iterations -- so only POINTS_INTERIOR was reduced
+# here (1500 -> 1000), everything else kept at full size for training quality.
+POINTS_INTERIOR = 1000
 POINTS_WALLS = 600
 POINTS_COLUMNS_PER = 40   # x 4 columns = 160 -- no-slip on the columns' curved surfaces
 POINTS_WINDOWS_PER = 40   # x 8 windows = 320
