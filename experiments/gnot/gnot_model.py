@@ -27,7 +27,9 @@ No simulation data anywhere here -- trained purely against the Navier-Stokes
 import torch
 import torch.nn as nn
 
-from point_sampler import NUM_WINDOWS, WINDOWS, DOORS, ROOM_X, ROOM_Y, ROOM_Z, CO2_SOURCE_SIGMA
+from point_sampler import (
+    NUM_WINDOWS, WINDOWS, DOORS, ROOM_X, ROOM_Y, ROOM_Z, CO2_SOURCE_SIGMA, BREATHING_HEIGHT,
+)
 
 D_MODEL = 128
 N_HEADS = 4
@@ -75,60 +77,144 @@ class TokenEncoder(nn.Module):
 
 
 class FourierFeatures(nn.Module):
-    """Multi-octave (NeRF-style) positional encoding for (x,y,z), fixed
-    (non-trainable), with frequencies chosen from the ACTUAL physical length
-    scales in this problem -- not an arbitrary default.
+    """Multi-octave, ISOTROPIC random Fourier feature positional encoding for
+    (x,y,z), fixed (non-trainable), with the frequency BAND chosen from the
+    ACTUAL physical length scales in this problem -- not an arbitrary default.
 
     FIX for a real problem found during verification: plain (x,y,z) fed
     straight into a Tanh MLP has a well-documented bias toward learning only
-    smooth, low-frequency spatial patterns ("spectral bias" -- see PINN
-    literature). Our CO2 source is a SHARP, SMALL Gaussian bump (sigma=2.5m
-    in a room ~15.5m long) -- exactly the kind of localized feature plain
-    coordinate inputs struggle to represent.
+    smooth, low-frequency spatial patterns ("spectral bias" -- Rahaman et al.
+    2019, arXiv:1806.08734). Our CO2 source is a SHARP, SMALL Gaussian bump
+    (sigma=2.5m in a room ~15.5m long) -- exactly the kind of localized
+    feature plain coordinate inputs struggle to represent.
 
-    A first version of this used a single random Gaussian scale (scale=1.0),
-    picked with no justification. Per the Fourier-features literature (see
-    chat), the encoding scale directly controls what feature SIZE the
-    network can represent: too coarse and you're back to oversmoothing (the
-    original bug); too fine and you get noisy overfitting; a single scale
-    is also generally worse than a RANGE of frequencies. So this version
-    instead uses log-spaced octaves spanning from the room's own scale down
-    to a quarter of the CO2 source's width:
+    HISTORY: a first version used a single random Gaussian scale (scale=1.0,
+    no justification) -- fixed by using a log-spaced BAND of octaves from the
+    room's own scale down to a quarter of the CO2 source's width:
         f_min = 1 / (2 * ROOM_LENGTH)   -- resolves whole-room-scale variation
         f_max = 1 / (SIGMA / 4)         -- resolves a quarter of the CO2 bump's width
-    with n_octaves doublings in between (NeRF's original positional encoding
-    scheme), applied independently per axis.
+    A second version (kept that frequency band, but applied it SEPARABLY --
+    each axis got its own independent set of sin/cos features at each octave,
+    simply concatenated). That version trained but produced a CO2 "band"
+    artifact: elevated across the room's full width instead of a compact
+    bump. Investigated via literature research (see gnot_model.py's
+    QueryEncoder for the full citation trail) -- the separable encoding used
+    here was actually a simplification of Tancik et al. 2020's own method:
+    their random Fourier features are drawn from an ISOTROPIC distribution
+    over the full coordinate vector (not independently per axis), and the
+    same isotropic convention is used in the closest literature we could find
+    solving PDEs with interior point sources (Song, Wang & Alkhalifah 2022,
+    GJI 232(3):1503, Fourier-feature PINN for seismic point-source
+    wavefields). A separable per-axis encoding is not inherently equipped to
+    represent a jointly-radial function of combined 3D distance (a sum of
+    independent per-axis sinusoids doesn't easily approximate an isotropic
+    bump); isotropic random Fourier features -- one random 3D direction
+    vector per frequency, rather than 3 independent per-axis frequencies --
+    fixes this directly since each single feature already responds to
+    distance from any direction, not just along one axis.
+
+    THIS VERSION: for each of n_octaves frequency magnitudes (same band as
+    before), draws `directions_per_octave` random unit vectors in R^3 (fixed
+    at construction via a seeded generator, non-trainable buffer) and scales
+    each by that octave's frequency magnitude. `directions_per_octave=3` by
+    default purely to keep the total feature count identical to the old
+    separable version (3 axes x n_octaves -> now 3 directions x n_octaves),
+    not because 3 is architecturally special once directions are isotropic.
     """
 
-    def __init__(self, room_length, sigma, n_octaves=7):
+    def __init__(self, room_length, sigma, n_octaves=7, directions_per_octave=3, seed=0):
         super().__init__()
         f_min = 1.0 / (2.0 * room_length)
         f_max = 1.0 / (sigma / 4.0)
-        # log-spaced frequencies from f_min to f_max, one octave per step
+        # log-spaced frequency magnitudes from f_min to f_max, one octave per step
         n_octaves = max(2, n_octaves)
         log_f = torch.linspace(torch.log2(torch.tensor(f_min)), torch.log2(torch.tensor(f_max)), n_octaves)
         freqs = 2.0 ** log_f  # (n_octaves,)
-        self.register_buffer("freqs", freqs)
+
+        # Fixed seed (not a training hyperparameter) so the encoding is
+        # reproducible across runs/checkpoints -- these directions must stay
+        # IDENTICAL between training and any later inference/visualization,
+        # since they're baked into what the downstream proj layer learned.
+        gen = torch.Generator().manual_seed(seed)
+        directions = torch.randn(n_octaves, directions_per_octave, 3, generator=gen)
+        directions = directions / directions.norm(dim=-1, keepdim=True)
+        freq_vectors = directions * freqs.view(n_octaves, 1, 1)  # (n_octaves, K, 3)
+        self.register_buffer("freq_vectors", freq_vectors.reshape(-1, 3))  # (n_octaves*K, 3)
         self.n_octaves = n_octaves
+        self.directions_per_octave = directions_per_octave
+        self.n_freq = n_octaves * directions_per_octave
 
     def forward(self, coords):
-        # coords: (N, 3) -> per-axis, per-octave sin/cos, all concatenated
-        # (N, 3, 1) * (n_octaves,) -> (N, 3, n_octaves)
-        proj = 2 * torch.pi * coords.unsqueeze(-1) * self.freqs
-        feats = torch.cat([torch.sin(proj), torch.cos(proj)], dim=-1)  # (N, 3, 2*n_octaves)
-        return feats.flatten(start_dim=1)  # (N, 3 * 2*n_octaves)
+        # coords: (N, 3) -> isotropic random projection -> (N, n_freq) -> sin/cos
+        proj = 2 * torch.pi * (coords @ self.freq_vectors.T)  # (N, n_freq)
+        return torch.cat([torch.sin(proj), torch.cos(proj)], dim=-1)  # (N, 2*n_freq)
 
 
 class QueryEncoder(nn.Module):
     """Encodes the query point (x, y, z, t) -> d_model vector."""
 
+    # Fixed, known CO2 source location (room center at breathing height) --
+    # plain Python floats (not nn.Parameter/buffer): they broadcast fine
+    # against any-device tensors in the subtraction below with no device
+    # bookkeeping needed, and are never meant to be trainable.
+    _SOURCE_X = (ROOM_X[0] + ROOM_X[1]) / 2
+    _SOURCE_Y = (ROOM_Y[0] + ROOM_Y[1]) / 2
+    _SOURCE_Z = BREATHING_HEIGHT
+
     def __init__(self, d_model=D_MODEL, room_length=ROOM_X[1] - ROOM_X[0],
                  sigma=CO2_SOURCE_SIGMA, n_octaves=7):
         super().__init__()
         self.fourier = FourierFeatures(room_length=room_length, sigma=sigma, n_octaves=n_octaves)
-        fourier_dim = 3 * 2 * n_octaves
+        self._sigma2 = sigma ** 2
+        # Derived from the actual FourierFeatures instance (2 * n_freq), not
+        # recomputed independently -- a hardcoded formula here previously
+        # assumed 3 (one per axis); now that FourierFeatures uses isotropic
+        # random directions instead, deriving it directly avoids a second
+        # place this can silently drift out of sync.
+        fourier_dim = 2 * self.fourier.n_freq
+        # ADDITIONAL, COMPLEMENTARY fix on top of the isotropic Fourier feature
+        # switch above (see FourierFeatures' own docstring for the primary
+        # fix and its literature trail -- Rahaman et al. 2019, arXiv:
+        # 1806.08734; Tancik et al. 2020, arXiv:2006.10739; Song, Wang &
+        # Alkhalifah 2022, GJI 232(3):1503). The isotropic encoding fixes the
+        # ENCODING's ability to represent a radial function; this feature
+        # additionally gives the network a SHORTCUT to the exact known
+        # location, since the source position doesn't need to be learned at
+        # all -- it's a fixed constant. We checked directly and found no PINN
+        # paper doing exactly this (an explicit distance/proximity-to-a-known-
+        # INTERIOR-point input for source localization); the closest adjacent
+        # precedent is Sukumar & Srivastava 2021 (arXiv:2104.08426), which
+        # feeds distance functions from known points/boundaries as explicit
+        # PINN inputs for exact BOUNDARY-condition enforcement, not an
+        # interior source term. Treat this feature as a pragmatic addition
+        # without direct literature precedent, not an established technique
+        # -- disclose it as such in the thesis.
+        #
+        # This feature is exp(-dist_squared/sigma^2) -- the actual Gaussian
+        # kernel value, NOT raw sqrt(distance). Two reasons: (1) physics_loss()
+        # needs SECOND-order derivatives through this entire encoder (for the
+        # Laplacian terms), and sqrt(dist^2) has a genuine curvature
+        # singularity exactly at the source point (a cone tip) -- risky,
+        # especially once source-concentrated sampling is added next, which
+        # deliberately puts points near that exact singularity. The Gaussian
+        # form is smooth (verified symbolically: all derivatives are
+        # polynomial-in-1/sigma^2 times the same exponential, which is entire/
+        # analytic everywhere) with no singularity at all. (2) it's also
+        # better SCALED than raw (squared) distance: bounded in (0,1]
+        # regardless of room size, vs. raw squared distance which could range
+        # past 300 in this room -- and it directly matches the exact
+        # functional form the source term already has.
+        #
+        # KNOWN LIMITATION (disclose in thesis, not fatal): this feature feeds
+        # into the SHARED trunk that also produces velocity/pressure
+        # (A1,A2,A3,p), via the same out_head. Nothing architecturally stops
+        # the network from letting source_proximity leak into the velocity
+        # prediction too, even though NS physics has no dependence on the CO2
+        # source location -- a well-trained network should learn near-zero
+        # weight from this feature into u,v,w,p, but that's not enforced. This
+        # is a real, likely-low-risk tradeoff of the shared-trunk design.
         self.proj = nn.Sequential(
-            nn.Linear(fourier_dim + 1, d_model),  # fourier(x,y,z) + raw t
+            nn.Linear(fourier_dim + 2, d_model),  # fourier(x,y,z) + raw t + source proximity
             nn.Tanh(),
             nn.Linear(d_model, d_model),
             nn.Tanh(),
@@ -137,7 +223,9 @@ class QueryEncoder(nn.Module):
     def forward(self, x, y, z, t):
         coords = torch.cat([x, y, z], dim=-1)
         feats = self.fourier(coords)
-        return self.proj(torch.cat([feats, t], dim=-1))
+        dist_sq = (x - self._SOURCE_X) ** 2 + (y - self._SOURCE_Y) ** 2 + (z - self._SOURCE_Z) ** 2
+        source_proximity = torch.exp(-dist_sq / self._sigma2)
+        return self.proj(torch.cat([feats, t, source_proximity], dim=-1))
 
 
 class CrossAttnBlock(nn.Module):
