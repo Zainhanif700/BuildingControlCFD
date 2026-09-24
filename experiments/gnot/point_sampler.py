@@ -88,10 +88,89 @@ def sample_scenario(n, device):
     return t, V, N_people
 
 
-def sample_interior(n, device="cpu"):
-    """Random points inside the room, excluding the 4 columns (rejection sampling)."""
+# Source location (room center at breathing height) -- used below for
+# source-concentrated sampling. Same formula gnot_model.py's QueryEncoder
+# computes independently for its source_proximity feature; not consolidated
+# into one import since both are just deriving from ROOM_X/ROOM_Y/
+# BREATHING_HEIGHT (already the single source of truth), so there's no
+# separate magic number here that could drift out of sync.
+SOURCE_X = (ROOM_X[0] + ROOM_X[1]) / 2
+SOURCE_Y = (ROOM_Y[0] + ROOM_Y[1]) / 2
+
+# FIX #2 (from the literature-grounded ranked plan -- Nabian et al. 2021,
+# "Efficient Training of PINNs via Importance Sampling"): with 100% uniform
+# interior sampling, very few of the POINTS_INTERIOR=1000 points per
+# iteration land near the small CO2 source (sigma=2.5m in a
+# ~15.5x9.16x3.15m room). Away from the source the source term S(x,y,z,t) is
+# essentially 0, so a trivial C~0 field already satisfies the PDE residual
+# there -- meaning most of the training signal each iteration pushes toward
+# "CO2 stays near zero everywhere," and only a small minority of points ever
+# see the region where the source term actually matters.
+#
+# DIAGNOSED DIRECTLY (not just theorized): after fix #1 (isotropic Fourier
+# features + source_proximity feature) plus correctly-working adaptive CO2
+# weighting, a partial training run (3000, then 10000 iterations) still
+# showed a CO2 field that stayed near-zero and slightly negative everywhere
+# -- no real bump structure at all. This is consistent with the network
+# simply not having seen enough near-source points yet, not with fix #1
+# being wrong.
+#
+# FIX: mix in a fraction of interior points drawn from a Gaussian centered
+# on the known source location (std = CO2_SOURCE_SIGMA, matching the
+# source's own physical width) instead of sampling 100% uniformly. This does
+# NOT change what's being trained against -- still the exact same PDE
+# residual, at whatever points get sampled -- it only changes WHERE points
+# are concentrated, giving the network many more per-iteration chances to
+# see the region the source term actually depends on.
+SOURCE_SAMPLE_FRAC = 0.4  # fraction of interior points concentrated near the
+# source; the remaining 60% stays uniform, so general-domain NS structure
+# and the rest of the room still get full, unbiased coverage -- this is a
+# targeted top-up, not a wholesale replacement of uniform sampling.
+
+# FIX (found by audit): using CO2_SOURCE_SIGMA=2.5 as the z-axis spread too
+# is almost as large as the room's entire height (3.15m) -- roughly half of
+# the resulting z-samples would fall outside [0, 3.15] and get clamped
+# exactly onto the floor or ceiling (a hard pile-up artifact, not a smooth
+# distribution near breathing height). X and Y don't have this problem
+# (room is 15.53m / 9.16m, both much larger than sigma, so clamping there is
+# negligible). Use a separate, smaller z-spread instead, scaled to the
+# room's actual height, so source-concentrated points stay meaningfully
+# clustered near breathing height rather than piling up at the boundaries.
+SOURCE_SAMPLE_Z_STD = min(CO2_SOURCE_SIGMA, (ROOM_Z[1] - ROOM_Z[0]) / 4.0)
+
+
+def _sample_near_source(n, device):
+    """Points drawn from an isotropic-in-(x,y) Gaussian centered on the CO2
+    source (z uses its own smaller spread -- see SOURCE_SAMPLE_Z_STD comment
+    above), clamped to stay inside the room bounds and rejecting any that
+    land inside a column (same rejection rule as the uniform sampler
+    below)."""
     pts = []
     remaining = n
+    while remaining > 0:
+        batch = max(remaining * 2, 256)  # oversample since some get rejected
+        x = torch.normal(SOURCE_X, CO2_SOURCE_SIGMA, size=(batch, 1), device=device).clamp(*ROOM_X)
+        y = torch.normal(SOURCE_Y, CO2_SOURCE_SIGMA, size=(batch, 1), device=device).clamp(*ROOM_Y)
+        z = torch.normal(BREATHING_HEIGHT, SOURCE_SAMPLE_Z_STD, size=(batch, 1), device=device).clamp(*ROOM_Z)
+        bad = _in_any_column(x, y)
+        keep = ~bad.squeeze(-1)
+        x, y, z = x[keep], y[keep], z[keep]
+        pts.append(torch.cat([x, y, z], dim=1))
+        remaining -= x.shape[0]
+    xyz = torch.cat(pts, dim=0)[:n]
+    return xyz[:, 0:1], xyz[:, 1:2], xyz[:, 2:3]
+
+
+def sample_interior(n, device="cpu"):
+    """Random points inside the room, excluding the 4 columns (rejection
+    sampling). A fraction (SOURCE_SAMPLE_FRAC) is concentrated near the
+    known CO2 source location instead of uniform -- see fix #2 comment
+    above for why."""
+    n_source = int(round(n * SOURCE_SAMPLE_FRAC))
+    n_uniform = n - n_source
+
+    pts = []
+    remaining = n_uniform
     while remaining > 0:
         batch = max(remaining * 2, 256)  # oversample since some get rejected
         x = _rand(batch, *ROOM_X, device)
@@ -102,7 +181,15 @@ def sample_interior(n, device="cpu"):
         x, y, z = x[keep], y[keep], z[keep]
         pts.append(torch.cat([x, y, z], dim=1))
         remaining -= x.shape[0]
-    xyz = torch.cat(pts, dim=0)[:n]
+    xyz_uniform = torch.cat(pts, dim=0)[:n_uniform] if n_uniform > 0 else torch.empty(0, 3, device=device)
+
+    if n_source > 0:
+        xs, ys, zs = _sample_near_source(n_source, device)
+        xyz_source = torch.cat([xs, ys, zs], dim=1)
+        xyz = torch.cat([xyz_uniform, xyz_source], dim=0)
+    else:
+        xyz = xyz_uniform
+
     t, V, N_people = sample_scenario(n, device)
     return xyz[:, 0:1], xyz[:, 1:2], xyz[:, 2:3], t, V, N_people
 

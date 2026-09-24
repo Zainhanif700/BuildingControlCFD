@@ -70,6 +70,53 @@ def assert_finite(t, label):
         raise AssertionError(f"{label} contains Inf")
 
 
+@stage("0. sample_interior -- source-concentrated sampling: counts, bounds, no column overlap")
+def test_sample_interior(device):
+    from point_sampler import (
+        sample_interior, SOURCE_X, SOURCE_Y, BREATHING_HEIGHT, CO2_SOURCE_SIGMA,
+        SOURCE_SAMPLE_FRAC, ROOM_X, ROOM_Y, ROOM_Z, COLUMNS,
+    )
+    n = 1000
+    x, y, z, t, V, N_people = sample_interior(n, device)
+    for name, tensor in [("x", x), ("y", y), ("z", z), ("t", t), ("V", V), ("N_people", N_people)]:
+        assert_finite(tensor, name)
+    assert x.shape[0] == n, f"expected {n} points, got {x.shape[0]}"
+
+    # every point must be within room bounds (the Gaussian branch clamps, but
+    # verify no bug slipped a point outside)
+    assert (x >= ROOM_X[0]).all() and (x <= ROOM_X[1]).all(), "x out of room bounds"
+    assert (y >= ROOM_Y[0]).all() and (y <= ROOM_Y[1]).all(), "y out of room bounds"
+    assert (z >= ROOM_Z[0]).all() and (z <= ROOM_Z[1]).all(), "z out of room bounds"
+
+    # no point should land inside a column (rejection sampling should have caught all of them)
+    xn = x.detach().cpu().numpy().ravel()
+    yn = y.detach().cpu().numpy().ravel()
+    for cx, cy, r, _, _ in COLUMNS:
+        inside = (xn - cx) ** 2 + (yn - cy) ** 2 <= r ** 2
+        assert not inside.any(), f"{inside.sum()} points landed inside column at ({cx},{cy})"
+
+    # sanity-check the mixture actually concentrates points near the source:
+    # with SOURCE_SAMPLE_FRAC of points drawn from a Gaussian near the
+    # source, the fraction of ALL n points within 1-sigma-ish of the source
+    # should now be noticeably higher than pure uniform sampling would give
+    # (a rough, not exact, check -- this isn't testing an exact probability,
+    # just that the mixture is doing SOMETHING, not silently falling back to
+    # pure uniform sampling due to a bug).
+    dist = torch.sqrt((x - SOURCE_X) ** 2 + (y - SOURCE_Y) ** 2 + (z - BREATHING_HEIGHT) ** 2)
+    frac_near = (dist < CO2_SOURCE_SIGMA).float().mean().item()
+    print(f"  n_source={int(round(n * SOURCE_SAMPLE_FRAC))}, n_uniform={n - int(round(n * SOURCE_SAMPLE_FRAC))}, "
+          f"fraction of all {n} points within ~1 sigma of source: {frac_near:.3f}")
+    # rough uniform-sampling baseline: a sphere of radius sigma over the room's
+    # volume (ignoring z-clipping/column effects, just an order-of-magnitude check)
+    room_volume = (ROOM_X[1] - ROOM_X[0]) * (ROOM_Y[1] - ROOM_Y[0]) * (ROOM_Z[1] - ROOM_Z[0])
+    sphere_volume = (4.0 / 3.0) * torch.pi * CO2_SOURCE_SIGMA ** 3
+    uniform_baseline = min(1.0, sphere_volume / room_volume)
+    assert frac_near > uniform_baseline, (
+        f"fraction near source ({frac_near:.3f}) is not higher than the pure-uniform baseline "
+        f"({uniform_baseline:.3f}) -- source-concentrated sampling may not be working"
+    )
+
+
 @stage("1. FourierFeatures -- shape + finiteness + 1st/2nd derivative w.r.t. raw coords")
 def test_fourier_features(device):
     from gnot_model import FourierFeatures
@@ -252,6 +299,7 @@ def main():
         print("WARNING: running on CPU -- fine for catching shape/NaN bugs, "
               "but won't tell you anything about GPU memory behavior.")
 
+    test_sample_interior(device)
     test_fourier_features(device)
     test_query_encoder(device)
     model_and_inputs = test_model_forward(device)
