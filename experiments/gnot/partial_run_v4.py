@@ -26,7 +26,9 @@ from train_gnot import (
 
 N_ITERS = 10000
 LOG_EVERY = 200
-VERSION = "v4_source_sampling"
+VERSION = "v4b_source_sampling_tuned"  # distinct from v4_source_sampling (frac=0.4,
+# std=sigma) so the earlier result isn't overwritten -- lets us compare the
+# two directly rather than losing the "before" data point.
 
 
 def main():
