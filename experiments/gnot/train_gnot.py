@@ -228,8 +228,15 @@ def main():
     for it in range(MAX_ITERS + 1):
         optimizer.zero_grad()
 
+        # L_ns and L_co2 both come from the SAME forward pass in physics_loss()
+        # (one model(...) call at the same interior points, then split into a
+        # tuple) -- so they share the same underlying computation graph, unlike
+        # walls/windows/doors/ic below which each do their own independent
+        # forward pass. retain_graph=True on the first call keeps that shared
+        # graph alive for the second; the second call (default retain_graph=
+        # False) frees it afterward, same peak-memory behavior as before.
         L_ns, L_co2 = physics_loss(model, device)
-        L_ns.backward()
+        L_ns.backward(retain_graph=True)
         (co2_weight * L_co2).backward()
 
         L_walls = walls_loss(model, device)
