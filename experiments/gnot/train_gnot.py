@@ -158,8 +158,34 @@ def gradnorm_weight_update(grad_ns, grad_co2, prev_weight):
 #                     (via closed-window test) to predict a physically-impossible
 #                     room-wide smooth CO2 gradient instead of a localized source --
 #                     KNOWN BAD, kept only for before/after comparison.
-#   v2_co2_fix     -- multi-octave NeRF-style Fourier features (literature-grounded
-#                     frequency band) + adaptive EMA CO2 loss weighting. Current.
+#   v2_co2_fix     -- multi-octave NeRF-style Fourier features (SEPARABLE per-axis,
+#                     literature-grounded frequency band) + adaptive EMA CO2 loss
+#                     weighting. Trained to 20k iters (checkpoints iter16000/final).
+#                     Diagnosed (closed-window test) to still show a CO2 "band"
+#                     artifact -- localized in one axis but not the other. KNOWN
+#                     PARTIAL FIX, kept for before/after comparison.
+#   v3_isotropic_ff -- (tested via standalone partial_run scripts, not through this
+#                     file's main() yet) isotropic random Fourier features (fixing
+#                     the v2 separable-encoding limitation) + source_proximity input
+#                     feature (see gnot_model.py's QueryEncoder). Diagnosed to fix
+#                     the "band" shape but the CO2 field stayed undertrained
+#                     (near-zero/negative) at 3k-10k iterations with pure uniform
+#                     interior sampling.
+#   v4_source_sampling / v4b_source_sampling_tuned -- (tested via partial_run_v4.py,
+#                     not through this file's main() yet) adds source-concentrated
+#                     interior sampling on top of v3 (see point_sampler.py's
+#                     SOURCE_SAMPLE_FRAC/XY_STD/Z_STD) so the network sees the CO2
+#                     source region far more often per iteration. v4 (frac=0.4,
+#                     std=sigma) still showed a rotated band artifact; v4b (frac=0.6,
+#                     std=sigma/2, tighter concentration) is being evaluated now.
+#
+# IMPORTANT: this VERSION variable (and CKPT_DIR below) is what train_gnot.py's own
+# main() uses for a FULL 20k-iteration production run. It still says "v2_co2_fix"
+# because no full run has been done yet with the v3/v4 changes above -- those were
+# only tested via the separate partial_run_v4.py script (which hardcodes its own
+# version tag). Bump this to match whichever fix combination is confirmed working
+# via the closed-window diagnostic BEFORE launching the next full run through this
+# file, so production checkpoints aren't mislabeled with stale physics/sampling.
 VERSION = "v2_co2_fix"
 
 HERE = os.path.dirname(os.path.abspath(__file__))

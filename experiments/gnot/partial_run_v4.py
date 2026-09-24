@@ -26,6 +26,12 @@ from train_gnot import (
 
 N_ITERS = 10000
 LOG_EVERY = 200
+CKPT_EVERY = 2000  # FIX (found by audit): this script previously only saved a
+# checkpoint once, at the very end -- if the process crashed or the server/
+# tmux session died before finishing, ALL progress would be lost with nothing
+# recoverable. train_gnot.py's own main() already does periodic checkpointing
+# (CKPT_EVERY=1000); this script didn't, purely because it started as a quick
+# one-off test script. Fixed to match that safer pattern.
 VERSION = "v4b_source_sampling_tuned"  # distinct from v4_source_sampling (frac=0.4,
 # std=sigma) so the earlier result isn't overwritten -- lets us compare the
 # two directly rather than losing the "before" data point.
@@ -77,6 +83,14 @@ def main():
         if it % LOG_EVERY == 0:
             print(f"it={it:05d} NS={L_ns.item():.5f} CO2={L_co2.item():.6f} "
                   f"Windows={L_windows.item():.5f} co2_w={co2_weight:.2f}")
+
+        if it % CKPT_EVERY == 0 and it > 0:
+            interim_path = os.path.join(ckpt_dir, f"gnot_{VERSION}_iter{it}.pth")
+            torch.save({
+                "iter": it, "version": VERSION, "co2_weight": co2_weight,
+                "model_state": model.state_dict(),
+            }, interim_path)
+            print(f"  -> saved intermediate checkpoint: {interim_path}")
 
     ckpt_path = os.path.join(ckpt_dir, f"gnot_{VERSION}_partial{N_ITERS}.pth")
     torch.save({
