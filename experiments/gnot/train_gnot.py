@@ -54,6 +54,15 @@ LOG_EVERY = 10
 CKPT_EVERY = 1000
 LR = 1e-3
 
+# FIX (found by verification): CO2 values are tiny (~0.02) compared to
+# velocity (~0.3-1 m/s), so when combined into one physics loss, the CO2
+# residual got numerically drowned out and the network defaulted to an
+# overly smooth, wrong spatial pattern instead of the correct small,
+# localized source bump. This is a well-documented PINN failure mode
+# ("loss imbalance" / "spectral bias" -- see literature). Fix: track CO2
+# as its own separate, upweighted loss term instead of silently summed in.
+CO2_LOSS_WEIGHT = 100.0
+
 HERE = os.path.dirname(os.path.abspath(__file__))
 CKPT_DIR = os.path.join(HERE, "checkpoints")
 os.makedirs(CKPT_DIR, exist_ok=True)
@@ -74,6 +83,8 @@ def get_velocity_and_derivs(model, x, y, z, t, V, N_people):
 
 
 def physics_loss(model, device):
+    """Returns (ns_loss, co2_loss) SEPARATELY -- see CO2_LOSS_WEIGHT note above
+    for why these are no longer combined into one number."""
     x, y, z, t, V, N_people = sample_interior(POINTS_INTERIOR, device)
     x.requires_grad_(True); y.requires_grad_(True); z.requires_grad_(True); t.requires_grad_(True)
 
@@ -106,7 +117,9 @@ def physics_loss(model, device):
     S = N_people * EMISSION_PER_PERSON * torch.exp(-dist2 / (SIGMA ** 2))
     res_c = dc_dt + conv_c - DIFFUSIVITY * d2c - S
 
-    return (res_u ** 2).mean() + (res_v ** 2).mean() + (res_w ** 2).mean() + (res_c ** 2).mean()
+    ns_loss = (res_u ** 2).mean() + (res_v ** 2).mean() + (res_w ** 2).mean()
+    co2_loss = (res_c ** 2).mean()
+    return ns_loss, co2_loss
 
 
 def walls_loss(model, device):
@@ -134,7 +147,10 @@ def windows_loss(model, device):
     V_at_point = V.gather(1, window_idx)  # (B,1) -- this point's own window's speed
     target_v = -V_at_point * torch.tanh(3.0 * t / TAU_RAMP)  # inflow into the room (-y direction)
 
-    return (u ** 2).mean() + ((v - target_v) ** 2).mean() + (w ** 2).mean() + (c ** 2).mean()
+    # c=0 (clean air in) gets the same CO2_LOSS_WEIGHT treatment as the interior
+    # residual, for the same reason -- otherwise it's numerically tiny next to
+    # the velocity terms and gets neglected during training.
+    return (u ** 2).mean() + ((v - target_v) ** 2).mean() + (w ** 2).mean() + CO2_LOSS_WEIGHT * (c ** 2).mean()
 
 
 def doors_loss(model, device):
@@ -147,7 +163,7 @@ def ic_loss(model, device):
     x, y, z, t, V, N_people = sample_ic(POINTS_IC, device)
     x.requires_grad_(True); y.requires_grad_(True); z.requires_grad_(True)
     u, v, w, c, p = get_velocity_and_derivs(model, x, y, z, t, V, N_people)
-    return (u ** 2).mean() + (v ** 2).mean() + (w ** 2).mean() + (p ** 2).mean() + (c ** 2).mean()
+    return (u ** 2).mean() + (v ** 2).mean() + (w ** 2).mean() + (p ** 2).mean() + CO2_LOSS_WEIGHT * (c ** 2).mean()
 
 
 def main():
@@ -174,8 +190,9 @@ def main():
     for it in range(MAX_ITERS + 1):
         optimizer.zero_grad()
 
-        L_phy = physics_loss(model, device)
-        L_phy.backward()
+        L_ns, L_co2 = physics_loss(model, device)
+        L_ns.backward()
+        (CO2_LOSS_WEIGHT * L_co2).backward()
 
         L_walls = walls_loss(model, device)
         L_walls.backward()
@@ -191,14 +208,15 @@ def main():
 
         optimizer.step()
 
-        total_val = L_phy.item() + L_walls.item() + L_windows.item() + L_doors.item() + L_ic.item()
+        total_val = (L_ns.item() + CO2_LOSS_WEIGHT * L_co2.item() + L_walls.item()
+                     + L_windows.item() + L_doors.item() + L_ic.item())
 
         if it % LOG_EVERY == 0:
             elapsed = time.time() - start
             speed = (it + 1) / elapsed if elapsed > 0 else 0.0
             print(f"[Iter {it:05d}/{MAX_ITERS}] Total={total_val:.5f} | "
-                  f"Phy={L_phy.item():.5f} Walls={L_walls.item():.5f} "
-                  f"Windows={L_windows.item():.5f} Doors={L_doors.item():.5f} "
+                  f"NS={L_ns.item():.5f} CO2(raw)={L_co2.item():.6f} CO2(weighted)={CO2_LOSS_WEIGHT * L_co2.item():.5f} "
+                  f"Walls={L_walls.item():.5f} Windows={L_windows.item():.5f} Doors={L_doors.item():.5f} "
                   f"IC={L_ic.item():.5f} | {speed:.2f} it/s")
 
         if it % CKPT_EVERY == 0 and it > 0:

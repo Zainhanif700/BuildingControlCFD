@@ -74,20 +74,48 @@ class TokenEncoder(nn.Module):
         return self.proj(x) + self.type_embed(type_id)
 
 
+class FourierFeatures(nn.Module):
+    """Random Fourier feature encoding for (x,y,z), fixed (non-trainable).
+
+    FIX for a real problem found during verification: plain (x,y,z) fed
+    straight into a Tanh MLP has a well-documented bias toward learning only
+    smooth, low-frequency spatial patterns ("spectral bias" -- see PINN
+    literature). Our CO2 source is a SHARP, SMALL Gaussian bump (sigma=2.5m
+    in a 15m room) -- exactly the kind of localized feature plain coordinate
+    inputs struggle to represent. Mapping (x,y,z) through sin/cos of random
+    frequencies first gives the network the high-frequency building blocks
+    it needs to represent a compact bump, without changing anything about
+    the physics itself.
+    """
+
+    def __init__(self, in_dim=3, num_features=16, scale=1.0):
+        super().__init__()
+        B = torch.randn(in_dim, num_features) * scale
+        self.register_buffer("B", B)  # fixed, not trained
+
+    def forward(self, coords):
+        proj = 2 * torch.pi * coords @ self.B  # (N, num_features)
+        return torch.cat([torch.sin(proj), torch.cos(proj)], dim=-1)  # (N, 2*num_features)
+
+
 class QueryEncoder(nn.Module):
     """Encodes the query point (x, y, z, t) -> d_model vector."""
 
-    def __init__(self, d_model=D_MODEL):
+    def __init__(self, d_model=D_MODEL, num_fourier=16):
         super().__init__()
+        self.fourier = FourierFeatures(in_dim=3, num_features=num_fourier, scale=1.0)
+        fourier_dim = 2 * num_fourier
         self.proj = nn.Sequential(
-            nn.Linear(4, d_model),
+            nn.Linear(fourier_dim + 1, d_model),  # fourier(x,y,z) + raw t
             nn.Tanh(),
             nn.Linear(d_model, d_model),
             nn.Tanh(),
         )
 
     def forward(self, x, y, z, t):
-        return self.proj(torch.cat([x, y, z, t], dim=-1))
+        coords = torch.cat([x, y, z], dim=-1)
+        feats = self.fourier(coords)
+        return self.proj(torch.cat([feats, t], dim=-1))
 
 
 class CrossAttnBlock(nn.Module):
