@@ -21,9 +21,15 @@ import matplotlib.patches as patches
 from gnot_model import GNOTOperator
 from point_sampler import ROOM_X, ROOM_Y, ROOM_Z, WINDOWS, DOORS, COLUMNS, NUM_WINDOWS
 
+# EDIT THIS to switch which trained version you're visualizing.
+#   "v1_smooth_co2" -- original run, KNOWN BAD CO2 (room-wide smooth gradient,
+#                      confirmed physically impossible by the closed-window test)
+#   "v2_co2_fix"    -- multi-octave Fourier features + adaptive CO2 loss weight
+VERSION = "v2_co2_fix"
+
 HERE = os.path.dirname(os.path.abspath(__file__))
-CKPT_PATH = os.path.join(HERE, "checkpoints", "gnot_final.pth")
-FIG_DIR = os.path.join(HERE, "figures")
+CKPT_PATH = os.path.join(HERE, "checkpoints", VERSION, f"gnot_{VERSION}_final.pth")
+FIG_DIR = os.path.join(HERE, "figures", VERSION)
 os.makedirs(FIG_DIR, exist_ok=True)
 
 SCENARIO = {
@@ -97,9 +103,9 @@ def main():
     ax.set_xlim(ROOM_X[0] - 1, ROOM_X[1] + 1); ax.set_ylim(ROOM_Y[0] - 1, ROOM_Y[1] + 1)
     ax.set_aspect("equal")
     ax.set_xlabel("X (m)"); ax.set_ylabel("Y (m)")
-    ax.set_title(f"GNOT airflow, top-down slice at z={SLICE_Z}m, t={SCENARIO['t']:.0f}s, "
+    ax.set_title(f"GNOT [{VERSION}] airflow, top-down slice at z={SLICE_Z}m, t={SCENARIO['t']:.0f}s, "
                  f"N_people={SCENARIO['N_people']:.0f}\n{win_str}")
-    out1 = os.path.join(FIG_DIR, "gnot_slice_velocity_closed.png")
+    out1 = os.path.join(FIG_DIR, f"gnot_{VERSION}_slice_velocity_closed.png")
     plt.savefig(out1, dpi=150, bbox_inches="tight")
     print(f"Saved: {out1}")
 
@@ -112,9 +118,9 @@ def main():
     ax2.set_xlim(ROOM_X[0] - 1, ROOM_X[1] + 1); ax2.set_ylim(ROOM_Y[0] - 1, ROOM_Y[1] + 1)
     ax2.set_aspect("equal")
     ax2.set_xlabel("X (m)"); ax2.set_ylabel("Y (m)")
-    ax2.set_title(f"GNOT CO2, top-down slice at z={SLICE_Z}m, t={SCENARIO['t']:.0f}s, "
+    ax2.set_title(f"GNOT [{VERSION}] CO2, top-down slice at z={SLICE_Z}m, t={SCENARIO['t']:.0f}s, "
                   f"N_people={SCENARIO['N_people']:.0f}\n{win_str}")
-    out2 = os.path.join(FIG_DIR, "gnot_slice_co2_closed.png")
+    out2 = os.path.join(FIG_DIR, f"gnot_{VERSION}_slice_co2_closed.png")
     plt.savefig(out2, dpi=150, bbox_inches="tight")
     print(f"Saved: {out2}")
 

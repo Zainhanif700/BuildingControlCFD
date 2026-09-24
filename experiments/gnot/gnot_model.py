@@ -27,7 +27,7 @@ No simulation data anywhere here -- trained purely against the Navier-Stokes
 import torch
 import torch.nn as nn
 
-from point_sampler import NUM_WINDOWS, WINDOWS, DOORS, ROOM_X, ROOM_Y, ROOM_Z
+from point_sampler import NUM_WINDOWS, WINDOWS, DOORS, ROOM_X, ROOM_Y, ROOM_Z, CO2_SOURCE_SIGMA
 
 D_MODEL = 128
 N_HEADS = 4
@@ -75,36 +75,58 @@ class TokenEncoder(nn.Module):
 
 
 class FourierFeatures(nn.Module):
-    """Random Fourier feature encoding for (x,y,z), fixed (non-trainable).
+    """Multi-octave (NeRF-style) positional encoding for (x,y,z), fixed
+    (non-trainable), with frequencies chosen from the ACTUAL physical length
+    scales in this problem -- not an arbitrary default.
 
     FIX for a real problem found during verification: plain (x,y,z) fed
     straight into a Tanh MLP has a well-documented bias toward learning only
     smooth, low-frequency spatial patterns ("spectral bias" -- see PINN
     literature). Our CO2 source is a SHARP, SMALL Gaussian bump (sigma=2.5m
-    in a 15m room) -- exactly the kind of localized feature plain coordinate
-    inputs struggle to represent. Mapping (x,y,z) through sin/cos of random
-    frequencies first gives the network the high-frequency building blocks
-    it needs to represent a compact bump, without changing anything about
-    the physics itself.
+    in a room ~15.5m long) -- exactly the kind of localized feature plain
+    coordinate inputs struggle to represent.
+
+    A first version of this used a single random Gaussian scale (scale=1.0),
+    picked with no justification. Per the Fourier-features literature (see
+    chat), the encoding scale directly controls what feature SIZE the
+    network can represent: too coarse and you're back to oversmoothing (the
+    original bug); too fine and you get noisy overfitting; a single scale
+    is also generally worse than a RANGE of frequencies. So this version
+    instead uses log-spaced octaves spanning from the room's own scale down
+    to a quarter of the CO2 source's width:
+        f_min = 1 / (2 * ROOM_LENGTH)   -- resolves whole-room-scale variation
+        f_max = 1 / (SIGMA / 4)         -- resolves a quarter of the CO2 bump's width
+    with n_octaves doublings in between (NeRF's original positional encoding
+    scheme), applied independently per axis.
     """
 
-    def __init__(self, in_dim=3, num_features=16, scale=1.0):
+    def __init__(self, room_length, sigma, n_octaves=7):
         super().__init__()
-        B = torch.randn(in_dim, num_features) * scale
-        self.register_buffer("B", B)  # fixed, not trained
+        f_min = 1.0 / (2.0 * room_length)
+        f_max = 1.0 / (sigma / 4.0)
+        # log-spaced frequencies from f_min to f_max, one octave per step
+        n_octaves = max(2, n_octaves)
+        log_f = torch.linspace(torch.log2(torch.tensor(f_min)), torch.log2(torch.tensor(f_max)), n_octaves)
+        freqs = 2.0 ** log_f  # (n_octaves,)
+        self.register_buffer("freqs", freqs)
+        self.n_octaves = n_octaves
 
     def forward(self, coords):
-        proj = 2 * torch.pi * coords @ self.B  # (N, num_features)
-        return torch.cat([torch.sin(proj), torch.cos(proj)], dim=-1)  # (N, 2*num_features)
+        # coords: (N, 3) -> per-axis, per-octave sin/cos, all concatenated
+        # (N, 3, 1) * (n_octaves,) -> (N, 3, n_octaves)
+        proj = 2 * torch.pi * coords.unsqueeze(-1) * self.freqs
+        feats = torch.cat([torch.sin(proj), torch.cos(proj)], dim=-1)  # (N, 3, 2*n_octaves)
+        return feats.flatten(start_dim=1)  # (N, 3 * 2*n_octaves)
 
 
 class QueryEncoder(nn.Module):
     """Encodes the query point (x, y, z, t) -> d_model vector."""
 
-    def __init__(self, d_model=D_MODEL, num_fourier=16):
+    def __init__(self, d_model=D_MODEL, room_length=ROOM_X[1] - ROOM_X[0],
+                 sigma=CO2_SOURCE_SIGMA, n_octaves=7):
         super().__init__()
-        self.fourier = FourierFeatures(in_dim=3, num_features=num_fourier, scale=1.0)
-        fourier_dim = 2 * num_fourier
+        self.fourier = FourierFeatures(room_length=room_length, sigma=sigma, n_octaves=n_octaves)
+        fourier_dim = 3 * 2 * n_octaves
         self.proj = nn.Sequential(
             nn.Linear(fourier_dim + 1, d_model),  # fourier(x,y,z) + raw t
             nn.Tanh(),

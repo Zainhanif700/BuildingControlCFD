@@ -20,7 +20,7 @@ from gnot_model import GNOTOperator
 from point_sampler import (
     sample_interior, sample_walls, sample_doors, sample_windows, sample_ic,
     sample_columns_surface,
-    ROOM_X, ROOM_Y, ROOM_Z, NUM_WINDOWS,
+    ROOM_X, ROOM_Y, ROOM_Z, NUM_WINDOWS, CO2_SOURCE_SIGMA,
 )
 
 # --- physical constants (matching Alexander's config exactly) ---
@@ -28,7 +28,7 @@ NU = 0.01
 RHO = 1.0
 DIFFUSIVITY = 0.005
 EMISSION_PER_PERSON = 1.15e-4
-SIGMA = 2.5
+SIGMA = CO2_SOURCE_SIGMA  # single source of truth lives in point_sampler.py now
 BREATHING_HEIGHT = 1.10
 TAU_RAMP = 2.0
 SOURCE_X = (ROOM_X[0] + ROOM_X[1]) / 2
@@ -59,12 +59,44 @@ LR = 1e-3
 # residual got numerically drowned out and the network defaulted to an
 # overly smooth, wrong spatial pattern instead of the correct small,
 # localized source bump. This is a well-documented PINN failure mode
-# ("loss imbalance" / "spectral bias" -- see literature). Fix: track CO2
-# as its own separate, upweighted loss term instead of silently summed in.
-CO2_LOSS_WEIGHT = 100.0
+# ("loss imbalance" / "spectral bias" -- see literature).
+#
+# A first version of this fix used a FIXED weight of 100.0 -- an arbitrary
+# guess, not principled. The literature's actual recommendation is ADAPTIVE
+# weighting: periodically rebalance based on the current ratio between loss
+# magnitudes, so the CO2 loss's contribution to the gradient stays
+# comparable in scale to the NS loss's, automatically, without a hand-picked
+# constant. CO2_LOSS_WEIGHT below is now a per-iteration adaptive value
+# computed in the training loop (see update_co2_weight()), not a constant.
+CO2_WEIGHT_MIN = 1.0
+CO2_WEIGHT_MAX = 10_000.0   # clamp range so a bad ratio can't destabilize training
+CO2_WEIGHT_EMA_DECAY = 0.99  # smooths the ratio over time instead of reacting to noisy single-iteration values
+
+
+def update_co2_weight(ns_loss_val, co2_loss_val, prev_weight):
+    """Adaptive CO2 loss weight: track an EMA of the (ns_loss / co2_loss)
+    ratio so the WEIGHTED co2 loss stays comparable in magnitude to the NS
+    loss, rather than using one fixed guessed constant for the whole run."""
+    if co2_loss_val < 1e-12:
+        return prev_weight
+    target_weight = ns_loss_val / co2_loss_val
+    target_weight = max(CO2_WEIGHT_MIN, min(CO2_WEIGHT_MAX, target_weight))
+    return CO2_WEIGHT_EMA_DECAY * prev_weight + (1 - CO2_WEIGHT_EMA_DECAY) * target_weight
+
+# --- version tag: keeps checkpoints/figures from different physics/model
+# revisions from ever being confused with each other. Bump this any time the
+# physics loss, model architecture, or point sampling meaningfully changes.
+#   v1_smooth_co2  -- original run: plain random-Fourier query encoding (scale=1.0),
+#                     fixed CO2_LOSS_WEIGHT=100.0. Trained to 20k iters. Diagnosed
+#                     (via closed-window test) to predict a physically-impossible
+#                     room-wide smooth CO2 gradient instead of a localized source --
+#                     KNOWN BAD, kept only for before/after comparison.
+#   v2_co2_fix     -- multi-octave NeRF-style Fourier features (literature-grounded
+#                     frequency band) + adaptive EMA CO2 loss weighting. Current.
+VERSION = "v2_co2_fix"
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-CKPT_DIR = os.path.join(HERE, "checkpoints")
+CKPT_DIR = os.path.join(HERE, "checkpoints", VERSION)
 os.makedirs(CKPT_DIR, exist_ok=True)
 
 
@@ -139,7 +171,7 @@ def walls_loss(model, device):
     return loss
 
 
-def windows_loss(model, device):
+def windows_loss(model, device, co2_weight):
     x, y, z, t, V, N_people, window_idx = sample_windows(POINTS_WINDOWS_PER, device)
     x.requires_grad_(True); y.requires_grad_(True); z.requires_grad_(True)
     u, v, w, c, p = get_velocity_and_derivs(model, x, y, z, t, V, N_people)
@@ -147,10 +179,10 @@ def windows_loss(model, device):
     V_at_point = V.gather(1, window_idx)  # (B,1) -- this point's own window's speed
     target_v = -V_at_point * torch.tanh(3.0 * t / TAU_RAMP)  # inflow into the room (-y direction)
 
-    # c=0 (clean air in) gets the same CO2_LOSS_WEIGHT treatment as the interior
+    # c=0 (clean air in) gets the same adaptive CO2 weighting as the interior
     # residual, for the same reason -- otherwise it's numerically tiny next to
     # the velocity terms and gets neglected during training.
-    return (u ** 2).mean() + ((v - target_v) ** 2).mean() + (w ** 2).mean() + CO2_LOSS_WEIGHT * (c ** 2).mean()
+    return (u ** 2).mean() + ((v - target_v) ** 2).mean() + (w ** 2).mean() + co2_weight * (c ** 2).mean()
 
 
 def doors_loss(model, device):
@@ -159,11 +191,11 @@ def doors_loss(model, device):
     return (p ** 2).mean()
 
 
-def ic_loss(model, device):
+def ic_loss(model, device, co2_weight):
     x, y, z, t, V, N_people = sample_ic(POINTS_IC, device)
     x.requires_grad_(True); y.requires_grad_(True); z.requires_grad_(True)
     u, v, w, c, p = get_velocity_and_derivs(model, x, y, z, t, V, N_people)
-    return (u ** 2).mean() + (v ** 2).mean() + (w ** 2).mean() + (p ** 2).mean() + CO2_LOSS_WEIGHT * (c ** 2).mean()
+    return (u ** 2).mean() + (v ** 2).mean() + (w ** 2).mean() + (p ** 2).mean() + co2_weight * (c ** 2).mean()
 
 
 def main():
@@ -175,6 +207,12 @@ def main():
     print(f"GNOT parameters: {n_params:,}")
 
     optimizer = torch.optim.Adam(model.parameters(), lr=LR)
+
+    # Adaptive CO2 loss weight -- starts at a neutral 1.0 and is rebalanced
+    # every iteration by update_co2_weight() (EMA of ns_loss/co2_loss ratio).
+    # Tracked as running state across iterations, so it must live here in
+    # main(), not as a module-level constant.
+    co2_weight = 1.0
 
     # NOTE on memory: each loss term below is backward()-ed IMMEDIATELY after
     # being computed (instead of summing all 5 into one `total` and calling
@@ -192,41 +230,48 @@ def main():
 
         L_ns, L_co2 = physics_loss(model, device)
         L_ns.backward()
-        (CO2_LOSS_WEIGHT * L_co2).backward()
+        (co2_weight * L_co2).backward()
 
         L_walls = walls_loss(model, device)
         L_walls.backward()
 
-        L_windows = windows_loss(model, device)
+        L_windows = windows_loss(model, device, co2_weight)
         L_windows.backward()
 
         L_doors = doors_loss(model, device)
         L_doors.backward()
 
-        L_ic = ic_loss(model, device)
+        L_ic = ic_loss(model, device, co2_weight)
         L_ic.backward()
 
         optimizer.step()
 
-        total_val = (L_ns.item() + CO2_LOSS_WEIGHT * L_co2.item() + L_walls.item()
+        # Rebalance the CO2 weight for the NEXT iteration using this
+        # iteration's raw (unweighted) loss values -- EMA-smoothed so it
+        # doesn't overreact to any single noisy iteration's sampling.
+        co2_weight = update_co2_weight(L_ns.item(), L_co2.item(), co2_weight)
+
+        total_val = (L_ns.item() + co2_weight * L_co2.item() + L_walls.item()
                      + L_windows.item() + L_doors.item() + L_ic.item())
 
         if it % LOG_EVERY == 0:
             elapsed = time.time() - start
             speed = (it + 1) / elapsed if elapsed > 0 else 0.0
             print(f"[Iter {it:05d}/{MAX_ITERS}] Total={total_val:.5f} | "
-                  f"NS={L_ns.item():.5f} CO2(raw)={L_co2.item():.6f} CO2(weighted)={CO2_LOSS_WEIGHT * L_co2.item():.5f} "
+                  f"NS={L_ns.item():.5f} CO2(raw)={L_co2.item():.6f} CO2_weight={co2_weight:.2f} CO2(weighted)={co2_weight * L_co2.item():.5f} "
                   f"Walls={L_walls.item():.5f} Windows={L_windows.item():.5f} Doors={L_doors.item():.5f} "
                   f"IC={L_ic.item():.5f} | {speed:.2f} it/s")
 
         if it % CKPT_EVERY == 0 and it > 0:
-            ckpt_path = os.path.join(CKPT_DIR, f"gnot_iter{it}.pth")
-            torch.save({"iter": it, "model_state": model.state_dict(),
+            ckpt_path = os.path.join(CKPT_DIR, f"gnot_{VERSION}_iter{it}.pth")
+            torch.save({"iter": it, "version": VERSION, "co2_weight": co2_weight,
+                        "model_state": model.state_dict(),
                         "optimizer_state": optimizer.state_dict()}, ckpt_path)
             print(f"  -> saved checkpoint: {ckpt_path}")
 
-    final_path = os.path.join(CKPT_DIR, "gnot_final.pth")
-    torch.save({"iter": MAX_ITERS, "model_state": model.state_dict()}, final_path)
+    final_path = os.path.join(CKPT_DIR, f"gnot_{VERSION}_final.pth")
+    torch.save({"iter": MAX_ITERS, "version": VERSION, "co2_weight": co2_weight,
+                "model_state": model.state_dict()}, final_path)
     print(f"Training complete. Final checkpoint: {final_path}")
 
 

@@ -27,9 +27,15 @@ from mpl_toolkits.mplot3d.art3d import Poly3DCollection
 from gnot_model import GNOTOperator
 from point_sampler import ROOM_X, ROOM_Y, ROOM_Z, WINDOWS, DOORS, COLUMNS, NUM_WINDOWS
 
+# EDIT THIS to switch which trained version you're visualizing.
+#   "v1_smooth_co2" -- original run, KNOWN BAD CO2 (room-wide smooth gradient,
+#                      confirmed physically impossible by the closed-window test)
+#   "v2_co2_fix"    -- multi-octave Fourier features + adaptive CO2 loss weight
+VERSION = "v2_co2_fix"
+
 HERE = os.path.dirname(os.path.abspath(__file__))
-CKPT_PATH = os.path.join(HERE, "checkpoints", "gnot_final.pth")
-FIG_DIR = os.path.join(HERE, "figures")
+CKPT_PATH = os.path.join(HERE, "checkpoints", VERSION, f"gnot_{VERSION}_final.pth")
+FIG_DIR = os.path.join(HERE, "figures", VERSION)
 os.makedirs(FIG_DIR, exist_ok=True)
 
 # ---------------------------------------------------------------------------
@@ -127,8 +133,8 @@ def main():
     q = ax.quiver(xg, yg, zg, u, v, w, length=0.6, normalize=True, color=plt.cm.viridis(speed / (speed.max() + 1e-9)))
     ax.set_xlabel("X (m)"); ax.set_ylabel("Y (m)"); ax.set_zlabel("Z (m)")
     win_str = ", ".join(f"W{i+1}={vv:.1f}" for i, vv in enumerate(SCENARIO["V"]))
-    ax.set_title(f"GNOT predicted airflow at t={SCENARIO['t']:.0f}s, N_people={SCENARIO['N_people']:.0f}\n{win_str}")
-    out1 = os.path.join(FIG_DIR, "gnot_airflow.png")
+    ax.set_title(f"GNOT [{VERSION}] predicted airflow at t={SCENARIO['t']:.0f}s, N_people={SCENARIO['N_people']:.0f}\n{win_str}")
+    out1 = os.path.join(FIG_DIR, f"gnot_{VERSION}_airflow.png")
     plt.savefig(out1, dpi=150, bbox_inches="tight")
     print(f"Saved: {out1}")
 
@@ -139,8 +145,8 @@ def main():
     sc = ax2.scatter(xg, yg, zg, c=c, cmap="YlOrRd", s=25, alpha=0.7)
     fig2.colorbar(sc, ax=ax2, shrink=0.6, label="predicted CO2 (c)")
     ax2.set_xlabel("X (m)"); ax2.set_ylabel("Y (m)"); ax2.set_zlabel("Z (m)")
-    ax2.set_title(f"GNOT predicted CO2 at t={SCENARIO['t']:.0f}s, N_people={SCENARIO['N_people']:.0f}\n{win_str}")
-    out2 = os.path.join(FIG_DIR, "gnot_co2.png")
+    ax2.set_title(f"GNOT [{VERSION}] predicted CO2 at t={SCENARIO['t']:.0f}s, N_people={SCENARIO['N_people']:.0f}\n{win_str}")
+    out2 = os.path.join(FIG_DIR, f"gnot_{VERSION}_co2.png")
     plt.savefig(out2, dpi=150, bbox_inches="tight")
     print(f"Saved: {out2}")
 
