@@ -72,27 +72,67 @@ LR = 1e-3
 # localized source bump. This is a well-documented PINN failure mode
 # ("loss imbalance" / "spectral bias" -- see literature).
 #
-# A first version of this fix used a FIXED weight of 100.0 -- an arbitrary
-# guess, not principled. The literature's actual recommendation is ADAPTIVE
-# weighting: periodically rebalance based on the current ratio between loss
-# magnitudes, so the CO2 loss's contribution to the gradient stays
-# comparable in scale to the NS loss's, automatically, without a hand-picked
-# constant. CO2_LOSS_WEIGHT below is now a per-iteration adaptive value
-# computed in the training loop (see update_co2_weight()), not a constant.
+# A first version of this fix used a FIXED weight of 100.0 -- arbitrary, not
+# principled. A SECOND version adaptively weighted based on the ratio of raw
+# LOSS VALUES (ns_loss / co2_loss, EMA-smoothed) -- this was ALSO wrong and
+# caused a real training collapse: the CO2 residual looks spuriously tiny at
+# initialization because most randomly-sampled interior points are far from
+# the small Gaussian CO2 source, so the averaged MSE residual is near-zero
+# before the network has learned anything. That drove the weight to its
+# 10000 ceiling within ~100 iterations and the network collapsed to the
+# trivial zero-velocity solution by iteration ~6500 (confirmed from the
+# training log: NS/Walls/Doors/IC all hit exactly 0.0, which is what a
+# motionless room trivially satisfies, while Windows loss stayed high since
+# it demands nonzero inflow velocity that the collapsed solution can't give).
+#
+# FIX (literature-grounded, per Wang, Teng & Perdikaris 2021, "Understanding
+# and Mitigating Gradient Flow Pathologies in Physics-Informed Neural
+# Networks", SIAM J. Sci. Comput. 43(5)): weight by GRADIENT NORMS w.r.t. the
+# shared network parameters, not raw loss values. Gradient norms reflect how
+# hard a loss term actually pulls on the shared parameters -- they don't have
+# the "looks small because of sparse sampling" blind spot that loss values do.
+# Their Algorithm 2.1: lambda_hat = max|grad(L_ns)| / mean|grad(L_co2)|,
+# EMA-smoothed with alpha=0.1 (their recommended value; higher alpha here than
+# the old 0.01 since gradient norms are a much more reliable signal, so faster
+# adaptation is safe).
 CO2_WEIGHT_MIN = 1.0
-CO2_WEIGHT_MAX = 10_000.0   # clamp range so a bad ratio can't destabilize training
-CO2_WEIGHT_EMA_DECAY = 0.99  # smooths the ratio over time instead of reacting to noisy single-iteration values
+CO2_WEIGHT_MAX = 10_000.0    # clamp range so a bad ratio can't destabilize training
+CO2_WEIGHT_EMA_ALPHA = 0.1   # Wang et al. 2021's recommended EMA rate
+CO2_WEIGHT_WARMUP_ITERS = 500  # keep weight=1.0 until the network has learned
+# *something* first -- early-training gradients (like early loss ratios) are
+# noisy/unreliable, and the literature on curriculum/staged PINN training
+# (e.g. causality-based and R3 adaptive-sampling methods) supports delaying
+# aggressive reweighting until training has stabilized a bit.
+GRAD_CLIP_MAX_NORM = 10.0  # defense-in-depth: caps how much any single
+# iteration's combined gradient can move the shared trunk, regardless of root
+# cause. Standard practice in general deep learning (RNN/transformer training)
+# and reported as a complementary safeguard in recent PINN adaptive-weighting
+# work; there's no single canonical value for PINNs specifically, so this is
+# a permissive, not tightly-tuned, default.
 
 
-def update_co2_weight(ns_loss_val, co2_loss_val, prev_weight):
-    """Adaptive CO2 loss weight: track an EMA of the (ns_loss / co2_loss)
-    ratio so the WEIGHTED co2 loss stays comparable in magnitude to the NS
-    loss, rather than using one fixed guessed constant for the whole run."""
-    if co2_loss_val < 1e-12:
+def compute_param_grads(loss, params, retain_graph):
+    """torch.autograd.grad (NOT .backward()) so we get each loss term's
+    gradient in isolation, without touching .grad / accumulating -- needed to
+    compare gradient MAGNITUDES between loss terms before deciding how to
+    combine them (Wang et al.'s gradient-norm weighting)."""
+    return torch.autograd.grad(loss, params, retain_graph=retain_graph, allow_unused=True)
+
+
+def gradnorm_weight_update(grad_ns, grad_co2, prev_weight):
+    """lambda_hat = max|grad(L_ns)| / mean|grad(L_co2)|, EMA-smoothed --
+    see the module-level comment above for why this replaces the earlier
+    loss-VALUE ratio."""
+    ns_abs = torch.cat([g.abs().flatten() for g in grad_ns if g is not None])
+    co2_abs = torch.cat([g.abs().flatten() for g in grad_co2 if g is not None])
+    if ns_abs.numel() == 0 or co2_abs.numel() == 0:
         return prev_weight
-    target_weight = ns_loss_val / co2_loss_val
+    co2_mean = co2_abs.mean()
+    if co2_mean < 1e-12:
+        return prev_weight
+    target_weight = (ns_abs.max() / co2_mean).item()
     target_weight = max(CO2_WEIGHT_MIN, min(CO2_WEIGHT_MAX, target_weight))
-    return CO2_WEIGHT_EMA_DECAY * prev_weight + (1 - CO2_WEIGHT_EMA_DECAY) * target_weight
+    return (1 - CO2_WEIGHT_EMA_ALPHA) * prev_weight + CO2_WEIGHT_EMA_ALPHA * target_weight
 
 # --- version tag: keeps checkpoints/figures from different physics/model
 # revisions from ever being confused with each other. Bump this any time the
@@ -126,8 +166,9 @@ def get_velocity_and_derivs(model, x, y, z, t, V, N_people):
 
 
 def physics_loss(model, device):
-    """Returns (ns_loss, co2_loss) SEPARATELY -- see CO2_LOSS_WEIGHT note above
-    for why these are no longer combined into one number."""
+    """Returns (ns_loss, co2_loss) SEPARATELY -- see the module-level comment
+    above (CO2_WEIGHT_* constants) for why these are no longer combined into
+    one number."""
     x, y, z, t, V, N_people = sample_interior(POINTS_INTERIOR, device)
     x.requires_grad_(True); y.requires_grad_(True); z.requires_grad_(True); t.requires_grad_(True)
 
@@ -218,11 +259,12 @@ def main():
     print(f"GNOT parameters: {n_params:,}")
 
     optimizer = torch.optim.Adam(model.parameters(), lr=LR)
+    params = list(model.parameters())
 
     # Adaptive CO2 loss weight -- starts at a neutral 1.0 and is rebalanced
-    # every iteration by update_co2_weight() (EMA of ns_loss/co2_loss ratio).
-    # Tracked as running state across iterations, so it must live here in
-    # main(), not as a module-level constant.
+    # every iteration (after a warm-up) by gradnorm_weight_update(). Tracked
+    # as running state across iterations, so it must live here in main(),
+    # not as a module-level constant.
     co2_weight = 1.0
 
     # NOTE on memory: each loss term below is backward()-ed IMMEDIATELY after
@@ -243,12 +285,27 @@ def main():
         # (one model(...) call at the same interior points, then split into a
         # tuple) -- so they share the same underlying computation graph, unlike
         # walls/windows/doors/ic below which each do their own independent
-        # forward pass. retain_graph=True on the first call keeps that shared
-        # graph alive for the second; the second call (default retain_graph=
-        # False) frees it afterward, same peak-memory behavior as before.
+        # forward pass.
+        #
+        # We use torch.autograd.grad (not .backward()) for these two so we can
+        # inspect each term's gradient magnitude BEFORE combining them (needed
+        # for gradnorm_weight_update -- see module-level comment for why).
+        # retain_graph=True on the first call keeps the shared graph alive for
+        # the second; the second call (default retain_graph=False) frees it
+        # afterward, same peak-memory behavior as separate backward() calls.
         L_ns, L_co2 = physics_loss(model, device)
-        L_ns.backward(retain_graph=True)
-        (co2_weight * L_co2).backward()
+        grad_ns = compute_param_grads(L_ns, params, retain_graph=True)
+        grad_co2 = compute_param_grads(L_co2, params, retain_graph=False)
+        for p, g_ns, g_co2 in zip(params, grad_ns, grad_co2):
+            total_grad = None
+            if g_ns is not None:
+                total_grad = g_ns
+            if g_co2 is not None:
+                weighted = co2_weight * g_co2
+                total_grad = weighted if total_grad is None else total_grad + weighted
+            if total_grad is None:
+                continue
+            p.grad = total_grad.clone() if p.grad is None else p.grad + total_grad
 
         L_walls = walls_loss(model, device)
         L_walls.backward()
@@ -262,12 +319,18 @@ def main():
         L_ic = ic_loss(model, device, co2_weight)
         L_ic.backward()
 
+        # Defense-in-depth: cap the combined gradient's norm before stepping,
+        # regardless of root cause (see GRAD_CLIP_MAX_NORM comment above).
+        torch.nn.utils.clip_grad_norm_(params, GRAD_CLIP_MAX_NORM)
+
         optimizer.step()
 
-        # Rebalance the CO2 weight for the NEXT iteration using this
-        # iteration's raw (unweighted) loss values -- EMA-smoothed so it
-        # doesn't overreact to any single noisy iteration's sampling.
-        co2_weight = update_co2_weight(L_ns.item(), L_co2.item(), co2_weight)
+        # Rebalance the CO2 weight for the NEXT iteration using gradient-norm
+        # ratios (Wang et al. 2021), not raw loss values -- see module-level
+        # comment for why the loss-value version caused a training collapse.
+        # Held at a neutral 1.0 during the warm-up window.
+        if it >= CO2_WEIGHT_WARMUP_ITERS:
+            co2_weight = gradnorm_weight_update(grad_ns, grad_co2, co2_weight)
 
         total_val = (L_ns.item() + co2_weight * L_co2.item() + L_walls.item()
                      + L_windows.item() + L_doors.item() + L_ic.item())
