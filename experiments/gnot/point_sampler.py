@@ -116,27 +116,44 @@ SOURCE_Y = (ROOM_Y[0] + ROOM_Y[1]) / 2
 # being wrong.
 #
 # FIX: mix in a fraction of interior points drawn from a Gaussian centered
-# on the known source location (std = CO2_SOURCE_SIGMA, matching the
-# source's own physical width) instead of sampling 100% uniformly. This does
+# on the known source location instead of sampling 100% uniformly. This does
 # NOT change what's being trained against -- still the exact same PDE
 # residual, at whatever points get sampled -- it only changes WHERE points
 # are concentrated, giving the network many more per-iteration chances to
 # see the region the source term actually depends on.
-SOURCE_SAMPLE_FRAC = 0.4  # fraction of interior points concentrated near the
-# source; the remaining 60% stays uniform, so general-domain NS structure
-# and the rest of the room still get full, unbiased coverage -- this is a
-# targeted top-up, not a wholesale replacement of uniform sampling.
+#
+# TUNING HISTORY (diagnosed directly via the closed-window diagnostic, not
+# just theorized): a first version used SOURCE_SAMPLE_FRAC=0.4 with the
+# concentrated points spread at std=CO2_SOURCE_SIGMA (2.5m, the source's own
+# physical width). After a 10,000-iteration partial run, CO2 was finally
+# POSITIVE (an improvement over fix #1 alone, which stayed near-zero/
+# negative), but still showed a room-wide band (elevated across 100% of the
+# x-range at one y-slice) and a very narrow dynamic range (~0.005-0.007) --
+# barely any real bump structure. Root cause: sampling with std=sigma still
+# spreads points over a wide ~2.5m-radius region -- most of them land
+# somewhere in "the source matters a bit here" territory, but few land close
+# enough to the actual peak to force the network to resolve its SHARP
+# curvature there. Fix: sample more points (higher frac) AND with a TIGHTER
+# spread (std=sigma/2), so a much larger share of the concentrated subset
+# clusters close to the true peak instead of merely somewhere within a few
+# sigma of it.
+SOURCE_SAMPLE_FRAC = 0.6  # was 0.4 -- raised since 0.4 wasn't enough signal
+# concentrated near the source to overcome the general-domain "C~0 nearly
+# everywhere" pull; the remaining 40% still stays uniform so general-domain
+# NS structure and the rest of the room keep reasonable coverage.
+SOURCE_SAMPLE_XY_STD = CO2_SOURCE_SIGMA / 2.0  # was CO2_SOURCE_SIGMA (2.5) --
+# halved so points cluster closer to the actual peak, not just somewhere
+# within the broader region where the source term is merely non-negligible.
 
-# FIX (found by audit): using CO2_SOURCE_SIGMA=2.5 as the z-axis spread too
-# is almost as large as the room's entire height (3.15m) -- roughly half of
-# the resulting z-samples would fall outside [0, 3.15] and get clamped
-# exactly onto the floor or ceiling (a hard pile-up artifact, not a smooth
-# distribution near breathing height). X and Y don't have this problem
-# (room is 15.53m / 9.16m, both much larger than sigma, so clamping there is
-# negligible). Use a separate, smaller z-spread instead, scaled to the
-# room's actual height, so source-concentrated points stay meaningfully
-# clustered near breathing height rather than piling up at the boundaries.
-SOURCE_SAMPLE_Z_STD = min(CO2_SOURCE_SIGMA, (ROOM_Z[1] - ROOM_Z[0]) / 4.0)
+# FIX (found by an earlier audit): using a z-spread as large as
+# CO2_SOURCE_SIGMA (or even SOURCE_SAMPLE_XY_STD) is a large fraction of the
+# room's entire height (3.15m) -- too much of it would fall outside [0, 3.15]
+# and get clamped exactly onto the floor or ceiling (a hard pile-up
+# artifact, not a smooth distribution near breathing height). X and Y don't
+# have this problem (room is 15.53m / 9.16m, both much larger than
+# SOURCE_SAMPLE_XY_STD, so clamping there stays negligible). Use a separate,
+# smaller z-spread instead, scaled to the room's actual height.
+SOURCE_SAMPLE_Z_STD = min(SOURCE_SAMPLE_XY_STD, (ROOM_Z[1] - ROOM_Z[0]) / 4.0)
 
 
 def _sample_near_source(n, device):
@@ -149,8 +166,8 @@ def _sample_near_source(n, device):
     remaining = n
     while remaining > 0:
         batch = max(remaining * 2, 256)  # oversample since some get rejected
-        x = torch.normal(SOURCE_X, CO2_SOURCE_SIGMA, size=(batch, 1), device=device).clamp(*ROOM_X)
-        y = torch.normal(SOURCE_Y, CO2_SOURCE_SIGMA, size=(batch, 1), device=device).clamp(*ROOM_Y)
+        x = torch.normal(SOURCE_X, SOURCE_SAMPLE_XY_STD, size=(batch, 1), device=device).clamp(*ROOM_X)
+        y = torch.normal(SOURCE_Y, SOURCE_SAMPLE_XY_STD, size=(batch, 1), device=device).clamp(*ROOM_Y)
         z = torch.normal(BREATHING_HEIGHT, SOURCE_SAMPLE_Z_STD, size=(batch, 1), device=device).clamp(*ROOM_Z)
         bad = _in_any_column(x, y)
         keep = ~bad.squeeze(-1)
