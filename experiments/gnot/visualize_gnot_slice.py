@@ -27,7 +27,7 @@ FIG_DIR = os.path.join(HERE, "figures")
 os.makedirs(FIG_DIR, exist_ok=True)
 
 SCENARIO = {
-    "V": [5.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 5.0],
+    "V": [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],  # all windows closed -- isolates the CO2 source
     "N_people": 20.0,
     "t": 60.0,
 }
@@ -99,7 +99,7 @@ def main():
     ax.set_xlabel("X (m)"); ax.set_ylabel("Y (m)")
     ax.set_title(f"GNOT airflow, top-down slice at z={SLICE_Z}m, t={SCENARIO['t']:.0f}s, "
                  f"N_people={SCENARIO['N_people']:.0f}\n{win_str}")
-    out1 = os.path.join(FIG_DIR, "gnot_slice_velocity.png")
+    out1 = os.path.join(FIG_DIR, "gnot_slice_velocity_closed.png")
     plt.savefig(out1, dpi=150, bbox_inches="tight")
     print(f"Saved: {out1}")
 
@@ -114,7 +114,7 @@ def main():
     ax2.set_xlabel("X (m)"); ax2.set_ylabel("Y (m)")
     ax2.set_title(f"GNOT CO2, top-down slice at z={SLICE_Z}m, t={SCENARIO['t']:.0f}s, "
                   f"N_people={SCENARIO['N_people']:.0f}\n{win_str}")
-    out2 = os.path.join(FIG_DIR, "gnot_slice_co2.png")
+    out2 = os.path.join(FIG_DIR, "gnot_slice_co2_closed.png")
     plt.savefig(out2, dpi=150, bbox_inches="tight")
     print(f"Saved: {out2}")
 
