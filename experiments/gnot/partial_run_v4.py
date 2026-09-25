@@ -40,6 +40,20 @@ VERSION = "v5_closed_window_fix"  # v4b (source-sampling tuning alone) still sho
 
 
 def main():
+    # v8_nondim GUARD (found by independent audit): this is a HISTORICAL
+    # experiment script. It imports the LIVE model/losses, which since v8 are
+    # non-dimensionalized, but it still saves into an old version's checkpoint
+    # folder without the v8 "nondim" tag -- running it would silently OVERWRITE
+    # that version's documented checkpoints with incompatible weights. The
+    # original, frozen copy lives in milestones/v5_closed_window_fix/.
+    raise SystemExit(
+        "partial_run_v4.py is a superseded pre-v8 experiment script and is disabled. "
+        "Use train_gnot.py (v8_nondim) for new runs, or the frozen copy in "
+        "milestones/v5_closed_window_fix/ to reproduce the old result."
+    )
+
+
+def _original_main():
     device = "cuda" if torch.cuda.is_available() else "cpu"
     print(f"Device: {device}")
 
@@ -103,4 +117,4 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    main()  # always exits -- see guard above

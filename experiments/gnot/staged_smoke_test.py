@@ -19,7 +19,8 @@ Run on the SERVER (needs torch + CUDA):
     cd experiments/gnot
     python3 staged_smoke_test.py
 
-Each stage uses a TINY point count (16-64 points) purely for speed -- this is
+Most stages use a TINY point count (16-64 points) purely for speed (stages 0b
+and 5a call physics_loss at its full 1000 points) -- this is
 about catching CRASHES / NaNs / shape bugs, not about training quality or
 memory-ceiling behavior (the separate memory-sweep smoke test already covers
 that, at the full POINTS_INTERIOR=1000 scale).
@@ -130,6 +131,157 @@ def test_sample_interior(device):
         f"only {all_zero_frac:.3f} of points have all-zero V, expected close to "
         f"{CLOSED_SCENARIO_FRAC} -- closed-scenario oversampling may not be working"
     )
+
+    # STAGE 1 persistent-pool check (see point_sampler.py's module comment on
+    # POOL_REFRESH_FRAC/POOL_REFRESH_EVERY): verify the pool actually
+    # PERSISTS most points between consecutive calls (not silently still
+    # regenerating 100% fresh every call, which would defeat the whole point
+    # of Stage 1 -- per-point weights, planned for Stage 2, need a point to
+    # actually be revisited to track anything), AND verify it DOES refresh a
+    # fraction of points once POOL_REFRESH_EVERY calls have passed (not
+    # silently frozen forever, which would hurt the operator's generalization
+    # across scenarios -- the concern flagged in point_sampler.py).
+    from point_sampler import (reset_interior_pools, POOL_REFRESH_FRAC, POOL_REFRESH_EVERY,
+                               USE_PERSISTENT_POOL)
+    if not USE_PERSISTENT_POOL:
+        # v8_nondim switches the pool off to keep v8 a single-variable test.
+        # Instead, confirm sampling really is 100% fresh every call (v5 behavior).
+        xa, _, _, _, _, _ = sample_interior(200, device)
+        xb, _, _, _, _, _ = sample_interior(200, device)
+        same = torch.isclose(xa, xb).float().mean().item()
+        print(f"  persistent pool is OFF (USE_PERSISTENT_POOL=False): {same:.3f} of points "
+              f"identical across two calls (expected ~0, i.e. fully fresh sampling)")
+        assert same < 0.05, "pool is supposed to be off, but points are being reused across calls"
+        return
+    reset_interior_pools()
+    n_pool_test = 200  # smaller n than 1000 purely for speed; POOL_REFRESH_EVERY
+    # is a call-count, not point-count, so behavior is identical at any n
+    x0, y0, z0, _, _, _ = sample_interior(n_pool_test, device)
+    x1, y1, z1, _, _, _ = sample_interior(n_pool_test, device)
+    unchanged = torch.isclose(x0, x1).float().mean().item()
+    assert unchanged > 0.95, (
+        f"only {unchanged:.3f} of points stayed identical between two consecutive "
+        f"calls (expected ~1.0, no refresh due yet) -- persistent pool may not be "
+        f"working, still resampling 100% fresh every call"
+    )
+    # Refresh happens when pool["calls"] (incremented on every call AFTER the
+    # first, which only creates the pool) hits a multiple of
+    # POOL_REFRESH_EVERY -- i.e. on the (POOL_REFRESH_EVERY+1)-th call overall
+    # (call 1 creates with calls=0; call 2 -> calls=1; ...; call
+    # POOL_REFRESH_EVERY+1 -> calls=POOL_REFRESH_EVERY, refresh fires).
+    # x0/x1 above were calls #1 and #2, so POOL_REFRESH_EVERY-3 more calls
+    # land us at call #(POOL_REFRESH_EVERY-1); capturing the NEXT call gives
+    # call #POOL_REFRESH_EVERY (still no refresh), and the one after that is
+    # call #(POOL_REFRESH_EVERY+1) (the refresh itself). Verified numerically
+    # via a standalone script before writing this, not just reasoned about.
+    for _ in range(POOL_REFRESH_EVERY - 3):
+        sample_interior(n_pool_test, device)
+    x_before, _, _, _, _, _ = sample_interior(n_pool_test, device)  # call #POOL_REFRESH_EVERY, no refresh yet
+    x_after, _, _, _, _, _ = sample_interior(n_pool_test, device)   # call #(POOL_REFRESH_EVERY+1), refresh fires here
+    frac_changed = (~torch.isclose(x_before, x_after)).float().mean().item()
+    print(f"  pool persistence check: {unchanged:.3f} unchanged across 2 immediate "
+          f"calls; {frac_changed:.3f} of points changed at the refresh boundary "
+          f"(expected close to POOL_REFRESH_FRAC={POOL_REFRESH_FRAC})")
+    assert frac_changed > POOL_REFRESH_FRAC * 0.5, (
+        f"only {frac_changed:.3f} of points changed at the refresh boundary, expected "
+        f"close to {POOL_REFRESH_FRAC} -- periodic refresh may not be working"
+    )
+    assert frac_changed < POOL_REFRESH_FRAC * 2.0, (
+        f"{frac_changed:.3f} of points changed at the refresh boundary, way more than "
+        f"the expected {POOL_REFRESH_FRAC} -- pool may be refreshing far too aggressively"
+    )
+    reset_interior_pools()  # leave a clean slate for the rest of this test run
+
+
+@stage("0b. v8 non-dimensionalization -- no input saturation, training CO2 loss actually scaled, checkpoint guard")
+def test_nondim(device):
+    from gnot_model import GNOTOperator, check_checkpoint_compat
+    from point_sampler import NUM_WINDOWS, T_MAX, N_PEOPLE_MAX, V_MAX, ROOM_X, ROOM_Y, ROOM_Z
+    from train_gnot import trivial_co2_floor
+    torch.manual_seed(0)
+    model = GNOTOperator().to(device)
+    n = 64
+
+    # (a) SATURATION: the root cause found for v1-v6 was raw t (up to 120 s) and
+    # raw N_people (up to 50) saturating ~75-90% of the first tanh layer's
+    # units. At the EXTREME ends of the input ranges, far fewer units should
+    # be saturated now. Measured on the actual first Linear layers via hooks.
+    pre = {}
+    h1 = model.query_encoder.proj[0].register_forward_hook(lambda m, i, o: pre.__setitem__("query", o.detach()))
+    h2 = model.token_encoder.proj[0].register_forward_hook(lambda m, i, o: pre.__setitem__("token", o.detach()))
+    x = (torch.rand(n, 1, device=device) * (ROOM_X[1] - ROOM_X[0])).requires_grad_(True)
+    y = (torch.rand(n, 1, device=device) * (ROOM_Y[1] - ROOM_Y[0])).requires_grad_(True)
+    z = (torch.rand(n, 1, device=device) * (ROOM_Z[1] - ROOM_Z[0])).requires_grad_(True)
+    t = torch.full((n, 1), T_MAX, device=device)                  # worst case: t = 120 s
+    V = torch.full((n, NUM_WINDOWS), V_MAX, device=device)        # worst case: all windows at 5 m/s
+    N_people = torch.full((n, 1), N_PEOPLE_MAX, device=device)    # worst case: 50 people
+    model(x, y, z, t, V, N_people)
+    h1.remove(); h2.remove()
+    # "saturated" = tanh'(pre) = 1 - tanh^2 < 0.05, the same criterion used to
+    # measure the 75-88% (t) / 82-91% (N_people) saturation in the old model.
+    # This is what actually verifies that the input SCALING is applied: with
+    # raw t=120 / N=50 these fractions were ~88% / ~91%; scaled, ~0%.
+    def sat(p):
+        return ((1 - torch.tanh(p) ** 2) < 0.05).float().mean().item()
+    sat_q = sat(pre["query"])
+    tok = pre["token"]                 # (B, 11, D): 8 windows, 2 doors, 1 occupancy
+    sat_win = sat(tok[:, :NUM_WINDOWS])
+    sat_occ = sat(tok[:, -1])          # FIX (found by audit): checked SEPARATELY --
+    # averaged over all 11 tokens, a broken N_people scaling (1 token of 11,
+    # ~9%) could hide under a 10% threshold.
+    print(f"  saturated first-layer units at t={T_MAX:.0f}s: {sat_q * 100:.1f}% (was ~88% before v8); "
+          f"window tokens at V={V_MAX}: {sat_win * 100:.1f}%; occupancy token at N={N_PEOPLE_MAX:.0f}: "
+          f"{sat_occ * 100:.1f}% (was ~91%)")
+    assert sat_q < 0.10, f"query encoder still {sat_q:.2%} saturated at t=T_MAX -- t scaling not applied?"
+    assert sat_win < 0.10, f"window tokens {sat_win:.2%} saturated -- V/position scaling not applied?"
+    assert sat_occ < 0.10, f"occupancy token {sat_occ:.2%} saturated at N=N_PEOPLE_MAX -- N scaling not applied?"
+    in_dim = model.query_encoder.proj[0].in_features
+    expected_in = 2 * model.query_encoder.fourier.n_freq + 3  # fourier + t_hat + ramp + proximity
+    assert in_dim == expected_in, f"query encoder input dim {in_dim}, expected {expected_in} (ramp feature missing?)"
+
+    # (b) THE ACTUAL TRAINING LOSS is scaled. FIX (found by audit): an earlier
+    # version of this stage compared autograd dC/dt against a finite
+    # difference through the SAME model -- which always agrees whatever scaling
+    # is inside, so it proved nothing. Instead: force the model's CO2 output to
+    # be exactly zero everywhere (zero the C row of the final layer), which
+    # makes dc/dt = grad c = lap c = 0, so physics_loss's CO2 term must equal
+    # the trivial floor mean((S/S_REF)^2) ~ 0.09. If the /S_REF were missing in
+    # physics_loss this would read ~3e-6; if applied twice, thousands.
+    from train_gnot import physics_loss
+    zero_c = GNOTOperator().to(device)
+    with torch.no_grad():
+        zero_c.out_head[-1].weight[3].zero_()
+        zero_c.out_head[-1].bias[3].zero_()
+    _, co2_zero = physics_loss(zero_c, device)
+    floor = trivial_co2_floor(device, n=50000)
+    print(f"  physics_loss CO2 term with C forced to 0: {co2_zero.item():.4f}; "
+          f"trivial floor estimate: {floor:.4f} (expected ~0.09; was 3.1e-6 before v8)")
+    assert 0.05 < floor < 0.15, f"scaled trivial CO2 floor {floor:.4f} is outside the expected ~0.09 range"
+    assert 0.05 < co2_zero.item() < 0.15, (
+        f"physics_loss CO2 term is {co2_zero.item():.3e} for a zero CO2 field -- expected ~0.09. "
+        f"The /S_REF scaling in physics_loss is missing or wrong."
+    )
+    # (b2) OUTPUT SCALING (found by audit: nothing else checks it). Force the
+    # raw CO2 output C_hat to exactly 1 everywhere (zero weights, bias 1); the
+    # model must then return the physical value C = C_REF * 1.
+    from point_sampler import C_REF
+    with torch.no_grad():
+        zero_c.out_head[-1].bias[3].fill_(1.0)
+        _, _, _, C_one, _ = zero_c(x.detach(), y.detach(), z.detach(),
+                                   torch.full((n, 1), 60.0, device=device), V, N_people)
+    max_dev = (C_one - C_REF).abs().max().item()
+    print(f"  output scaling: C_hat=1 -> C={C_one.mean().item():.4f} (expected C_REF={C_REF:.4f})")
+    assert max_dev < 1e-5, f"C with C_hat=1 deviates from C_REF by {max_dev:.2e} -- output scaling wrong"
+    del zero_c
+
+    # (d) CHECKPOINT GUARD: pre-v8 checkpoints must be refused, v8 ones accepted.
+    try:
+        check_checkpoint_compat({"version": "v5_closed_window_fix"}, "fake_old.pth")
+        raise AssertionError("check_checkpoint_compat accepted a pre-v8 checkpoint")
+    except RuntimeError:
+        pass
+    check_checkpoint_compat({"version": "v8_nondim", "nondim": True}, "fake_new.pth")
+    print("  checkpoint guard: rejects pre-v8, accepts v8 -- OK")
 
 
 @stage("1. FourierFeatures -- shape + finiteness + 1st/2nd derivative w.r.t. raw coords")
@@ -315,6 +467,7 @@ def main():
               "but won't tell you anything about GPU memory behavior.")
 
     test_sample_interior(device)
+    test_nondim(device)
     test_fourier_features(device)
     test_query_encoder(device)
     model_and_inputs = test_model_forward(device)

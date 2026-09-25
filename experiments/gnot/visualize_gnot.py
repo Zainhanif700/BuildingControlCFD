@@ -24,14 +24,14 @@ import torch
 import matplotlib.pyplot as plt
 from mpl_toolkits.mplot3d.art3d import Poly3DCollection
 
-from gnot_model import GNOTOperator
+from gnot_model import GNOTOperator, check_checkpoint_compat
 from point_sampler import ROOM_X, ROOM_Y, ROOM_Z, WINDOWS, DOORS, COLUMNS, NUM_WINDOWS
 
 # EDIT THIS to switch which trained version you're visualizing.
 #   "v1_smooth_co2" -- original run, KNOWN BAD CO2 (room-wide smooth gradient,
 #                      confirmed physically impossible by the closed-window test)
 #   "v2_co2_fix"    -- multi-octave Fourier features + adaptive CO2 loss weight
-VERSION = "v2_co2_fix"
+VERSION = "v8_nondim"  # pre-v8 checkpoints are refused by check_checkpoint_compat
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 CKPT_PATH = os.path.join(HERE, "checkpoints", VERSION, f"gnot_{VERSION}_final.pth")
@@ -99,6 +99,7 @@ def main():
     device = "cuda" if torch.cuda.is_available() else "cpu"
     model = GNOTOperator().to(device)
     ckpt = torch.load(CKPT_PATH, map_location=device)
+    check_checkpoint_compat(ckpt, CKPT_PATH)  # v8_nondim: refuse pre-v8 checkpoints
     model.load_state_dict(ckpt["model_state"])
     model.eval()
     print(f"Loaded checkpoint from iter {ckpt.get('iter', '?')}: {CKPT_PATH}")

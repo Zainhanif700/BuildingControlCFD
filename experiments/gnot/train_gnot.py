@@ -16,20 +16,21 @@ import os
 import time
 import torch
 
-from gnot_model import GNOTOperator
+from gnot_model import GNOTOperator, NONDIM_CHECKPOINT_KEY
 from point_sampler import (
     sample_interior, sample_walls, sample_doors, sample_windows, sample_ic,
-    sample_columns_surface,
+    sample_columns_surface, _generate_interior_batch,
     ROOM_X, ROOM_Y, ROOM_Z, NUM_WINDOWS, CO2_SOURCE_SIGMA, BREATHING_HEIGHT,
+    EMISSION_PER_PERSON, S_REF, C_REF, TAU_RAMP,
 )
 
 # --- physical constants (matching Alexander's config exactly) ---
 NU = 0.01
 RHO = 1.0
 DIFFUSIVITY = 0.005
-EMISSION_PER_PERSON = 1.15e-4
+# EMISSION_PER_PERSON now lives in point_sampler.py (v8_nondim) -- imported above.
 SIGMA = CO2_SOURCE_SIGMA  # single source of truth lives in point_sampler.py now
-TAU_RAMP = 2.0
+# TAU_RAMP now lives in point_sampler.py (v8_nondim) -- imported above.
 SOURCE_X = (ROOM_X[0] + ROOM_X[1]) / 2
 SOURCE_Y = (ROOM_Y[0] + ROOM_Y[1]) / 2
 
@@ -64,22 +65,25 @@ LOG_EVERY = 10
 CKPT_EVERY = 1000
 LR = 1e-3
 
-# FIX (v6_lr_decay): the v5_closed_window_fix run showed the CO2 field's
-# overall magnitude oscillating rather than converging late in training
-# (grid-max climbing steadily from iter10000->18000, then dropping ~4x at
-# iter20000 -- see milestones/v5_closed_window_fix/README.md). A constant
-# learning rate with no decay is a well-known cause of exactly this kind of
-# late-training instability in general deep learning (this is the whole
-# motivation behind schedules like cosine annealing, e.g. Loshchilov &
-# Hutter 2017 "SGDR: Stochastic Gradient Descent with Warm Restarts") -- once
-# the network is near a good solution, a still-large step size can keep
-# knocking it back out. This is a standard, generic fix, not something
-# specific to PINNs or to this project's earlier CO2-localization literature
-# search; it targets the oscillation symptom, not the localization problem
-# directly, so it's a hypothesis to test, not a guaranteed fix.
-LR_MIN = 1e-5  # cosine decay floor -- small but nonzero so training doesn't
-# fully freeze right at the end
+# REVERTED (v7_higher_co2_weight): v6_lr_decay tested a cosine LR decay to
+# address the CO2 magnitude oscillation seen in v5 (see
+# milestones/v6_lr_decay/README.md for full data). Result: it did NOT fix
+# the oscillation -- instead, CO2's magnitude stayed pinned near zero for
+# the entire second half of training (never reaching even v5's peak
+# magnitude), while the "improvement" in closed-window velocity noise was
+# actually just normal variance in an already-fixed baseline, not a real
+# fix. Diagnosis: velocity and CO2 share one optimizer/LR, but CO2 needs
+# more/larger updates for longer (spectral bias, localized source term);
+# decaying the shared LR to stabilize the (already-fine) velocity term
+# likely choked off CO2's ability to keep improving. Back to a constant LR
+# here. (v8 note: the deeper cause turned out to be input/output scaling --
+# see point_sampler.py's S_REF/C_REF comment.)
 
+# v8 NOTE: everything in this block is HISTORY of the adaptive CO2 weighting
+# (v2-v7). As of v8 the real cause of the CO2 "imbalance" was found to be
+# missing non-dimensionalization (see point_sampler.py S_REF/C_REF), and the
+# adaptive weight is switched OFF -- see USE_ADAPTIVE_CO2_WEIGHT below.
+#
 # FIX (found by verification): CO2 values are tiny (~0.02) compared to
 # velocity (~0.3-1 m/s), so when combined into one physics loss, the CO2
 # residual got numerically drowned out and the network defaulted to an
@@ -121,10 +125,13 @@ LR_MIN = 1e-5  # cosine decay floor -- small but nonzero so training doesn't
 # iterations, not every single step) for exactly this reason -- updating
 # every step was our own oversimplification, not what the paper does.
 CO2_WEIGHT_MIN = 1.0
-CO2_WEIGHT_MAX = 200.0       # lowered from 10,000 after empirically observing
-# divergence at weights in the 1,000-9,000 range during smoke testing --
-# this is a much more conservative ceiling now that we have real evidence
-# of where instability kicks in.
+CO2_WEIGHT_MAX = 200.0      # v8_nondim: REVERTED to v5's value (v7 had raised
+# it to 500, but v7 was never run -- after literature review, that ceiling
+# turned out to be this project's own invention; Wang et al. 2021's
+# Algorithm 1 has no cap at all). Kept at v5's 200 so v8 differs from the
+# v5 baseline (which has full diagnostic data) in ONE thing only: the
+# non-dimensionalization. (Only used if USE_ADAPTIVE_CO2_WEIGHT is True,
+# which it is NOT in v8 -- see that flag's comment for why.)
 CO2_WEIGHT_EMA_ALPHA = 0.1   # Wang et al. 2021's recommended EMA rate
 CO2_WEIGHT_WARMUP_ITERS = 500  # keep weight=1.0 until the network has learned
 # *something* first -- early-training gradients (like early loss ratios) are
@@ -141,6 +148,39 @@ GRAD_CLIP_MAX_NORM = 10.0  # defense-in-depth: caps how much any single
 # and reported as a complementary safeguard in recent PINN adaptive-weighting
 # work; there's no single canonical value for PINNs specifically, so this is
 # a permissive, not tightly-tuned, default.
+
+
+# v8_nondim: ADAPTIVE CO2 WEIGHTING SWITCHED OFF (co2_weight fixed at 1.0).
+# Found by independent audit of v8: the adaptive weight above uses Wang et
+# al. 2021's max|grad NS| / mean|grad CO2| statistic, which is >> 1 BY
+# CONSTRUCTION (a maximum over ~320k parameters divided by a mean) even when
+# the two losses are perfectly balanced. Before v8 that didn't matter -- the
+# CO2 loss really was ~1e4x too small, so the weight pinned at its ceiling
+# either way. After v8's scaling, the CO2 loss is O(0.1), comparable to NS,
+# and that same statistic would push CO2 up to 200x ABOVE velocity, likely
+# wrecking the already-working velocity field. The later, refined recipe in
+# the same group's Expert's Guide (Wang, Sankaran, Wang & Perdikaris 2023,
+# arXiv:2308.08468) balances by making the gradient NORMS of the weighted
+# terms equal -- a statistic that is ~1 when losses are balanced. So for v8:
+#   - co2_weight = 1.0 (the plain unweighted PINN baseline, appropriate once
+#     all residuals are O(1) after non-dimensionalization);
+#   - the norm-equalizing weight the Guide's rule WOULD choose,
+#     ||grad L_ns|| / ||grad L_co2||, is computed and LOGGED only (column
+#     "guide_w"), so this run also produces evidence on whether balancing is
+#     needed at all: if guide_w stays within roughly 0.1-10, equal weights are
+#     fine; if it sits far outside, turn norm balancing on in the next run.
+USE_ADAPTIVE_CO2_WEIGHT = False
+
+
+def guide_norm_ratio(grad_ns, grad_co2):
+    """||grad L_ns||_2 / ||grad L_co2||_2 over all shared parameters -- the
+    weight on L_co2 that would make both terms' gradient norms equal
+    (Expert's Guide loss balancing). Diagnostic only in v8."""
+    ns_sq = sum((g ** 2).sum() for g in grad_ns if g is not None)
+    co2_sq = sum((g ** 2).sum() for g in grad_co2 if g is not None)
+    if not torch.is_tensor(co2_sq) or not torch.is_tensor(ns_sq) or co2_sq.item() < 1e-30:
+        return float("nan")
+    return (ns_sq.sqrt() / co2_sq.sqrt()).item()
 
 
 def compute_param_grads(loss, params, retain_graph):
@@ -204,19 +244,51 @@ def gradnorm_weight_update(grad_ns, grad_co2, prev_weight):
 #                     magnitude oscillates late in training instead of converging
 #                     (see milestones/v5_closed_window_fix/README.md).
 #   v6_lr_decay     -- first run through this file's own main(), now with a
-#                     cosine learning-rate decay schedule (see LR_MIN above) added
+#                     cosine learning-rate decay schedule (since removed -- see milestones/v6_lr_decay/) added
 #                     on top of everything in v5, to test whether the late-training
 #                     CO2 oscillation was caused by a constant LR overshooting a
 #                     near-good solution. Fresh 20k-iteration run (not a resume of
 #                     v5), so it's directly comparable to v5's own checkpoint
-#                     history at matching iteration counts.
+#                     history at matching iteration counts. RESULT (see
+#                     milestones/v6_lr_decay/README.md): did NOT fix the CO2
+#                     oscillation -- CO2 magnitude stayed pinned near zero for the
+#                     whole second half of training instead. The "improved"
+#                     closed-window velocity numbers were just normal variance in
+#                     an already-fixed v5 baseline, not a real additional fix.
+#                     LR decay likely choked off CO2's still-needed large updates
+#                     while stabilizing the already-converged velocity term.
+#   v7_higher_co2_weight -- NEVER RUN. Reverted the v6 LR decay and raised
+#                     CO2_WEIGHT_MAX 200->500; abandoned before training after
+#                     literature review showed the ceiling itself was this
+#                     project's own invention (no basis in Wang et al. 2021).
+#                     Its best-loss checkpointing was kept.
+#   v8_nondim       -- ROOT-CAUSE FIX: non-dimensionalization (Wang, Sankaran,
+#                     Wang & Perdikaris 2023, arXiv:2308.08468, step 1). Found by
+#                     checking that the CO2 residual loss in EVERY prior run sat
+#                     at ~3e-6 from iteration ~10 on -- exactly the loss of the
+#                     trivial constant-C solution (mean(S^2) = 3.08e-6 over our
+#                     sampling distribution). Inputs t, V, N_people and token
+#                     positions are now scaled to ~[0,1] inside the model; C is
+#                     output as C_REF * C_hat; the CO2 residual is divided by
+#                     S_REF and the boundary/IC CO2 terms by C_REF (see
+#                     point_sampler.py S_REF/C_REF). Two changes that follow
+#                     directly from the scaling (both found by independent
+#                     audit): (a) a second time input tanh(3t/TAU_RAMP), since
+#                     scaling t by 120 s alone would squash the 2 s inflow ramp
+#                     and risk regressing the already-working velocity; (b) the
+#                     adaptive CO2 weight is OFF (fixed 1.0), since its max/mean
+#                     statistic is >>1 by construction and would over-weight the
+#                     now properly-scaled CO2 term ~200x (Expert's Guide's
+#                     norm-balancing weight is logged as guide_w instead).
+#                     Otherwise identical to v5: constant LR, 100%-fresh
+#                     sampling (Stage 1 pool switched off).
 #
 # IMPORTANT: this VERSION variable (and CKPT_DIR below) is what train_gnot.py's own
 # main() uses for a FULL 20k-iteration production run. Bump this to match whichever
 # fix combination is confirmed working via the closed-window diagnostic BEFORE
 # launching the next full run through this file, so production checkpoints aren't
 # mislabeled with stale physics/sampling.
-VERSION = "v6_lr_decay"
+VERSION = "v8_nondim"
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 CKPT_DIR = os.path.join(HERE, "checkpoints", VERSION)
@@ -274,7 +346,13 @@ def physics_loss(model, device):
     res_c = dc_dt + conv_c - DIFFUSIVITY * d2c - S
 
     ns_loss = (res_u ** 2).mean() + (res_v ** 2).mean() + (res_w ** 2).mean()
-    co2_loss = (res_c ** 2).mean()
+    # v8_nondim: divide by S_REF so the CO2 residual is O(1) instead of
+    # O(6e-3) -- every term in res_c (dc/dt, conv_c, D*lap(c), S) has units
+    # of concentration/second, so this is a pure rescaling of the same
+    # equation, not a change to the physics. With this, the trivial C=0
+    # solution scores ~0.093 (was 3.08e-6), comparable to NS -- so the
+    # network finally has a real incentive to leave it.
+    co2_loss = ((res_c / S_REF) ** 2).mean()
     return ns_loss, co2_loss
 
 
@@ -303,10 +381,11 @@ def windows_loss(model, device, co2_weight):
     V_at_point = V.gather(1, window_idx)  # (B,1) -- this point's own window's speed
     target_v = -V_at_point * torch.tanh(3.0 * t / TAU_RAMP)  # inflow into the room (-y direction)
 
-    # c=0 (clean air in) gets the same adaptive CO2 weighting as the interior
-    # residual, for the same reason -- otherwise it's numerically tiny next to
-    # the velocity terms and gets neglected during training.
-    return (u ** 2).mean() + ((v - target_v) ** 2).mean() + (w ** 2).mean() + co2_weight * (c ** 2).mean()
+    # c=0 (clean air in) gets the same co2_weight as the interior residual
+    # (fixed at 1.0 in v8 -- see USE_ADAPTIVE_CO2_WEIGHT).
+    # v8_nondim: measured in units of C_REF (dimensionless), consistent with
+    # the scaled interior residual.
+    return (u ** 2).mean() + ((v - target_v) ** 2).mean() + (w ** 2).mean() + co2_weight * ((c / C_REF) ** 2).mean()
 
 
 def doors_loss(model, device):
@@ -319,7 +398,24 @@ def ic_loss(model, device, co2_weight):
     x, y, z, t, V, N_people = sample_ic(POINTS_IC, device)
     x.requires_grad_(True); y.requires_grad_(True); z.requires_grad_(True)
     u, v, w, c, p = get_velocity_and_derivs(model, x, y, z, t, V, N_people)
-    return (u ** 2).mean() + (v ** 2).mean() + (w ** 2).mean() + (p ** 2).mean() + co2_weight * (c ** 2).mean()
+    # v8_nondim: CO2 IC term in units of C_REF, consistent with windows_loss.
+    return (u ** 2).mean() + (v ** 2).mean() + (w ** 2).mean() + (p ** 2).mean() + co2_weight * ((c / C_REF) ** 2).mean()
+
+
+def trivial_co2_floor(device, n=200000):
+    """v8_nondim: the CO2(scaled) loss a network would get by outputting a
+    constant (trivial) CO2 field -- then dc/dt, grad(c) and lap(c) are all 0,
+    so res_c = -S and co2_loss = mean((S/S_REF)^2) over our sampling
+    distribution. Printed at startup so the log can be read directly:
+    CO2(scaled) staying near this number means the network is still stuck on
+    the trivial solution (what happened in every run v1-v6); CO2(scaled)
+    dropping clearly BELOW it means it is actually learning CO2.
+    Uses _generate_interior_batch directly (not sample_interior) so this
+    one-off estimate never touches the persistent pool state."""
+    x, y, z, t, V, N_people = _generate_interior_batch(n, device)
+    dist2 = (x - SOURCE_X) ** 2 + (y - SOURCE_Y) ** 2 + (z - BREATHING_HEIGHT) ** 2
+    S = N_people * EMISSION_PER_PERSON * torch.exp(-dist2 / (SIGMA ** 2))
+    return ((S / S_REF) ** 2).mean().item()
 
 
 def main():
@@ -329,25 +425,26 @@ def main():
     model = GNOTOperator().to(device)
     n_params = sum(p.numel() for p in model.parameters())
     print(f"GNOT parameters: {n_params:,}")
+    floor = trivial_co2_floor(device)
+    print(f"[v8_nondim] Trivial-solution CO2(scaled) reference = {floor:.4f}  "
+          f"(CO2(scaled) near this = still stuck on C=const; clearly below = learning CO2)")
+    print(f"[v8_nondim] adaptive CO2 weighting: {'ON' if USE_ADAPTIVE_CO2_WEIGHT else 'OFF (co2_weight fixed at 1.0)'}; "
+          f"guide_w column = norm-balancing weight the Expert's Guide rule would pick (diagnostic)")
 
     optimizer = torch.optim.Adam(model.parameters(), lr=LR)
     params = list(model.parameters())
 
-    # v6_lr_decay: cosine-anneal LR from LR down to LR_MIN over the full run
-    # (see module-level comment above). T_max=MAX_ITERS means the decay
-    # reaches its floor exactly at the last iteration, not before.
-    # T_max=MAX_ITERS+1 (not MAX_ITERS) because the loop below runs
-    # range(MAX_ITERS + 1) -- MAX_ITERS+1 total steps -- so this makes the
-    # floor land exactly on the last iteration instead of one step past it.
-    scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
-        optimizer, T_max=MAX_ITERS + 1, eta_min=LR_MIN
-    )
-
-    # Adaptive CO2 loss weight -- starts at a neutral 1.0 and is rebalanced
-    # every iteration (after a warm-up) by gradnorm_weight_update(). Tracked
-    # as running state across iterations, so it must live here in main(),
-    # not as a module-level constant.
+    # CO2 loss weight -- 1.0 and held there in v8 (USE_ADAPTIVE_CO2_WEIGHT is
+    # False, see its comment). If re-enabled, it's rebalanced periodically
+    # (after a warm-up) by gradnorm_weight_update(); tracked as running state
+    # across iterations, so it lives here in main().
     co2_weight = 1.0
+    guide_w = float("nan")  # diagnostic only: Expert's Guide norm-balancing weight
+
+    # Best-loss checkpointing (added in v7): a safety net that keeps whichever
+    # checkpoint had the LOWEST equal-weight total loss seen so far, so a late
+    # destabilization doesn't leave us with only a worse final checkpoint.
+    best_total_val = float("inf")
 
     # NOTE on memory: each loss term below is backward()-ed IMMEDIATELY after
     # being computed (instead of summing all 5 into one `total` and calling
@@ -406,44 +503,70 @@ def main():
         torch.nn.utils.clip_grad_norm_(params, GRAD_CLIP_MAX_NORM)
 
         optimizer.step()
-        scheduler.step()  # v6_lr_decay: advance the cosine schedule once per iteration
 
-        # Rebalance the CO2 weight using gradient-norm ratios (Wang et al.
-        # 2021), not raw loss values -- see module-level comment for why the
-        # loss-value version caused a training collapse. Held at a neutral 1.0
-        # during the warm-up window, and only RECOMPUTED periodically after
-        # that (every CO2_WEIGHT_UPDATE_EVERY iterations) -- updating every
-        # single iteration created its own feedback-loop divergence (see
-        # module-level comment), matching Wang et al.'s actual periodic
-        # annealing schedule rather than our earlier every-step version.
-        if it >= CO2_WEIGHT_WARMUP_ITERS and it % CO2_WEIGHT_UPDATE_EVERY == 0:
-            co2_weight = gradnorm_weight_update(grad_ns, grad_co2, co2_weight)
+        # CO2 weight: fixed at 1.0 in v8 (USE_ADAPTIVE_CO2_WEIGHT=False). If
+        # re-enabled, the old periodic gradient-norm rebalancing (Wang et al.
+        # 2021, see module-level history comment) runs after the warm-up.
+        if it % CO2_WEIGHT_UPDATE_EVERY == 0:
+            # v8: always compute the Expert's Guide norm-balancing weight for
+            # the log (cheap: reuses grads already computed this iteration).
+            guide_w = guide_norm_ratio(grad_ns, grad_co2)
+            if USE_ADAPTIVE_CO2_WEIGHT and it >= CO2_WEIGHT_WARMUP_ITERS:
+                co2_weight = gradnorm_weight_update(grad_ns, grad_co2, co2_weight)
 
         total_val = (L_ns.item() + co2_weight * L_co2.item() + L_walls.item()
                      + L_windows.item() + L_doors.item() + L_ic.item())
 
+        # Equal-weight total used to pick the "best" checkpoint. v8: with
+        # every residual now O(1) after non-dimensionalization, equal weights
+        # are the natural comparison scale (the old version multiplied L_co2 by
+        # CO2_WEIGHT_MAX=200, which after v8's scaling would have made "best"
+        # track almost nothing but CO2 -- found by audit). Note L_windows/L_ic
+        # contain co2_weight internally; with co2_weight fixed at 1.0 in v8 this
+        # is exactly the equal-weight sum. If adaptive weighting is re-enabled,
+        # revisit this.
+        unweighted_total = (L_ns.item() + L_co2.item() + L_walls.item()
+                            + L_windows.item() + L_doors.item() + L_ic.item())
+
         if it % LOG_EVERY == 0:
             elapsed = time.time() - start
             speed = (it + 1) / elapsed if elapsed > 0 else 0.0
-            cur_lr = scheduler.get_last_lr()[0]
             print(f"[Iter {it:05d}/{MAX_ITERS}] Total={total_val:.5f} | "
-                  f"NS={L_ns.item():.5f} CO2(raw)={L_co2.item():.6f} CO2_weight={co2_weight:.2f} CO2(weighted)={co2_weight * L_co2.item():.5f} "
+                  f"NS={L_ns.item():.5f} CO2(scaled)={L_co2.item():.5f} CO2_weight={co2_weight:.2f} guide_w={guide_w:.3g} "
                   f"Walls={L_walls.item():.5f} Windows={L_windows.item():.5f} Doors={L_doors.item():.5f} "
-                  f"IC={L_ic.item():.5f} LR={cur_lr:.6f} | {speed:.2f} it/s")
+                  f"IC={L_ic.item():.5f} | {speed:.2f} it/s")
+
+        # v7_higher_co2_weight: save a new best-loss checkpoint any time
+        # unweighted_total hits a new low, overwriting the previous best each
+        # time (not versioned by iteration -- this is a running "best so far"
+        # pointer, not part of the regular iter-numbered checkpoint history).
+        # Gated to every LOG_EVERY iterations (not every single iteration) --
+        # FIX (found by audit): checking/saving every iteration would trigger
+        # torch.save (GPU->CPU copy + disk I/O) very often during the fast
+        # early-loss-drop phase, a real throughput hit for a safety net that
+        # doesn't need iteration-exact precision.
+        if it % LOG_EVERY == 0 and unweighted_total < best_total_val:
+            best_total_val = unweighted_total
+            best_path = os.path.join(CKPT_DIR, f"gnot_{VERSION}_best.pth")
+            torch.save({"iter": it, "version": VERSION, "co2_weight": co2_weight,
+                        "unweighted_total": best_total_val, NONDIM_CHECKPOINT_KEY: True,
+                        "model_state": model.state_dict()}, best_path)
 
         if it % CKPT_EVERY == 0 and it > 0:
             ckpt_path = os.path.join(CKPT_DIR, f"gnot_{VERSION}_iter{it}.pth")
             torch.save({"iter": it, "version": VERSION, "co2_weight": co2_weight,
-                        "lr": scheduler.get_last_lr()[0],
+                        NONDIM_CHECKPOINT_KEY: True,
                         "model_state": model.state_dict(),
                         "optimizer_state": optimizer.state_dict()}, ckpt_path)
             print(f"  -> saved checkpoint: {ckpt_path}")
 
     final_path = os.path.join(CKPT_DIR, f"gnot_{VERSION}_final.pth")
     torch.save({"iter": MAX_ITERS, "version": VERSION, "co2_weight": co2_weight,
-                "lr": scheduler.get_last_lr()[0],
+                NONDIM_CHECKPOINT_KEY: True,
                 "model_state": model.state_dict()}, final_path)
     print(f"Training complete. Final checkpoint: {final_path}")
+    print(f"Best checkpoint (lowest unweighted_total={best_total_val:.5f}): "
+          f"{os.path.join(CKPT_DIR, f'gnot_{VERSION}_best.pth')}")
 
 
 if __name__ == "__main__":

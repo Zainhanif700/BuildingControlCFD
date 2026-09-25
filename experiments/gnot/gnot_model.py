@@ -29,11 +29,39 @@ import torch.nn as nn
 
 from point_sampler import (
     NUM_WINDOWS, WINDOWS, DOORS, ROOM_X, ROOM_Y, ROOM_Z, CO2_SOURCE_SIGMA, BREATHING_HEIGHT,
+    T_MAX, V_MAX, N_PEOPLE_MAX, C_REF, TAU_RAMP,
 )
 
 D_MODEL = 128
 N_HEADS = 4
 N_LAYERS = 2
+
+# v8_nondim: this model now normalizes t, V, N_people and token positions to
+# ~[0,1] INSIDE forward(), and scales its raw CO2 output by C_REF (see
+# point_sampler.py's S_REF/C_REF comment for the root-cause analysis).
+# Callers still pass and receive PHYSICAL units -- autograd applies the chain
+# rule through the scaling automatically, so dC/dt etc. computed in
+# train_gnot.py stay correct in physical units.
+#
+# CONSEQUENCE: checkpoints trained BEFORE v8 (v1-v7) learned weights for the
+# OLD unscaled inputs. Loading them into this model would silently produce
+# wrong predictions. Every training script from v8 on saves "nondim": True in
+# its checkpoints, and check_checkpoint_compat() below refuses to load
+# anything without it. To inspect old checkpoints, run the frozen scripts
+# inside milestones/<version>/ instead (they carry their own old model code).
+NONDIM_CHECKPOINT_KEY = "nondim"
+
+
+def check_checkpoint_compat(ckpt, path=""):
+    """Raise a clear error if `ckpt` was trained with the pre-v8 (unscaled)
+    model -- see the comment above NONDIM_CHECKPOINT_KEY."""
+    if not ckpt.get(NONDIM_CHECKPOINT_KEY, False):
+        raise RuntimeError(
+            f"Checkpoint {path!r} (version={ckpt.get('version', '?')}) was trained with the "
+            f"pre-v8 model (unscaled inputs). The live gnot_model.py normalizes inputs, so "
+            f"loading it here would give WRONG predictions. Run the frozen scripts inside "
+            f"milestones/<that version>/ instead."
+        )
 
 
 def _window_centers():
@@ -213,8 +241,10 @@ class QueryEncoder(nn.Module):
         # source location -- a well-trained network should learn near-zero
         # weight from this feature into u,v,w,p, but that's not enforced. This
         # is a real, likely-low-risk tradeoff of the shared-trunk design.
+        # v8_nondim input layout: fourier(x,y,z) + t/T_MAX + tanh(3t/TAU_RAMP)
+        # + source proximity (see forward() for why there are TWO time features).
         self.proj = nn.Sequential(
-            nn.Linear(fourier_dim + 2, d_model),  # fourier(x,y,z) + raw t + source proximity
+            nn.Linear(fourier_dim + 3, d_model),
             nn.Tanh(),
             nn.Linear(d_model, d_model),
             nn.Tanh(),
@@ -225,7 +255,25 @@ class QueryEncoder(nn.Module):
         feats = self.fourier(coords)
         dist_sq = (x - self._SOURCE_X) ** 2 + (y - self._SOURCE_Y) ** 2 + (z - self._SOURCE_Z) ** 2
         source_proximity = torch.exp(-dist_sq / self._sigma2)
-        return self.proj(torch.cat([feats, t, source_proximity], dim=-1))
+        # v8_nondim: raw t (0-120 s) saturated ~75-88% of this layer's tanh
+        # units, freezing the network's ability to represent time-dependence
+        # (see point_sampler.py S_REF/C_REF comment). t/T_MAX is in [0,1];
+        # autograd carries the 1/T_MAX factor into dC/dt automatically.
+        t_hat = t / T_MAX
+        # SECOND time feature (found by independent audit of v8): this problem
+        # has TWO physical time scales -- the window inflow ramps up within
+        # TAU_RAMP ~ 2 s, while CO2 accumulates over T_MAX = 120 s. Scaling t by
+        # T_MAX alone squeezes the whole inflow ramp into t_hat in [0, 0.017],
+        # which the network could barely resolve at initialization -- a
+        # foreseeable regression of the ALREADY-WORKING velocity field. Feeding
+        # the known ramp profile tanh(3t/TAU_RAMP) (the exact same function the
+        # window boundary condition in train_gnot.py uses) gives the network the
+        # fast time scale directly, the same way source_proximity gives it the
+        # known source location. Bounded in [0,1), smooth, so second-order
+        # autograd is unaffected. Treat as a pragmatic, disclosed design choice
+        # (same status as source_proximity), not a cited technique.
+        ramp = torch.tanh(3.0 * t / TAU_RAMP)
+        return self.proj(torch.cat([feats, t_hat, ramp, source_proximity], dim=-1))
 
 
 class CrossAttnBlock(nn.Module):
@@ -290,7 +338,27 @@ class GNOTOperator(nn.Module):
         pos = torch.cat([win_pos, door_pos, occ_pos], dim=1)
         val = torch.cat([win_val, door_val, occ_val], dim=1)
         type_id = torch.cat([win_type, door_type, occ_type], dim=1)
-        return self.token_encoder(pos, val, type_id)  # (B, 11, D)
+
+        # v8_nondim: normalize token inputs to ~[0,1] before the first
+        # Linear->Tanh layer. Raw N_people (0-50) saturated ~82% of units at
+        # N=25 (so the network could barely tell 20 people from 50 -- and CO2
+        # emission is proportional to N); raw positions (x up to 15.5 m) had
+        # the same problem, making the 8 window tokens hard to tell apart.
+        # V is in [0,5] m/s, less severe, but scaled too for consistency.
+        # Doors carry value 0 either way. Built on the fly from plain Python
+        # constants (not registered buffers) so the state_dict layout is
+        # unchanged.
+        lo = torch.tensor([ROOM_X[0], ROOM_Y[0], ROOM_Z[0]], device=device, dtype=pos.dtype)
+        ext = torch.tensor([ROOM_X[1] - ROOM_X[0], ROOM_Y[1] - ROOM_Y[0], ROOM_Z[1] - ROOM_Z[0]],
+                           device=device, dtype=pos.dtype)
+        pos_hat = (pos - lo) / ext
+        val_scale = torch.cat([
+            torch.full((NUM_WINDOWS,), 1.0 / V_MAX, device=device, dtype=val.dtype),
+            torch.ones(door_pos.shape[1], device=device, dtype=val.dtype),  # doors: value is 0 anyway
+            torch.full((1,), 1.0 / N_PEOPLE_MAX, device=device, dtype=val.dtype),
+        ]).view(1, -1, 1)
+        val_hat = val * val_scale
+        return self.token_encoder(pos_hat, val_hat, type_id)  # (B, 11, D)
 
     def forward(self, x, y, z, t, V, N_people):
         """All inputs shape (B,1) except V which is (B,8). Returns u,v,w,p,c each (B,1)."""
@@ -301,7 +369,13 @@ class GNOTOperator(nn.Module):
             q = block(q, context)
 
         out = self.out_head(q).squeeze(1)  # (B, 5)
-        A1, A2, A3, C, p = out[:, 0:1], out[:, 1:2], out[:, 2:3], out[:, 3:4], out[:, 4:5]
+        A1, A2, A3, C_hat, p = out[:, 0:1], out[:, 1:2], out[:, 2:3], out[:, 3:4], out[:, 4:5]
+        # v8_nondim: the network predicts a dimensionless CO2 value C_hat of
+        # order 1; the physical concentration is C_REF * C_hat (C_REF = 0.69,
+        # the closed-room accumulation bound -- see point_sampler.py). The
+        # returned C is in PHYSICAL units, so all callers (losses,
+        # diagnostics, visualizations) are unchanged.
+        C = C_REF * C_hat
         return A1, A2, A3, C, p
 
     def velocity_from_potential(self, A1, A2, A3, x, y, z):

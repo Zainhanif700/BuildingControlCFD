@@ -65,6 +65,39 @@ V_MIN, V_MAX = 0.0, 5.0
 N_PEOPLE_MIN, N_PEOPLE_MAX = 0.0, 50.0
 T_MIN, T_MAX = 0.0, 120.0
 
+# CO2 emission per person (matches Alexander's config). Moved here from
+# train_gnot.py (v8_nondim) so gnot_model.py can use it for output scaling
+# without a circular import -- same "single source of truth" reasoning as
+# CO2_SOURCE_SIGMA above.
+EMISSION_PER_PERSON = 1.15e-4
+
+# Window inflow ramp time constant (s): target inflow = V * tanh(3t/TAU_RAMP),
+# fully open within ~2 s. Moved here from train_gnot.py (v8_nondim) because
+# gnot_model.py now also uses it as an input feature -- see QueryEncoder.
+TAU_RAMP = 2.0
+
+# --- v8_nondim: reference scales for non-dimensionalization ---
+# ROOT CAUSE FOUND (v8): every run v1-v6 had the CO2 residual loss sitting
+# at ~3e-6 from iteration ~10 onward -- which is EXACTLY the loss a
+# constant (trivial, C=0) CO2 field gives: mean(S^2) over our own sampling
+# distribution = 3.08e-6 (computed numerically). The network never left the
+# trivial solution. Two scaling causes:
+#   (1) raw t (0-120 s) and raw N_people (0-50) fed straight into Linear ->
+#       Tanh layers saturate most units (measured: ~75% at t=60, ~88% at
+#       t=120; ~82% at N=25), so the network can barely represent CO2
+#       growing over time or scaling with occupancy. Velocity is unaffected
+#       because its inflow target saturates within ~2 s (tanh(3t/2)).
+#   (2) CO2 residuals are O(S_REF) ~ 6e-3, i.e. squared ~1e-5, while
+#       velocity residuals are O(1e-2..1e-1) -- a ~1e4 imbalance, which is
+#       also why the adaptive CO2 weight was always pinned at its ceiling.
+# Fix: standard non-dimensionalization, step 1 of Wang, Sankaran, Wang &
+# Perdikaris 2023, "An Expert's Guide to Training Physics-informed Neural
+# Networks" (arXiv:2308.08468): inputs and outputs scaled to O(1).
+S_REF = N_PEOPLE_MAX * EMISSION_PER_PERSON  # max source strength, 5.75e-3 per s
+C_REF = S_REF * T_MAX                        # upper bound on accumulated CO2, 0.69
+# (closed room, no diffusion: C <= S_max * t_max). Order-of-magnitude scale
+# only -- not a hard bound the network is clamped to.
+
 
 def _rand(n, lo, hi, device):
     return torch.rand(n, 1, device=device) * (hi - lo) + lo
@@ -233,11 +266,52 @@ def _sample_near_source(n, device):
     return xyz[:, 0:1], xyz[:, 1:2], xyz[:, 2:3]
 
 
-def sample_interior(n, device="cpu"):
-    """Random points inside the room, excluding the 4 columns (rejection
-    sampling). A fraction (SOURCE_SAMPLE_FRAC) is concentrated near the
-    known CO2 source location instead of uniform -- see fix #2 comment
-    above for why."""
+# ---------------------------------------------------------------------------
+# STAGE 1 of the self-adaptive weighting + sampling upgrade (Chen, Howard &
+# Stinis, "Self-adaptive weighting and sampling for physics-informed neural
+# networks," arXiv:2511.05452, 2025). Context: v6_lr_decay and
+# v7_higher_co2_weight both worked with one GLOBAL scalar CO2 loss weight,
+# which either had to be capped at a value we invented ourselves (no
+# literature backing -- see train_gnot.py's CO2_WEIGHT_MAX comment) or left
+# CO2 undertrained. The cited paper instead uses a PER-POINT weight,
+# renormalized to mean=1 every update, so there's no ceiling to guess. But
+# per-point weights only make sense if a point is actually revisited across
+# iterations -- our original design resampled 100% of points fresh every
+# single iteration, so there was nothing for a per-point weight to track.
+#
+# STAGE 1 (this change): switch to a PERSISTENT POOL of n points per
+# (n, device), refreshing only a fraction of them periodically -- the cited
+# paper's own tested defaults for its adaptive-sampling component
+# (POOL_REFRESH_FRAC=0.2 of points, every POOL_REFRESH_EVERY=100 iterations).
+# This stage deliberately does NOT add per-point adaptive WEIGHTING yet
+# (planned as Stage 2, in train_gnot.py) -- the goal here is to validate in
+# isolation that switching from full per-iteration resampling to a mostly-
+# persistent pool doesn't itself regress training. This is a genuine risk
+# specific to this project: the cited paper's own benchmarks are all
+# non-parametric (one fixed PDE, one fixed set of boundary conditions), while
+# this project's network must generalize across many different window-
+# velocity/occupancy scenarios (see sample_scenario above) -- a concern the
+# paper's own experiments never tested. Validate this stage's health (no
+# regression vs. v5/v7's already-confirmed closed/open-window behavior)
+# before adding Stage 2 on top.
+USE_PERSISTENT_POOL = False  # v8_nondim: DISABLED -- the non-dimensionalization
+# fix (see S_REF/C_REF above) is being tested as a SINGLE-VARIABLE change
+# against v5's already-documented sampling behavior (100% fresh points every
+# iteration). The Stage 1 pool code is kept intact for later use (Stage 2
+# adaptive weighting would need it), just switched off. With this False,
+# sample_interior() behaves exactly as it did in v5.
+POOL_REFRESH_FRAC = 0.2    # fraction of the pool replaced at each refresh
+POOL_REFRESH_EVERY = 100   # refresh cadence, in calls to sample_interior()
+# (one call == one training iteration in train_gnot.py's main loop)
+
+_interior_pools = {}  # keyed by (n, device_str) -> dict of tensors + "calls"
+
+
+def _generate_interior_batch(n, device):
+    """The actual point-generation logic (uniform + source-concentrated
+    spatial mixture, fix #2; plus scenario sampling, fix #3) -- factored out
+    of sample_interior() so both the initial pool build and each periodic
+    partial refresh below can reuse it identically."""
     n_source = int(round(n * SOURCE_SAMPLE_FRAC))
     n_uniform = n - n_source
 
@@ -264,6 +338,109 @@ def sample_interior(n, device="cpu"):
 
     t, V, N_people = sample_scenario(n, device)
     return xyz[:, 0:1], xyz[:, 1:2], xyz[:, 2:3], t, V, N_people
+
+
+def interior_pool_composition(n, device="cpu"):
+    """DIAGNOSTIC ONLY -- read-only snapshot of the CURRENT persistent pool's
+    scenario/spatial composition for (n, device), without calling
+    sample_interior() (which would advance its call counter / potentially
+    trigger a refresh as a side effect of merely inspecting it).
+
+    WHY THIS EXISTS: an independent review of Stage 1 (persistent-pool
+    sampling, see module comment above) flagged a real, previously
+    unconsidered risk -- since points now persist for up to
+    POOL_REFRESH_EVERY-1 iterations instead of being re-randomized every
+    single iteration, a skewed random draw of scenario mixture (e.g. too many
+    closed-window points, or too few near-source points) could persist for a
+    long stretch instead of being averaged away immediately. That could
+    introduce a NEW low-frequency oscillation source layered on top of the
+    CO2 magnitude oscillation this project is already trying to diagnose --
+    confounding the investigation instead of isolating the resampling
+    change's own effect. This function lets a training script log the pool's
+    actual composition over time so that risk is directly OBSERVED, not just
+    hoped against.
+
+    Returns None if no pool exists yet for this (n, device) (i.e.
+    sample_interior/sample_ic hasn't been called with these args yet).
+    """
+    key = (n, str(device))
+    pool = _interior_pools.get(key)
+    if pool is None:
+        return None
+
+    x, y, z, V = pool["x"], pool["y"], pool["z"], pool["V"]
+    dist = torch.sqrt((x - SOURCE_X) ** 2 + (y - SOURCE_Y) ** 2 + (z - BREATHING_HEIGHT) ** 2)
+    return {
+        "calls": pool["calls"],
+        "frac_all_closed": (V == 0).all(dim=1).float().mean().item(),
+        "frac_any_closed": (V == 0).any(dim=1).float().mean().item(),
+        "frac_near_source": (dist < CO2_SOURCE_SIGMA).float().mean().item(),
+        "mean_dist_to_source": dist.mean().item(),
+    }
+
+
+def reset_interior_pools():
+    """Clears all persistent interior pools. Call this between independent
+    runs/tests (e.g. staged_smoke_test.py stages) so leftover pool state
+    from one doesn't leak into another."""
+    _interior_pools.clear()
+
+
+def sample_interior(n, device="cpu"):
+    """Random points inside the room, excluding the 4 columns (rejection
+    sampling). A fraction (SOURCE_SAMPLE_FRAC) is concentrated near the
+    known CO2 source location instead of uniform -- see fix #2 comment
+    above for why.
+
+    STAGE 1 persistent-pool version (see module comment above): maintains a
+    pool of exactly n points per (n, device) combination, refreshing only
+    POOL_REFRESH_FRAC of them every POOL_REFRESH_EVERY calls instead of
+    regenerating all n points every single call. The first call for a given
+    (n, device) still builds a full fresh pool via _generate_interior_batch,
+    so one-shot callers (tests, or training's very first iteration) see the
+    same distribution as the pre-Stage-1 code.
+
+    NOTE: sample_ic() below calls this function directly (reusing the same
+    spatial mixture, just overriding t=0), so it automatically gets its own
+    independent persistent pool too, keyed separately since POINTS_IC !=
+    POINTS_INTERIOR in train_gnot.py.
+    """
+    if not USE_PERSISTENT_POOL:
+        return _generate_interior_batch(n, device)  # v5 behavior: 100% fresh every call
+
+    key = (n, str(device))
+    pool = _interior_pools.get(key)
+
+    if pool is None:
+        x, y, z, t, V, N_people = _generate_interior_batch(n, device)
+        pool = {"x": x, "y": y, "z": z, "t": t, "V": V, "N_people": N_people, "calls": 0}
+        _interior_pools[key] = pool
+    else:
+        pool["calls"] += 1
+        if pool["calls"] % POOL_REFRESH_EVERY == 0:
+            n_refresh = int(round(n * POOL_REFRESH_FRAC))
+            if n_refresh > 0:
+                new_x, new_y, new_z, new_t, new_V, new_N = _generate_interior_batch(n_refresh, device)
+                idx = torch.randperm(n, device=device)[:n_refresh]
+                pool["x"][idx] = new_x
+                pool["y"][idx] = new_y
+                pool["z"][idx] = new_z
+                pool["t"][idx] = new_t
+                pool["V"][idx] = new_V
+                pool["N_people"][idx] = new_N
+
+    # Return fresh, DETACHED leaf tensors each call. Callers (physics_loss,
+    # ic_loss, etc. in train_gnot.py) call .requires_grad_(True) on the
+    # returned x/y/z/t every iteration. Returning the pool's own stored
+    # tensors directly instead of a clone would (a) leave requires_grad=True
+    # permanently attached to the pool's storage, which then makes the
+    # in-place refresh assignment above ILLEGAL on the next refresh (PyTorch
+    # forbids in-place ops on a leaf tensor that requires grad), and (b) risk
+    # reusing a tensor still referenced by a previous iteration's autograd
+    # graph. clone().detach() avoids both.
+    return (pool["x"].clone().detach(), pool["y"].clone().detach(),
+            pool["z"].clone().detach(), pool["t"].clone().detach(),
+            pool["V"].clone().detach(), pool["N_people"].clone().detach())
 
 
 def sample_walls(n, device="cpu"):

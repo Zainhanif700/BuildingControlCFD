@@ -32,6 +32,8 @@ from train_gnot import (
     CO2_WEIGHT_UPDATE_EVERY,
 )
 
+from gnot_model import check_checkpoint_compat
+
 SOURCE_CKPT = os.path.join(HERE, "checkpoints", "v5_closed_window_fix",
                            "gnot_v5_closed_window_fix_partial10000.pth")
 N_MORE_ITERS = 10000
@@ -41,11 +43,26 @@ VERSION = "v5_closed_window_fix"  # same version -- this is a continuation, not 
 
 
 def main():
+    # v8_nondim GUARD (found by independent audit): this is a HISTORICAL
+    # experiment script. It imports the LIVE model/losses, which since v8 are
+    # non-dimensionalized, but it still saves into an old version's checkpoint
+    # folder without the v8 "nondim" tag -- running it would silently OVERWRITE
+    # that version's documented checkpoints with incompatible weights. The
+    # original, frozen copy lives in milestones/v5_closed_window_fix/.
+    raise SystemExit(
+        "resume_v5.py is a superseded pre-v8 experiment script and is disabled. "
+        "Use train_gnot.py (v8_nondim) for new runs, or the frozen copy in "
+        "milestones/v5_closed_window_fix/ to reproduce the old result."
+    )
+
+
+def _original_main():
     device = "cuda" if torch.cuda.is_available() else "cpu"
     print(f"Device: {device}")
 
     model = GNOTOperator().to(device)
     ckpt = torch.load(SOURCE_CKPT, map_location=device)
+    check_checkpoint_compat(ckpt, SOURCE_CKPT)  # v8_nondim: refuse pre-v8 checkpoints
     model.load_state_dict(ckpt["model_state"])
     co2_weight = ckpt["co2_weight"]
     start_iter = ckpt["iter"]
@@ -115,4 +132,4 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    main()  # always exits -- see guard above

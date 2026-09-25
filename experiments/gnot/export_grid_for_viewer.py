@@ -20,7 +20,7 @@ import os
 import numpy as np
 import torch
 
-from gnot_model import GNOTOperator
+from gnot_model import GNOTOperator, check_checkpoint_compat
 from point_sampler import ROOM_X, ROOM_Y, ROOM_Z, WINDOWS, DOORS, COLUMNS, NUM_WINDOWS
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -62,6 +62,7 @@ def main():
     device = "cuda" if torch.cuda.is_available() else "cpu"
     model = GNOTOperator().to(device)
     ckpt = torch.load(args.checkpoint, map_location=device)
+    check_checkpoint_compat(ckpt, args.checkpoint)  # v8_nondim: refuse pre-v8 checkpoints
     model.load_state_dict(ckpt["model_state"])
     model.eval()
     ckpt_iter = ckpt.get("iter", "?")

@@ -12,7 +12,7 @@ Usage:
 import sys
 import torch
 
-from gnot_model import GNOTOperator
+from gnot_model import GNOTOperator, check_checkpoint_compat
 from point_sampler import NUM_WINDOWS, BREATHING_HEIGHT, ROOM_X, ROOM_Y
 
 
@@ -26,11 +26,19 @@ def main():
     source_y = (ROOM_Y[0] + ROOM_Y[1]) / 2
 
     print(f"Probing CO2 prediction AT the true source location ({source_x:.2f}, {source_y:.2f}, "
-          f"{BREATHING_HEIGHT:.2f}), all windows closed, N_people=20, t=60s:\n")
+          f"{BREATHING_HEIGHT:.2f}), all windows closed, N_people=20, t=60s:")
+    # v8_nondim: physical reference value. Closed windows -> no convection;
+    # diffusion length sqrt(D*t) = sqrt(0.005*60) ~ 0.55 m << source width
+    # sigma = 2.5 m, so near the source C grows almost linearly:
+    # C(source, t) ~ N * E * t = 20 * 1.15e-4 * 60 = 0.138.
+    from point_sampler import EMISSION_PER_PERSON
+    print(f"(physically expected: roughly 20 * {EMISSION_PER_PERSON} * 60 = "
+          f"{20 * EMISSION_PER_PERSON * 60:.3f}; every run before v8 gave ~0.00-0.02)\n")
 
     for ckpt_path in sys.argv[1:]:
         model = GNOTOperator().to(device)
         ckpt = torch.load(ckpt_path, map_location=device)
+        check_checkpoint_compat(ckpt, ckpt_path)  # v8_nondim: refuse pre-v8 checkpoints
         model.load_state_dict(ckpt["model_state"])
         model.eval()
 
