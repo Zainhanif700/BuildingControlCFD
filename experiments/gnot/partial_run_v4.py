@@ -32,9 +32,11 @@ CKPT_EVERY = 2000  # FIX (found by audit): this script previously only saved a
 # recoverable. train_gnot.py's own main() already does periodic checkpointing
 # (CKPT_EVERY=1000); this script didn't, purely because it started as a quick
 # one-off test script. Fixed to match that safer pattern.
-VERSION = "v4b_source_sampling_tuned"  # distinct from v4_source_sampling (frac=0.4,
-# std=sigma) so the earlier result isn't overwritten -- lets us compare the
-# two directly rather than losing the "before" data point.
+VERSION = "v5_closed_window_fix"  # v4b (source-sampling tuning alone) still showed
+# a wrong/inconsistent CO2 peak and non-trivial closed-window velocity; this adds
+# fix #3 (correlated closed/partial-closed window-scenario oversampling in
+# point_sampler.py's sample_scenario) on top of fixes #1+#2. Distinct version tag
+# so v4/v4b results are preserved for comparison.
 
 
 def main():

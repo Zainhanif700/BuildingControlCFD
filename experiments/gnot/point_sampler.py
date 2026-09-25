@@ -79,12 +79,67 @@ def _in_any_column(x, y):
     return inside
 
 
+# FIX #3 (from the original 3-step ranked plan -- "hard-constrain or oversample
+# the closed-window zero-velocity case"): the closed-window diagnostic
+# (all 8 windows at V=0) keeps showing non-trivial residual velocity (up to
+# ~0.3-0.6 m/s, the same order of magnitude as real forced airflow) even
+# though the TRUE physical solution for zero forcing + zero IC + no body
+# force term is exactly u=v=w=0 everywhere -- a case the network should be
+# able to learn trivially, but apparently doesn't generalize to correctly.
+#
+# ROOT CAUSE (distinct from, and more severe than, the CO2 spatial-sampling
+# problem): V has NUM_WINDOWS=8 independent dimensions, each sampled
+# uniformly in [V_MIN, V_MAX]. Under independent per-axis uniform sampling,
+# the probability that ALL 8 happen to be simultaneously near zero for the
+# same training point is roughly (epsilon/V_MAX)^8 for a small tolerance
+# epsilon -- astronomically small. Each individual window being near zero is
+# common on its own; the JOINT event "every window near zero at once" (what
+# the diagnostic actually tests) is a curse-of-dimensionality corner of an
+# 8-dimensional hypercube that plain independent uniform sampling almost
+# never reaches. So the network has essentially never been trained on
+# anything resembling the exact scenario the diagnostic evaluates.
+#
+# FIX: explicitly inject correlated all-closed and partially-closed scenarios
+# into training (mirroring the source-concentrated spatial sampling fix --
+# same idea, applied in "scenario space" instead of physical space), instead
+# of relying on independent per-axis randomness to occasionally produce one.
+CLOSED_SCENARIO_FRAC = 0.3  # fraction of points whose V is EXACTLY all-zero
+# (the exact scenario the closed-window diagnostic tests)
+PARTIAL_CLOSED_SCENARIO_FRAC = 0.2  # fraction where a random SUBSET of the 8
+# windows is zeroed (each window independently closed with 50% probability) --
+# covers the "some but not all windows closed" regime too, not just the two
+# extremes of "all open" (implicitly covered by uniform sampling) and
+# "all closed" (covered by CLOSED_SCENARIO_FRAC above).
+# Remaining 1 - 0.3 - 0.2 = 50% of points still use fully independent uniform
+# sampling, so general open-window training coverage is not reduced to zero.
+
+
 def sample_scenario(n, device):
     """Random (t, V1..V8, N_people) -- the made-up scenario values swept during
-    physics-only training, matching Alexander's 0-5 m/s / 0-50 people ranges."""
+    physics-only training, matching Alexander's 0-5 m/s / 0-50 people ranges.
+    A fraction of V configurations are deliberately all-closed or
+    partially-closed (see fix #3 comment above) instead of 100% independent
+    uniform, so the network actually sees the closed-window regime often
+    enough to learn it correctly."""
     t = _rand(n, T_MIN, T_MAX, device)
-    V = torch.rand(n, NUM_WINDOWS, device=device) * (V_MAX - V_MIN) + V_MIN
     N_people = _rand(n, N_PEOPLE_MIN, N_PEOPLE_MAX, device)
+
+    n_closed = int(round(n * CLOSED_SCENARIO_FRAC))
+    n_partial = int(round(n * PARTIAL_CLOSED_SCENARIO_FRAC))
+    n_uniform = n - n_closed - n_partial
+
+    V_parts = []
+    if n_uniform > 0:
+        V_parts.append(torch.rand(n_uniform, NUM_WINDOWS, device=device) * (V_MAX - V_MIN) + V_MIN)
+    if n_closed > 0:
+        V_parts.append(torch.zeros(n_closed, NUM_WINDOWS, device=device))
+    if n_partial > 0:
+        V_partial = torch.rand(n_partial, NUM_WINDOWS, device=device) * (V_MAX - V_MIN) + V_MIN
+        closed_mask = torch.rand(n_partial, NUM_WINDOWS, device=device) < 0.5
+        V_partial = V_partial * (~closed_mask).float()
+        V_parts.append(V_partial)
+    V = torch.cat(V_parts, dim=0)
+
     return t, V, N_people
 
 

@@ -116,6 +116,21 @@ def test_sample_interior(device):
         f"({uniform_baseline:.3f}) -- source-concentrated sampling may not be working"
     )
 
+    # sanity-check fix #3 (closed/partial-closed window-scenario oversampling):
+    # verify a meaningful fraction of V rows are EXACTLY all-zero (the all-closed
+    # scenario), not just occasionally-small from ordinary uniform sampling. The
+    # old pure-uniform scheme would give ~1e-16 probability of landing on exact
+    # all-zero, so seeing a near-CLOSED_SCENARIO_FRAC fraction here directly
+    # confirms the fix is wired up, not silently bypassed.
+    from point_sampler import CLOSED_SCENARIO_FRAC
+    all_zero_frac = (V == 0).all(dim=1).float().mean().item()
+    print(f"  fraction of {n} points with ALL windows exactly V=0: {all_zero_frac:.3f} "
+          f"(expected close to CLOSED_SCENARIO_FRAC={CLOSED_SCENARIO_FRAC})")
+    assert all_zero_frac > CLOSED_SCENARIO_FRAC * 0.5, (
+        f"only {all_zero_frac:.3f} of points have all-zero V, expected close to "
+        f"{CLOSED_SCENARIO_FRAC} -- closed-scenario oversampling may not be working"
+    )
+
 
 @stage("1. FourierFeatures -- shape + finiteness + 1st/2nd derivative w.r.t. raw coords")
 def test_fourier_features(device):

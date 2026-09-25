@@ -14,15 +14,29 @@ fix-#1-only checkpoint).
 This is fast: one forward pass over a 40x40 grid (1600 points), no training,
 seconds on GPU even without one.
 
+Two scenarios (pass as a second CLI argument, defaults to "closed"):
+  closed -- all 8 windows at V=0. True physical solution for velocity is
+            exactly u=v=w=0 everywhere (zero forcing, zero IC, no body-force
+            term) -- any large speed here is the "spurious closed-window
+            velocity" bug (fix #3). CO2 should show a compact, localized
+            bump near the room center at breathing height.
+  open   -- all 8 windows at V=V_MAX (5 m/s), the "normal airflow" regime.
+            Added as a companion check after fix #3 (correlated closed/
+            partial-closed scenario oversampling in point_sampler.py) --
+            since that fix reduces the fraction of purely-uniform-sampled
+            training points from 100% to 50%, this checks the open-window
+            regime hasn't regressed as a side effect. Expect clearly
+            non-zero, inflow-directed velocity here (unlike the closed case).
+
 Usage:
-    python3 closed_window_diagnostic.py checkpoints/v4_source_sampling/gnot_v4_source_sampling_partial10000.pth
+    python3 closed_window_diagnostic.py <checkpoint_path> [closed|open]
 """
 import sys
 import torch
 import numpy as np
 
 from gnot_model import GNOTOperator
-from point_sampler import ROOM_X, ROOM_Y, ROOM_Z, COLUMNS, NUM_WINDOWS, BREATHING_HEIGHT
+from point_sampler import ROOM_X, ROOM_Y, ROOM_Z, COLUMNS, NUM_WINDOWS, BREATHING_HEIGHT, V_MAX
 
 
 def in_any_column(x, y):
@@ -33,10 +47,14 @@ def in_any_column(x, y):
 
 
 def main():
-    if len(sys.argv) != 2:
-        print("Usage: python3 closed_window_diagnostic.py <checkpoint_path>")
+    if len(sys.argv) not in (2, 3):
+        print("Usage: python3 closed_window_diagnostic.py <checkpoint_path> [closed|open]")
         sys.exit(1)
     ckpt_path = sys.argv[1]
+    scenario = sys.argv[2] if len(sys.argv) == 3 else "closed"
+    if scenario not in ("closed", "open"):
+        print(f"Unknown scenario '{scenario}', expected 'closed' or 'open'")
+        sys.exit(1)
 
     device = "cuda" if torch.cuda.is_available() else "cpu"
     model = GNOTOperator().to(device)
@@ -45,6 +63,7 @@ def main():
     model.eval()
     print(f"Loaded checkpoint: {ckpt_path} (iter={ckpt.get('iter', '?')}, "
           f"version={ckpt.get('version', '?')}, co2_weight={ckpt.get('co2_weight', '?')})")
+    print(f"Scenario: {scenario}")
 
     xs = np.linspace(ROOM_X[0] + 0.1, ROOM_X[1] - 0.1, 40)
     ys = np.linspace(ROOM_Y[0] + 0.1, ROOM_Y[1] - 0.1, 40)
@@ -57,7 +76,10 @@ def main():
     y = torch.tensor(yg, dtype=torch.float32, device=device).view(-1, 1).requires_grad_(True)
     z = torch.full((n, 1), BREATHING_HEIGHT, device=device).requires_grad_(True)
     t = torch.full((n, 1), 60.0, device=device)
-    V = torch.zeros(n, NUM_WINDOWS, device=device)  # all windows CLOSED
+    if scenario == "closed":
+        V = torch.zeros(n, NUM_WINDOWS, device=device)
+    else:
+        V = torch.full((n, NUM_WINDOWS), V_MAX, device=device)
     N_people = torch.full((n, 1), 20.0, device=device)
 
     A1, A2, A3, C, p = model(x, y, z, t, V, N_people)
@@ -77,8 +99,12 @@ def main():
     half_max = cmin + (cmax - cmin) / 2  # relative to the field's own range, not assuming a 0 baseline
 
     print(f"\nCO2 min/max/mean: {np.nanmin(c):.6f} / {np.nanmax(c):.6f} / {np.nanmean(c):.6f}")
-    print(f"speed min/max/mean (all windows closed -- should be near 0): "
-          f"{np.nanmin(speed):.6f} / {np.nanmax(speed):.6f} / {np.nanmean(speed):.6f}")
+    if scenario == "closed":
+        print(f"speed min/max/mean (all windows closed -- should be near 0): "
+              f"{np.nanmin(speed):.6f} / {np.nanmax(speed):.6f} / {np.nanmean(speed):.6f}")
+    else:
+        print(f"speed min/max/mean (all windows at V_MAX={V_MAX} -- should be clearly non-zero, "
+              f"inflow-directed): {np.nanmin(speed):.6f} / {np.nanmax(speed):.6f} / {np.nanmean(speed):.6f}")
     print(f"CO2 peak at grid cell {(pi, pj)} -> (x,y) = ({xs[pi]:.2f}, {ys[pj]:.2f}) "
           f"(true source is at room center: ({(ROOM_X[0]+ROOM_X[1])/2:.2f}, {(ROOM_Y[0]+ROOM_Y[1])/2:.2f}))")
     print(f"row (fixed x={xs[pi]:.2f}, varying y) above half-max count: {np.sum(row > half_max)} / {len(row)}")
