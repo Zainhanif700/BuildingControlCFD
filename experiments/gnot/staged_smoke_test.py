@@ -272,6 +272,27 @@ def test_nondim(device):
     max_dev = (C_one - C_REF).abs().max().item()
     print(f"  output scaling: C_hat=1 -> C={C_one.mean().item():.4f} (expected C_REF={C_REF:.4f})")
     assert max_dev < 1e-5, f"C with C_hat=1 deviates from C_REF by {max_dev:.2e} -- output scaling wrong"
+
+    # (b3) v9 CO2 BOUNDARY CONDITIONS. A spatially CONSTANT CO2 field (still
+    # zero_c, now C = C_REF everywhere) has dc/dn = 0 on every boundary, so the
+    # no-flux/outflow loss must be exactly 0 -- a nonzero value would mean the
+    # term is picking up something other than the normal gradient.
+    from train_gnot import co2_boundary_loss, _planar_wall_normal_derivative
+    from point_sampler import sample_walls
+    bc_const = co2_boundary_loss(zero_c, device, 1.0).item()
+    print(f"  CO2 boundary loss for a constant CO2 field: {bc_const:.2e} (expected exactly 0)")
+    assert bc_const < 1e-12, f"CO2 boundary loss is {bc_const:.2e} for a constant field -- should be 0"
+    # every planar wall point must be recognised as lying on one of the 6 faces
+    # (the normal axis is inferred by exact coordinate equality)
+    xw, yw, zw, _, _, _ = sample_walls(600, device)
+    _, on_face = _planar_wall_normal_derivative(xw, yw, zw, xw, yw, zw)
+    frac_on = on_face.float().mean().item()
+    print(f"  wall points assigned to a face: {frac_on * 100:.1f}% (expected 100%)")
+    assert frac_on == 1.0, f"only {frac_on:.3%} of wall points matched a face -- normal selection broken"
+    # and for the untrained random model the term must be finite and non-zero
+    bc_rand = co2_boundary_loss(model, device, 1.0).item()
+    assert bc_rand == bc_rand and 0 < bc_rand < float("inf"), f"CO2 boundary loss not finite/positive: {bc_rand}"
+    print(f"  CO2 boundary loss for the random-init model: {bc_rand:.4f} (finite, > 0)")
     del zero_c
 
     # (d) CHECKPOINT GUARD: pre-v8 checkpoints must be refused, v8 ones accepted.
@@ -410,8 +431,11 @@ def test_boundary_losses(device):
     assert_finite(L_doors, "doors_loss")
     L_ic = ic_loss(model, device, co2_weight)
     assert_finite(L_ic, "ic_loss")
+    from train_gnot import co2_boundary_loss
+    L_co2bc = co2_boundary_loss(model, device, co2_weight)
+    assert_finite(L_co2bc, "co2_boundary_loss")
     print(f"  walls={L_walls.item():.5f} windows={L_windows.item():.5f} "
-          f"doors={L_doors.item():.5f} ic={L_ic.item():.5f}")
+          f"doors={L_doors.item():.5f} ic={L_ic.item():.5f} co2_bc={L_co2bc.item():.5f}")
 
 
 @stage("6. One full combined training step -- weights actually change, no crash")
@@ -448,6 +472,8 @@ def test_one_training_step(device):
     windows_loss(model, device, co2_weight).backward()
     doors_loss(model, device).backward()
     ic_loss(model, device, co2_weight).backward()
+    from train_gnot import co2_boundary_loss
+    co2_boundary_loss(model, device, co2_weight).backward()  # v9: mirrors train_gnot.main()
 
     torch.nn.utils.clip_grad_norm_(params, GRAD_CLIP_MAX_NORM)
     optimizer.step()
