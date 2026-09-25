@@ -122,6 +122,31 @@ control/control_optimization.ipynb
 control/visualize.ipynb
 ```
 
+## Thesis Extension: GNOT for a Real Classroom (`experiments/gnot/`)
+
+This part of the repo is a Master's thesis extension of the paper above, adapting the GNOT-based neural operator to a real classroom instead of the paper's original domain. It is a **physics-only PINN** trained purely against the Navier-Stokes and CO2 advection-diffusion equations at randomly sampled points -- no CFD simulation data is used at any point.
+
+Key differences from `learning/` (the original paper code): the model uses cross-attention over heterogeneous tokens (windows, doors, occupancy), a vector-potential/curl trick to guarantee divergence-free velocity, and trains against the real room's geometry (`experiments/gnot/geometry/*.stl`: 2 doors, 8 windows, 4 columns) instead of the paper's CFD dataset.
+
+### Layout
+
+- `gnot_model.py`, `point_sampler.py`, `train_gnot.py` -- the model, the physics-domain sampler, and the training loop. These three are the source of truth; every script below imports from them.
+- `staged_smoke_test.py` -- an 8-stage isolated component test (Fourier encoding -> query encoder -> full forward pass -> divergence-free check -> each loss term -> one combined training step). Run this before any full training run to catch bugs early:
+  ```bash
+  cd experiments/gnot
+  python3 staged_smoke_test.py
+  ```
+- `closed_window_diagnostic.py <checkpoint> [closed|open]` -- evaluates a trained checkpoint on a 40x40 grid with all windows closed (true solution: zero velocity) or open, to check for known failure modes.
+- `probe_source_co2.py <checkpoint>` -- evaluates predicted CO2 directly at the true source location, to distinguish real convergence from a coincidental peak elsewhere in the domain.
+- `visualize_gnot.py`, `visualize_gnot_slice.py`, `export_grid_for_viewer.py`, `sensor_mapper.py` -- visualization and export utilities.
+- `geometry/` -- the room's STL files and the scripts that derive physical constants (room bounds, window/door positions, column radius) directly from them.
+- `checkpoints/` -- trained model weights, organized by version tag.
+- `milestones/` -- frozen, documented snapshots of the code + a checkpoint at specific points in development, kept for thesis traceability. Each has its own README stating exactly what was confirmed fixed vs. still open at that point. **Do not edit files inside `milestones/`** -- ongoing work continues in the live files above.
+
+### Status
+
+See `milestones/v5_closed_window_fix/README.md` for the most recent documented checkpoint: the spurious closed-window velocity artifact is confirmed fixed; CO2 source localization is still an open problem, currently suspected to need a learning-rate decay schedule.
+
 ## Dataset Details
 
 The full dataset (including raw simulation data, not just the two files from Step 2) is on [Hugging Face](https://huggingface.co/datasets/alwaysbyx/Bear-CFD-dataset).
