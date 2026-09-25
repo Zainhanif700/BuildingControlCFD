@@ -1,3 +1,11 @@
+# ============================================================================
+# MILESTONE SNAPSHOT: v8_nondim (2026-09-25) -- frozen copy, DO NOT EDIT.
+# Taken from git commit 2aa439e (the exact code the v8 run trained with);
+# probe_co2_time.py / co2_residual_breakdown.py are the diagnostics written
+# afterwards to analyse it. See README.md. Run scripts from INSIDE this folder
+# so they import this frozen model code, not the live experiments/gnot/ one.
+# ============================================================================
+
 """
 Staged smoke test for GNOT -- runs each layer of the pipeline in isolation,
 from lowest-level to full training step, printing PASS/FAIL after each stage
@@ -272,60 +280,16 @@ def test_nondim(device):
     max_dev = (C_one - C_REF).abs().max().item()
     print(f"  output scaling: C_hat=1 -> C={C_one.mean().item():.4f} (expected C_REF={C_REF:.4f})")
     assert max_dev < 1e-5, f"C with C_hat=1 deviates from C_REF by {max_dev:.2e} -- output scaling wrong"
-
-    # (b3) v9 CO2 BOUNDARY CONDITIONS. A spatially CONSTANT CO2 field (still
-    # zero_c, now C = C_REF everywhere) has dc/dn = 0 on every boundary, so the
-    # no-flux/outflow loss must be exactly 0 -- a nonzero value would mean the
-    # term is picking up something other than the normal gradient.
-    from train_gnot import co2_boundary_loss, _planar_wall_normal_derivative
-    from point_sampler import sample_walls
-    bc_const = co2_boundary_loss(zero_c, device, 1.0).item()
-    print(f"  CO2 boundary loss for a constant CO2 field: {bc_const:.2e} (expected exactly 0)")
-    assert bc_const < 1e-12, f"CO2 boundary loss is {bc_const:.2e} for a constant field -- should be 0"
-    # every planar wall point must be recognised as lying on one of the 6 faces
-    # (the normal axis is inferred by exact coordinate equality)
-    xw, yw, zw, _, _, _ = sample_walls(600, device)
-    _, on_face = _planar_wall_normal_derivative(xw, yw, zw, xw, yw, zw)
-    frac_on = on_face.float().mean().item()
-    print(f"  wall points assigned to a face: {frac_on * 100:.1f}% (expected 100%)")
-    assert frac_on == 1.0, f"only {frac_on:.3%} of wall points matched a face -- normal selection broken"
-    # and for the untrained random model the term must be finite and non-zero
-    bc_rand = co2_boundary_loss(model, device, 1.0).item()
-    assert bc_rand == bc_rand and 0 < bc_rand < float("inf"), f"CO2 boundary loss not finite/positive: {bc_rand}"
-    print(f"  CO2 boundary loss for the random-init model: {bc_rand:.4f} (finite, > 0)")
     del zero_c
 
-    # (d) CHECKPOINT GUARD: v5 (unscaled) and v8 (scaled, but no zero-flow
-    # constraint) checkpoints must both be refused; the live format accepted.
-    from gnot_model import MODEL_FORMAT_KEY, MODEL_FORMAT
-    for old in ({"version": "v5_closed_window_fix"}, {"version": "v8_nondim", "nondim": True}):
-        try:
-            check_checkpoint_compat(old, "fake_old.pth")
-            raise AssertionError(f"check_checkpoint_compat accepted an old checkpoint: {old}")
-        except RuntimeError:
-            pass
-    check_checkpoint_compat({"version": "v9", "nondim": True, MODEL_FORMAT_KEY: MODEL_FORMAT}, "fake_new.pth")
-    print(f"  checkpoint guard: rejects v5 and v8, accepts {MODEL_FORMAT} -- OK")
-
-    # (e) v9 HARD ZERO-FLOW: with all windows closed the velocity must be
-    # EXACTLY zero by construction (the loophole v8 exploited: a spurious slow
-    # flow balancing the CO2 source by convection), and clearly non-zero with
-    # windows open. Checked through the real curl path used in training.
-    xe = (torch.rand(n, 1, device=device) * (ROOM_X[1] - ROOM_X[0])).requires_grad_(True)
-    ye = (torch.rand(n, 1, device=device) * (ROOM_Y[1] - ROOM_Y[0])).requires_grad_(True)
-    ze = (torch.rand(n, 1, device=device) * (ROOM_Z[1] - ROOM_Z[0])).requires_grad_(True)
-    te = torch.rand(n, 1, device=device) * T_MAX
-    Ne = torch.rand(n, 1, device=device) * N_PEOPLE_MAX
-    speeds = {}
-    for label, Ve in (("closed", torch.zeros(n, NUM_WINDOWS, device=device)),
-                      ("open", torch.full((n, NUM_WINDOWS), V_MAX, device=device))):
-        A1, A2, A3, _, _ = model(xe, ye, ze, te, Ve, Ne)
-        u, v, w = model.velocity_from_potential(A1, A2, A3, xe, ye, ze)
-        speeds[label] = torch.sqrt(u ** 2 + v ** 2 + w ** 2).max().item()
-    print(f"  zero-flow constraint: max speed closed={speeds['closed']:.2e} (must be 0), "
-          f"open={speeds['open']:.2e} (must be > 0)")
-    assert speeds["closed"] == 0.0, f"closed-window speed {speeds['closed']:.2e} is not exactly 0"
-    assert speeds["open"] > 1e-6, "open-window speed is ~0 -- the s(V) factor is suppressing all flow"
+    # (d) CHECKPOINT GUARD: pre-v8 checkpoints must be refused, v8 ones accepted.
+    try:
+        check_checkpoint_compat({"version": "v5_closed_window_fix"}, "fake_old.pth")
+        raise AssertionError("check_checkpoint_compat accepted a pre-v8 checkpoint")
+    except RuntimeError:
+        pass
+    check_checkpoint_compat({"version": "v8_nondim", "nondim": True}, "fake_new.pth")
+    print("  checkpoint guard: rejects pre-v8, accepts v8 -- OK")
 
 
 @stage("1. FourierFeatures -- shape + finiteness + 1st/2nd derivative w.r.t. raw coords")
@@ -454,11 +418,8 @@ def test_boundary_losses(device):
     assert_finite(L_doors, "doors_loss")
     L_ic = ic_loss(model, device, co2_weight)
     assert_finite(L_ic, "ic_loss")
-    from train_gnot import co2_boundary_loss
-    L_co2bc = co2_boundary_loss(model, device, co2_weight)
-    assert_finite(L_co2bc, "co2_boundary_loss")
     print(f"  walls={L_walls.item():.5f} windows={L_windows.item():.5f} "
-          f"doors={L_doors.item():.5f} ic={L_ic.item():.5f} co2_bc={L_co2bc.item():.5f}")
+          f"doors={L_doors.item():.5f} ic={L_ic.item():.5f}")
 
 
 @stage("6. One full combined training step -- weights actually change, no crash")
@@ -495,8 +456,6 @@ def test_one_training_step(device):
     windows_loss(model, device, co2_weight).backward()
     doors_loss(model, device).backward()
     ic_loss(model, device, co2_weight).backward()
-    from train_gnot import co2_boundary_loss
-    co2_boundary_loss(model, device, co2_weight).backward()  # v9: mirrors train_gnot.main()
 
     torch.nn.utils.clip_grad_norm_(params, GRAD_CLIP_MAX_NORM)
     optimizer.step()

@@ -1,3 +1,11 @@
+# ============================================================================
+# MILESTONE SNAPSHOT: v8_nondim (2026-09-25) -- frozen copy, DO NOT EDIT.
+# Taken from git commit 2aa439e (the exact code the v8 run trained with);
+# probe_co2_time.py / co2_residual_breakdown.py are the diagnostics written
+# afterwards to analyse it. See README.md. Run scripts from INSIDE this folder
+# so they import this frozen model code, not the live experiments/gnot/ one.
+# ============================================================================
+
 """
 Physics-only training loop for GNOT on the real room.
 
@@ -16,12 +24,12 @@ import os
 import time
 import torch
 
-from gnot_model import GNOTOperator, NONDIM_CHECKPOINT_KEY, MODEL_FORMAT_KEY, MODEL_FORMAT
+from gnot_model import GNOTOperator, NONDIM_CHECKPOINT_KEY
 from point_sampler import (
     sample_interior, sample_walls, sample_doors, sample_windows, sample_ic,
     sample_columns_surface, _generate_interior_batch,
     ROOM_X, ROOM_Y, ROOM_Z, NUM_WINDOWS, CO2_SOURCE_SIGMA, BREATHING_HEIGHT,
-    EMISSION_PER_PERSON, S_REF, C_REF, TAU_RAMP, COLUMNS,
+    EMISSION_PER_PERSON, S_REF, C_REF, TAU_RAMP,
 )
 
 # --- physical constants (matching Alexander's config exactly) ---
@@ -282,32 +290,13 @@ def gradnorm_weight_update(grad_ns, grad_co2, prev_weight):
 #                     norm-balancing weight is logged as guide_w instead).
 #                     Otherwise identical to v5: constant LR, 100%-fresh
 #                     sampling (Stage 1 pool switched off).
-#                     RESULT (iter 1000-2000): first run ever to leave the
-#                     trivial CO2 solution (CO2(scaled) ~0.01 vs floor 0.093;
-#                     guide_w ~1, balanced; velocity healthy; C(source) rising
-#                     0.012 -> 0.021) -- but the CO2 maximum sat pinned against
-#                     the door wall (11.9, 0.1) with a room-wide band.
-#                     LATER (iter 3000-5000, see milestones/v8_nondim/README.md):
-#                     the wall pinning resolved on its own, but CO2 barely grows
-#                     in time (~3% of the physical rate). co2_residual_breakdown.py
-#                     showed why: with windows CLOSED the network balances the
-#                     source by CONVECTION (0.332 vs S 0.318) through a spurious
-#                     ~0.07 m/s flow, not by accumulation (dc/dt 0.012).
-#   v9_zeroflow_bc  -- v8 + two exact-physics fixes, each with its own diagnostic:
-#                     (1) HARD zero-flow constraint: velocity potential multiplied
-#                     by s(V)=RMS(V)/V_MAX in gnot_model.py, so u=0 EXACTLY when all
-#                     windows are closed -- removes the loophole above (check: the
-#                     breakdown's closed-window u.grad(c) must be 0 and dc/dt must
-#                     carry the source). (2) the missing CO2 boundary conditions:
-#                     no-flux dc/dn=0 on walls/floor/ceiling/columns, zero-gradient
-#                     outflow at doors (co2_boundary_loss; logged as CO2_BC).
 #
 # IMPORTANT: this VERSION variable (and CKPT_DIR below) is what train_gnot.py's own
 # main() uses for a FULL 20k-iteration production run. Bump this to match whichever
 # fix combination is confirmed working via the closed-window diagnostic BEFORE
 # launching the next full run through this file, so production checkpoints aren't
 # mislabeled with stale physics/sampling.
-VERSION = "v9_zeroflow_bc"
+VERSION = "v8_nondim"
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 CKPT_DIR = os.path.join(HERE, "checkpoints", VERSION)
@@ -411,81 +400,6 @@ def doors_loss(model, device):
     x, y, z, t, V, N_people = sample_doors(POINTS_DOORS, device)
     _, _, _, _, p = model(x, y, z, t, V, N_people)
     return (p ** 2).mean()
-
-
-# v9_co2_bc: length scale used to make the CO2 normal-gradient dimensionless.
-# CO2 varies over the source width (sigma = 2.5 m), so a gradient of order
-# C_REF / SIGMA is the natural "O(1)" scale -- consistent with how S_REF and
-# C_REF non-dimensionalize the interior residual and the Dirichlet terms.
-CO2_GRAD_REF = C_REF / SIGMA
-
-
-def _planar_wall_normal_derivative(x, y, z, dc_dx, dc_dy, dc_dz):
-    """dc/dn on the 6 planar room faces. sample_walls() places every point
-    EXACTLY on its face via torch.full_like(..., ROOM_*[k]), so the face (and
-    hence the normal axis) is recovered by exact coordinate equality. Only
-    the axis matters, not the sign, since the loss squares dc/dn. Returns
-    (dc_dn, on_any_face) -- on_any_face is checked by the smoke test."""
-    on_x = (x == ROOM_X[0]) | (x == ROOM_X[1])
-    on_y = (y == ROOM_Y[0]) | (y == ROOM_Y[1])
-    on_z = (z == ROOM_Z[0]) | (z == ROOM_Z[1])
-    dc_dn = torch.where(on_x, dc_dx, torch.where(on_y, dc_dy, dc_dz))
-    return dc_dn, (on_x | on_y | on_z)
-
-
-def co2_boundary_loss(model, device, co2_weight):
-    """v9_co2_bc: the CO2 boundary conditions that were MISSING in v1-v8.
-
-    Found from v8's diagnostics: once non-dimensionalization let the network
-    leave the trivial CO2 solution, its CO2 maximum sat pinned against the
-    door wall (x~11.9, y~0.1) instead of the room-centre source. The CO2
-    advection-diffusion equation needs a condition on EVERY boundary to be
-    well-posed; until now only the windows (c=0 inflow) and t=0 (c=0) had
-    one, so walls/floor/ceiling/columns/doors were free -- the network could
-    let CO2 pile up against, or flow through, solid walls and still satisfy
-    the interior PDE.
-
-    Standard conditions (textbook advection-diffusion / CFD, not a PINN
-    trick):
-      - solid walls, floor, ceiling, columns: no CO2 flux through the wall.
-        The velocity there is already 0 (no-slip), so the total flux reduces
-        to the diffusive part: -D dc/dn = 0  ->  dc/dn = 0.
-      - doors (outflow): zero normal gradient dc/dn = 0, the standard CFD
-        outflow condition -- CO2 leaves with the air by advection, with no
-        artificial diffusive flux imposed at the opening.
-    Windows keep their existing Dirichlet c=0 (clean inflow) in windows_loss.
-
-    Each term is dc/dn / CO2_GRAD_REF (dimensionless), squared and averaged
-    over all boundary points, weighted by co2_weight (1.0 in v8/v9)."""
-    # planar faces (door/window openings excluded by sample_walls)
-    x, y, z, t, V, N_people = sample_walls(POINTS_WALLS, device)
-    x.requires_grad_(True); y.requires_grad_(True); z.requires_grad_(True)
-    _, _, _, c, _ = model(x, y, z, t, V, N_people)
-    dn_walls, _ = _planar_wall_normal_derivative(x, y, z, grad(c, x), grad(c, y), grad(c, z))
-
-    # column side surfaces: outward radial normal from each point's own column
-    # axis (normals built from DETACHED coordinates -- they're geometry, not
-    # something to differentiate through)
-    xc, yc, zc, tc, Vc, Nc = sample_columns_surface(POINTS_COLUMNS_PER, device)
-    xc.requires_grad_(True); yc.requires_grad_(True); zc.requires_grad_(True)
-    _, _, _, cc, _ = model(xc, yc, zc, tc, Vc, Nc)
-    centers = torch.tensor([[cx, cy] for cx, cy, _, _, _ in COLUMNS], device=device, dtype=xc.dtype)
-    radii = torch.tensor([r for _, _, r, _, _ in COLUMNS], device=device, dtype=xc.dtype)
-    xd_, yd_ = xc.detach(), yc.detach()
-    dist2_axis = (xd_ - centers[:, 0]) ** 2 + (yd_ - centers[:, 1]) ** 2   # (P, 4)
-    k = dist2_axis.argmin(dim=1)                                           # nearest column axis
-    nx = (xd_.squeeze(-1) - centers[k, 0]) / radii[k]
-    ny = (yd_.squeeze(-1) - centers[k, 1]) / radii[k]
-    dn_cols = grad(cc, xc) * nx.unsqueeze(-1) + grad(cc, yc) * ny.unsqueeze(-1)
-
-    # doors, on the y = ROOM_Y[0] wall: normal is the y axis
-    xd, yd, zd, td, Vd, Nd = sample_doors(POINTS_DOORS, device)
-    yd.requires_grad_(True)
-    _, _, _, cd, _ = model(xd, yd, zd, td, Vd, Nd)
-    dn_doors = grad(cd, yd)
-
-    dn = torch.cat([dn_walls, dn_cols, dn_doors], dim=0) / CO2_GRAD_REF
-    return co2_weight * (dn ** 2).mean()
 
 
 def ic_loss(model, device, co2_weight):
@@ -592,11 +506,6 @@ def main():
         L_ic = ic_loss(model, device, co2_weight)
         L_ic.backward()
 
-        # v9_co2_bc: CO2 no-flux (walls/floor/ceiling/columns) + zero-gradient
-        # outflow (doors) -- see co2_boundary_loss() docstring.
-        L_co2bc = co2_boundary_loss(model, device, co2_weight)
-        L_co2bc.backward()
-
         # Defense-in-depth: cap the combined gradient's norm before stepping,
         # regardless of root cause (see GRAD_CLIP_MAX_NORM comment above).
         torch.nn.utils.clip_grad_norm_(params, GRAD_CLIP_MAX_NORM)
@@ -614,7 +523,7 @@ def main():
                 co2_weight = gradnorm_weight_update(grad_ns, grad_co2, co2_weight)
 
         total_val = (L_ns.item() + co2_weight * L_co2.item() + L_walls.item()
-                     + L_windows.item() + L_doors.item() + L_ic.item() + L_co2bc.item())
+                     + L_windows.item() + L_doors.item() + L_ic.item())
 
         # Equal-weight total used to pick the "best" checkpoint. v8: with
         # every residual now O(1) after non-dimensionalization, equal weights
@@ -625,7 +534,7 @@ def main():
         # is exactly the equal-weight sum. If adaptive weighting is re-enabled,
         # revisit this.
         unweighted_total = (L_ns.item() + L_co2.item() + L_walls.item()
-                            + L_windows.item() + L_doors.item() + L_ic.item() + L_co2bc.item())
+                            + L_windows.item() + L_doors.item() + L_ic.item())
 
         if it % LOG_EVERY == 0:
             elapsed = time.time() - start
@@ -633,7 +542,7 @@ def main():
             print(f"[Iter {it:05d}/{MAX_ITERS}] Total={total_val:.5f} | "
                   f"NS={L_ns.item():.5f} CO2(scaled)={L_co2.item():.5f} CO2_weight={co2_weight:.2f} guide_w={guide_w:.3g} "
                   f"Walls={L_walls.item():.5f} Windows={L_windows.item():.5f} Doors={L_doors.item():.5f} "
-                  f"IC={L_ic.item():.5f} CO2_BC={L_co2bc.item():.5f} | {speed:.2f} it/s")
+                  f"IC={L_ic.item():.5f} | {speed:.2f} it/s")
 
         # v7_higher_co2_weight: save a new best-loss checkpoint any time
         # unweighted_total hits a new low, overwriting the previous best each
@@ -648,20 +557,20 @@ def main():
             best_total_val = unweighted_total
             best_path = os.path.join(CKPT_DIR, f"gnot_{VERSION}_best.pth")
             torch.save({"iter": it, "version": VERSION, "co2_weight": co2_weight,
-                        "unweighted_total": best_total_val, NONDIM_CHECKPOINT_KEY: True, MODEL_FORMAT_KEY: MODEL_FORMAT,
+                        "unweighted_total": best_total_val, NONDIM_CHECKPOINT_KEY: True,
                         "model_state": model.state_dict()}, best_path)
 
         if it % CKPT_EVERY == 0 and it > 0:
             ckpt_path = os.path.join(CKPT_DIR, f"gnot_{VERSION}_iter{it}.pth")
             torch.save({"iter": it, "version": VERSION, "co2_weight": co2_weight,
-                        NONDIM_CHECKPOINT_KEY: True, MODEL_FORMAT_KEY: MODEL_FORMAT,
+                        NONDIM_CHECKPOINT_KEY: True,
                         "model_state": model.state_dict(),
                         "optimizer_state": optimizer.state_dict()}, ckpt_path)
             print(f"  -> saved checkpoint: {ckpt_path}")
 
     final_path = os.path.join(CKPT_DIR, f"gnot_{VERSION}_final.pth")
     torch.save({"iter": MAX_ITERS, "version": VERSION, "co2_weight": co2_weight,
-                NONDIM_CHECKPOINT_KEY: True, MODEL_FORMAT_KEY: MODEL_FORMAT,
+                NONDIM_CHECKPOINT_KEY: True,
                 "model_state": model.state_dict()}, final_path)
     print(f"Training complete. Final checkpoint: {final_path}")
     print(f"Best checkpoint (lowest unweighted_total={best_total_val:.5f}): "

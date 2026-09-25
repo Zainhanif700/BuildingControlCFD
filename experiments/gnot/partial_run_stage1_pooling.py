@@ -55,7 +55,7 @@ from train_gnot import (
 )
 from point_sampler import (interior_pool_composition, CLOSED_SCENARIO_FRAC, SOURCE_SAMPLE_FRAC,
                            USE_PERSISTENT_POOL)
-from gnot_model import NONDIM_CHECKPOINT_KEY
+from gnot_model import NONDIM_CHECKPOINT_KEY, MODEL_FORMAT_KEY, MODEL_FORMAT
 
 N_ITERS = 10000  # RAISED from 5000 (found by independent review): the cited
 # paper's own hyperparameter study noted resampling-related effects can
@@ -150,12 +150,12 @@ def main():
 
         if it % CKPT_EVERY == 0 and it > 0:
             interim_path = os.path.join(ckpt_dir, f"gnot_{VERSION}_iter{it}.pth")
-            torch.save({"iter": it, "version": VERSION, "co2_weight": co2_weight, NONDIM_CHECKPOINT_KEY: True,
+            torch.save({"iter": it, "version": VERSION, "co2_weight": co2_weight, NONDIM_CHECKPOINT_KEY: True, MODEL_FORMAT_KEY: MODEL_FORMAT,
                         "model_state": model.state_dict()}, interim_path)
             print(f"  -> saved checkpoint: {interim_path}")
 
     final_path = os.path.join(ckpt_dir, f"gnot_{VERSION}_final.pth")
-    torch.save({"iter": N_ITERS, "version": VERSION, "co2_weight": co2_weight, NONDIM_CHECKPOINT_KEY: True,
+    torch.save({"iter": N_ITERS, "version": VERSION, "co2_weight": co2_weight, NONDIM_CHECKPOINT_KEY: True, MODEL_FORMAT_KEY: MODEL_FORMAT,
                 "model_state": model.state_dict()}, final_path)
     print("Saved:", final_path)
 

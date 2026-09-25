@@ -1,3 +1,11 @@
+# ============================================================================
+# MILESTONE SNAPSHOT: v8_nondim (2026-09-25) -- frozen copy, DO NOT EDIT.
+# Taken from git commit 2aa439e (the exact code the v8 run trained with);
+# probe_co2_time.py / co2_residual_breakdown.py are the diagnostics written
+# afterwards to analyse it. See README.md. Run scripts from INSIDE this folder
+# so they import this frozen model code, not the live experiments/gnot/ one.
+# ============================================================================
+
 """
 GNOT-style operator for the real room (physics-only training, no data).
 
@@ -51,27 +59,17 @@ N_LAYERS = 2
 # inside milestones/<version>/ instead (they carry their own old model code).
 NONDIM_CHECKPOINT_KEY = "nondim"
 
-# v9: the model's OUTPUT semantics changed again (velocity potential is now
-# multiplied by s(V), see GNOTOperator.forward), so a v8 checkpoint would also
-# load without error but predict the wrong velocity. Every checkpoint from v9
-# on records MODEL_FORMAT; bump it whenever forward() changes meaning.
-MODEL_FORMAT_KEY = "model_format"
-MODEL_FORMAT = "v9_zeroflow"
-
 
 def check_checkpoint_compat(ckpt, path=""):
-    """Raise a clear error if `ckpt` was trained with a model whose forward()
-    means something different from the live one -- see the comments above
-    NONDIM_CHECKPOINT_KEY and MODEL_FORMAT."""
-    if ckpt.get(NONDIM_CHECKPOINT_KEY, False) and ckpt.get(MODEL_FORMAT_KEY) == MODEL_FORMAT:
-        return
-    raise RuntimeError(
-        f"Checkpoint {path!r} (version={ckpt.get('version', '?')}, "
-        f"model_format={ckpt.get(MODEL_FORMAT_KEY, 'none')}) was trained with an older model "
-        f"(live format is {MODEL_FORMAT!r}); loading it here would give WRONG predictions. "
-        f"Run the frozen scripts inside milestones/<that version>/ instead "
-        f"(e.g. milestones/v8_nondim/ for v8 checkpoints)."
-    )
+    """Raise a clear error if `ckpt` was trained with the pre-v8 (unscaled)
+    model -- see the comment above NONDIM_CHECKPOINT_KEY."""
+    if not ckpt.get(NONDIM_CHECKPOINT_KEY, False):
+        raise RuntimeError(
+            f"Checkpoint {path!r} (version={ckpt.get('version', '?')}) was trained with the "
+            f"pre-v8 model (unscaled inputs). The live gnot_model.py normalizes inputs, so "
+            f"loading it here would give WRONG predictions. Run the frozen scripts inside "
+            f"milestones/<that version>/ instead."
+        )
 
 
 def _window_centers():
@@ -380,25 +378,6 @@ class GNOTOperator(nn.Module):
 
         out = self.out_head(q).squeeze(1)  # (B, 5)
         A1, A2, A3, C_hat, p = out[:, 0:1], out[:, 1:2], out[:, 2:3], out[:, 3:4], out[:, 4:5]
-
-        # v9: HARD zero-flow constraint. With every window closed there is no
-        # driving force (zero forcing, room at rest at t=0, no body force), so
-        # the exact Navier-Stokes solution is u = v = w = 0. v8's residual
-        # breakdown (co2_residual_breakdown.py, iter 5000) showed the network
-        # exploiting a spurious ~0.07 m/s flow in closed-window scenarios to
-        # balance the CO2 source by CONVECTION (RMS 0.332 vs source 0.318)
-        # instead of ACCUMULATION (dc/dt RMS 0.012) -- slow flows cost almost
-        # nothing in the NS loss, so the soft penalty can't stop this.
-        # Multiplying the vector potential by s(V) = RMS(V)/V_MAX makes the
-        # velocity EXACTLY zero when all windows are closed (s=0) by
-        # construction, while leaving the network free to shape the flow
-        # whenever any window is open (it sees V through the tokens and can
-        # absorb the 1/s factor). s depends only on V, not on x,y,z, so
-        # curl(s*A) = s*curl(A): still exactly divergence-free. Hard
-        # constraints by construction: Lagaris et al. 1998; Sukumar &
-        # Srivastava 2021 (arXiv:2104.08426).
-        s = torch.sqrt(((V / V_MAX) ** 2).mean(dim=1, keepdim=True))  # (B,1), in [0,1]
-        A1, A2, A3 = s * A1, s * A2, s * A3
         # v8_nondim: the network predicts a dimensionless CO2 value C_hat of
         # order 1; the physical concentration is C_REF * C_hat (C_REF = 0.69,
         # the closed-room accumulation bound -- see point_sampler.py). The
