@@ -64,6 +64,22 @@ LOG_EVERY = 10
 CKPT_EVERY = 1000
 LR = 1e-3
 
+# FIX (v6_lr_decay): the v5_closed_window_fix run showed the CO2 field's
+# overall magnitude oscillating rather than converging late in training
+# (grid-max climbing steadily from iter10000->18000, then dropping ~4x at
+# iter20000 -- see milestones/v5_closed_window_fix/README.md). A constant
+# learning rate with no decay is a well-known cause of exactly this kind of
+# late-training instability in general deep learning (this is the whole
+# motivation behind schedules like cosine annealing, e.g. Loshchilov &
+# Hutter 2017 "SGDR: Stochastic Gradient Descent with Warm Restarts") -- once
+# the network is near a good solution, a still-large step size can keep
+# knocking it back out. This is a standard, generic fix, not something
+# specific to PINNs or to this project's earlier CO2-localization literature
+# search; it targets the oscillation symptom, not the localization problem
+# directly, so it's a hypothesis to test, not a guaranteed fix.
+LR_MIN = 1e-5  # cosine decay floor -- small but nonzero so training doesn't
+# fully freeze right at the end
+
 # FIX (found by verification): CO2 values are tiny (~0.02) compared to
 # velocity (~0.3-1 m/s), so when combined into one physics loss, the CO2
 # residual got numerically drowned out and the network defaulted to an
@@ -178,15 +194,29 @@ def gradnorm_weight_update(grad_ns, grad_co2, prev_weight):
 #                     source region far more often per iteration. v4 (frac=0.4,
 #                     std=sigma) still showed a rotated band artifact; v4b (frac=0.6,
 #                     std=sigma/2, tighter concentration) is being evaluated now.
+#   v5_closed_window_fix -- (partial_run_v4.py + resume_v5.py, not through this
+#                     file's main() yet) adds correlated closed/partial-closed
+#                     window-scenario oversampling (point_sampler.py's
+#                     CLOSED_SCENARIO_FRAC/PARTIAL_CLOSED_SCENARIO_FRAC) on top of
+#                     v4b. CONFIRMED: fixes the spurious closed-window velocity
+#                     artifact, durable across iter10000-20000, no regression on
+#                     open-window behavior. STILL OPEN: CO2 source localization --
+#                     magnitude oscillates late in training instead of converging
+#                     (see milestones/v5_closed_window_fix/README.md).
+#   v6_lr_decay     -- first run through this file's own main(), now with a
+#                     cosine learning-rate decay schedule (see LR_MIN above) added
+#                     on top of everything in v5, to test whether the late-training
+#                     CO2 oscillation was caused by a constant LR overshooting a
+#                     near-good solution. Fresh 20k-iteration run (not a resume of
+#                     v5), so it's directly comparable to v5's own checkpoint
+#                     history at matching iteration counts.
 #
 # IMPORTANT: this VERSION variable (and CKPT_DIR below) is what train_gnot.py's own
-# main() uses for a FULL 20k-iteration production run. It still says "v2_co2_fix"
-# because no full run has been done yet with the v3/v4 changes above -- those were
-# only tested via the separate partial_run_v4.py script (which hardcodes its own
-# version tag). Bump this to match whichever fix combination is confirmed working
-# via the closed-window diagnostic BEFORE launching the next full run through this
-# file, so production checkpoints aren't mislabeled with stale physics/sampling.
-VERSION = "v2_co2_fix"
+# main() uses for a FULL 20k-iteration production run. Bump this to match whichever
+# fix combination is confirmed working via the closed-window diagnostic BEFORE
+# launching the next full run through this file, so production checkpoints aren't
+# mislabeled with stale physics/sampling.
+VERSION = "v6_lr_decay"
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 CKPT_DIR = os.path.join(HERE, "checkpoints", VERSION)
@@ -303,6 +333,16 @@ def main():
     optimizer = torch.optim.Adam(model.parameters(), lr=LR)
     params = list(model.parameters())
 
+    # v6_lr_decay: cosine-anneal LR from LR down to LR_MIN over the full run
+    # (see module-level comment above). T_max=MAX_ITERS means the decay
+    # reaches its floor exactly at the last iteration, not before.
+    # T_max=MAX_ITERS+1 (not MAX_ITERS) because the loop below runs
+    # range(MAX_ITERS + 1) -- MAX_ITERS+1 total steps -- so this makes the
+    # floor land exactly on the last iteration instead of one step past it.
+    scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
+        optimizer, T_max=MAX_ITERS + 1, eta_min=LR_MIN
+    )
+
     # Adaptive CO2 loss weight -- starts at a neutral 1.0 and is rebalanced
     # every iteration (after a warm-up) by gradnorm_weight_update(). Tracked
     # as running state across iterations, so it must live here in main(),
@@ -366,6 +406,7 @@ def main():
         torch.nn.utils.clip_grad_norm_(params, GRAD_CLIP_MAX_NORM)
 
         optimizer.step()
+        scheduler.step()  # v6_lr_decay: advance the cosine schedule once per iteration
 
         # Rebalance the CO2 weight using gradient-norm ratios (Wang et al.
         # 2021), not raw loss values -- see module-level comment for why the
@@ -384,20 +425,23 @@ def main():
         if it % LOG_EVERY == 0:
             elapsed = time.time() - start
             speed = (it + 1) / elapsed if elapsed > 0 else 0.0
+            cur_lr = scheduler.get_last_lr()[0]
             print(f"[Iter {it:05d}/{MAX_ITERS}] Total={total_val:.5f} | "
                   f"NS={L_ns.item():.5f} CO2(raw)={L_co2.item():.6f} CO2_weight={co2_weight:.2f} CO2(weighted)={co2_weight * L_co2.item():.5f} "
                   f"Walls={L_walls.item():.5f} Windows={L_windows.item():.5f} Doors={L_doors.item():.5f} "
-                  f"IC={L_ic.item():.5f} | {speed:.2f} it/s")
+                  f"IC={L_ic.item():.5f} LR={cur_lr:.6f} | {speed:.2f} it/s")
 
         if it % CKPT_EVERY == 0 and it > 0:
             ckpt_path = os.path.join(CKPT_DIR, f"gnot_{VERSION}_iter{it}.pth")
             torch.save({"iter": it, "version": VERSION, "co2_weight": co2_weight,
+                        "lr": scheduler.get_last_lr()[0],
                         "model_state": model.state_dict(),
                         "optimizer_state": optimizer.state_dict()}, ckpt_path)
             print(f"  -> saved checkpoint: {ckpt_path}")
 
     final_path = os.path.join(CKPT_DIR, f"gnot_{VERSION}_final.pth")
     torch.save({"iter": MAX_ITERS, "version": VERSION, "co2_weight": co2_weight,
+                "lr": scheduler.get_last_lr()[0],
                 "model_state": model.state_dict()}, final_path)
     print(f"Training complete. Final checkpoint: {final_path}")
 
