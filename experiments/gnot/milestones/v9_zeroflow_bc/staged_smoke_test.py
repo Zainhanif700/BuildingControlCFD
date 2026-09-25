@@ -1,3 +1,10 @@
+# ============================================================================
+# MILESTONE SNAPSHOT: v9_zeroflow_bc (2026-09-25) -- frozen copy, DO NOT EDIT.
+# Taken from the git commit the v9 run trained with. See README.md. Run scripts
+# from INSIDE this folder so they import this frozen model code, not the live
+# experiments/gnot/ one (which from v10 on refuses v9 checkpoints).
+# ============================================================================
+
 """
 Staged smoke test for GNOT -- runs each layer of the pipeline in isolation,
 from lowest-level to full training step, printing PASS/FAIL after each stage
@@ -269,11 +276,9 @@ def test_nondim(device):
         zero_c.out_head[-1].bias[3].fill_(1.0)
         _, _, _, C_one, _ = zero_c(x.detach(), y.detach(), z.detach(),
                                    torch.full((n, 1), 60.0, device=device), V, N_people)
-    # v10: C = C_REF * (t/T_MAX) * C_hat, so at t=60 s and C_hat=1 expect C_REF*60/T_MAX
-    c_expected = C_REF * 60.0 / T_MAX
-    max_dev = (C_one - c_expected).abs().max().item()
-    print(f"  output scaling: C_hat=1, t=60s -> C={C_one.mean().item():.4f} (expected C_REF*60/T_MAX={c_expected:.4f})")
-    assert max_dev < 1e-5, f"C deviates from C_REF*t/T_MAX by {max_dev:.2e} -- output scaling wrong"
+    max_dev = (C_one - C_REF).abs().max().item()
+    print(f"  output scaling: C_hat=1 -> C={C_one.mean().item():.4f} (expected C_REF={C_REF:.4f})")
+    assert max_dev < 1e-5, f"C with C_hat=1 deviates from C_REF by {max_dev:.2e} -- output scaling wrong"
 
     # (b3) v9 CO2 BOUNDARY CONDITIONS. A spatially CONSTANT CO2 field (still
     # zero_c, now C = C_REF everywhere) has dc/dn = 0 on every boundary, so the
@@ -300,15 +305,14 @@ def test_nondim(device):
     # (d) CHECKPOINT GUARD: v5 (unscaled) and v8 (scaled, but no zero-flow
     # constraint) checkpoints must both be refused; the live format accepted.
     from gnot_model import MODEL_FORMAT_KEY, MODEL_FORMAT
-    for old in ({"version": "v5_closed_window_fix"}, {"version": "v8_nondim", "nondim": True},
-                {"version": "v9_zeroflow_bc", "nondim": True, "model_format": "v9_zeroflow"}):
+    for old in ({"version": "v5_closed_window_fix"}, {"version": "v8_nondim", "nondim": True}):
         try:
             check_checkpoint_compat(old, "fake_old.pth")
             raise AssertionError(f"check_checkpoint_compat accepted an old checkpoint: {old}")
         except RuntimeError:
             pass
     check_checkpoint_compat({"version": "v9", "nondim": True, MODEL_FORMAT_KEY: MODEL_FORMAT}, "fake_new.pth")
-    print(f"  checkpoint guard: rejects v5, v8 and v9, accepts {MODEL_FORMAT} -- OK")
+    print(f"  checkpoint guard: rejects v5 and v8, accepts {MODEL_FORMAT} -- OK")
 
     # (e) v9 HARD ZERO-FLOW: with all windows closed the velocity must be
     # EXACTLY zero by construction (the loophole v8 exploited: a spurious slow
@@ -329,17 +333,6 @@ def test_nondim(device):
           f"open={speeds['open']:.2e} (must be > 0)")
     assert speeds["closed"] == 0.0, f"closed-window speed {speeds['closed']:.2e} is not exactly 0"
     assert speeds["open"] > 1e-6, "open-window speed is ~0 -- the s(V) factor is suppressing all flow"
-
-    # (f) v10 HARD INITIAL CONDITION: C(t=0) must be exactly 0 for ANY weights
-    # (v9 had a -0.039 offset there), and non-zero for t > 0.
-    V_mix = torch.rand(n, NUM_WINDOWS, device=device) * V_MAX
-    with torch.no_grad():
-        _, _, _, C_t0, _ = model(xe, ye, ze, torch.zeros(n, 1, device=device), V_mix, Ne)
-        _, _, _, C_t60, _ = model(xe, ye, ze, torch.full((n, 1), 60.0, device=device), V_mix, Ne)
-    print(f"  hard IC: max|C(t=0)|={C_t0.abs().max().item():.2e} (must be 0), "
-          f"max|C(t=60)|={C_t60.abs().max().item():.2e} (must be > 0)")
-    assert C_t0.abs().max().item() == 0.0, "C(t=0) is not exactly 0 -- hard IC not applied"
-    assert C_t60.abs().max().item() > 0.0, "C(t=60) is exactly 0 -- CO2 output is dead"
 
 
 @stage("1. FourierFeatures -- shape + finiteness + 1st/2nd derivative w.r.t. raw coords")

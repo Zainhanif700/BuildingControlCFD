@@ -1,3 +1,10 @@
+# ============================================================================
+# MILESTONE SNAPSHOT: v9_zeroflow_bc (2026-09-25) -- frozen copy, DO NOT EDIT.
+# Taken from the git commit the v9 run trained with. See README.md. Run scripts
+# from INSIDE this folder so they import this frozen model code, not the live
+# experiments/gnot/ one (which from v10 on refuses v9 checkpoints).
+# ============================================================================
+
 """
 Physics-only training loop for GNOT on the real room.
 
@@ -301,24 +308,13 @@ def gradnorm_weight_update(grad_ns, grad_co2, prev_weight):
 #                     carry the source). (2) the missing CO2 boundary conditions:
 #                     no-flux dc/dn=0 on walls/floor/ceiling/columns, zero-gradient
 #                     outflow at doors (co2_boundary_loss; logged as CO2_BC).
-#                     RESULT (iter 7000, milestones/v9_zeroflow_bc/README.md): FIRST
-#                     physically correct CO2 -- closed windows balanced by
-#                     accumulation (dc/dt 0.233 vs S 0.318, u.grad(c)=0), growth peak
-#                     at (7.57,4.92) vs true (7.76,4.58), half-max width 21/11 vs
-#                     physical 18/10, growth ~81% of the physical value. Remaining:
-#                     constant offset C(t=0) ~ -0.039 everywhere (soft IC too cheap).
-#   v10_hardic      -- v9 + HARD initial condition: C = C_REF*(t/T_MAX)*C_hat in
-#                     gnot_model.py, so C(t=0)=0 exactly (Lagaris et al. 1998).
-#                     Single change vs v9. The CO2 part of ic_loss is now identically
-#                     0 (kept; harmless). Check: probe_co2_time.py C(t=0) row = 0,
-#                     far-corner CO2 ~0 instead of -0.04, growth unchanged or better.
 #
 # IMPORTANT: this VERSION variable (and CKPT_DIR below) is what train_gnot.py's own
 # main() uses for a FULL 20k-iteration production run. Bump this to match whichever
 # fix combination is confirmed working via the closed-window diagnostic BEFORE
 # launching the next full run through this file, so production checkpoints aren't
 # mislabeled with stale physics/sampling.
-VERSION = "v10_hardic"
+VERSION = "v9_zeroflow_bc"
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 CKPT_DIR = os.path.join(HERE, "checkpoints", VERSION)

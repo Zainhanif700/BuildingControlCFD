@@ -1,3 +1,10 @@
+# ============================================================================
+# MILESTONE SNAPSHOT: v9_zeroflow_bc (2026-09-25) -- frozen copy, DO NOT EDIT.
+# Taken from the git commit the v9 run trained with. See README.md. Run scripts
+# from INSIDE this folder so they import this frozen model code, not the live
+# experiments/gnot/ one (which from v10 on refuses v9 checkpoints).
+# ============================================================================
+
 """
 GNOT-style operator for the real room (physics-only training, no data).
 
@@ -56,7 +63,7 @@ NONDIM_CHECKPOINT_KEY = "nondim"
 # load without error but predict the wrong velocity. Every checkpoint from v9
 # on records MODEL_FORMAT; bump it whenever forward() changes meaning.
 MODEL_FORMAT_KEY = "model_format"
-MODEL_FORMAT = "v10_hardic"  # v9_zeroflow -> v10_hardic: C output now multiplied by t/T_MAX
+MODEL_FORMAT = "v9_zeroflow"
 
 
 def check_checkpoint_compat(ckpt, path=""):
@@ -70,7 +77,7 @@ def check_checkpoint_compat(ckpt, path=""):
         f"model_format={ckpt.get(MODEL_FORMAT_KEY, 'none')}) was trained with an older model "
         f"(live format is {MODEL_FORMAT!r}); loading it here would give WRONG predictions. "
         f"Run the frozen scripts inside milestones/<that version>/ instead "
-        f"(e.g. milestones/v8_nondim/ for v8, milestones/v9_zeroflow_bc/ for v9 checkpoints)."
+        f"(e.g. milestones/v8_nondim/ for v8 checkpoints)."
     )
 
 
@@ -404,18 +411,7 @@ class GNOTOperator(nn.Module):
         # the closed-room accumulation bound -- see point_sampler.py). The
         # returned C is in PHYSICAL units, so all callers (losses,
         # diagnostics, visualizations) are unchanged.
-        # v10: HARD initial condition C(t=0) = 0 (room starts with no excess
-        # CO2). v9's probe_co2_time.py at iter 7000 showed the shape and growth
-        # of CO2 were right, but the whole field sat on a constant offset of
-        # about -0.039 at t=0: the soft IC penalty (c/C_REF)^2 is too cheap
-        # (a 0.04 offset costs ~0.003). Multiplying by t/T_MAX makes C(t=0) = 0
-        # EXACTLY by construction (Lagaris et al. 1998 hard-constraint output
-        # transform). It also matches the physics: in a closed room C grows
-        # ~linearly in t near the start, so C_hat only needs to be the
-        # (dimensionless) accumulation rate. C_hat still depends freely on t,
-        # x, y, z, V and N, so saturation / flushing by open windows remains
-        # learnable. The velocity path (A1..A3) is unaffected.
-        C = C_REF * (t / T_MAX) * C_hat
+        C = C_REF * C_hat
         return A1, A2, A3, C, p
 
     def velocity_from_potential(self, A1, A2, A3, x, y, z):
