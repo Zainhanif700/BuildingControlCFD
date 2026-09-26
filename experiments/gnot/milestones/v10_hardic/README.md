@@ -67,6 +67,25 @@ Residual breakdown (final checkpoint, loss/floor; lower is better):
    rate and recovered; v10 did not. One clean run is not proof, so a repeat with a
    different seed would confirm it.
 
+## Robustness across occupancy, height and time (`validate_closed_room.py`)
+
+These are 27 closed-window cases, all from one trained model with no retraining,
+which demonstrates the operator property. The reference is one FD solve at N = 1
+scaled by N: this is exact because the closed-room CO2 problem is linear in the
+source, and the source is proportional to N.
+
+| occupancy | error at source (range over 3 heights x 3 times) | plane relative L2 |
+|---|---|---|
+| 50 people | -0.5% to -7.5% | 11-14% |
+| 20 people | -1.3% to -4.9% | 14-17% |
+| 5 people | -6.1% to -12.8% | **47-54%** |
+
+Heights 0.5 m, 1.10 m and 2.0 m behave alike. **At low occupancy the relative error
+explodes.** The true field is exactly proportional to N, so a correct model's
+relative error would not depend on N. This model has an error component that does
+NOT scale with N (the far-field drift of about +0.005), which dominates when the
+signal is small. Fix (v12): build the exact N-proportionality into the output.
+
 ## Follow-up tried: v11_latedecay, a negative result
 
 Resumed this model at iter 20000, with its Adam state, and cosine-decayed the LR from

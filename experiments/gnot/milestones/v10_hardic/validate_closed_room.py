@@ -1,3 +1,9 @@
+# ============================================================================
+# MILESTONE SNAPSHOT: v10_hardic -- analysis tool added 2026-09-26 (current version),
+# so v10 checkpoints can still be validated after the live model changes (v12).
+# Run from INSIDE this folder. DO NOT EDIT.
+# ============================================================================
+
 """
 Closed-window ROBUSTNESS validation of a trained PINN against the
 finite-difference reference (fd_reference_closed_room.py), across several
@@ -125,8 +131,8 @@ def main():
     rel = np.sqrt(np.nansum((p - ref) ** 2) / np.nansum(ref ** 2))
     fig, axes = plt.subplots(1, 3, figsize=(18, 4.6))
     panels = [(ref, "Reference (finite difference)", "viridis", 0, vmax),
-              (p, f"physics-informed GNOT ({version})", "viridis", 0, vmax),
-              (p - ref, f"GNOT - reference (rel. L2 {rel * 100:.1f}%)", "RdBu_r", -dmax, dmax)]
+              (p, f"PINN ({version})", "viridis", 0, vmax),
+              (p - ref, f"PINN - reference (rel. L2 {rel * 100:.1f}%)", "RdBu_r", -dmax, dmax)]
     for ax, (F, title, cmap, lo, hi) in zip(axes, panels):
         im = ax.imshow(F.reshape(40, 40).T, origin="lower", extent=extent, cmap=cmap, vmin=lo, vmax=hi,
                        interpolation="bilinear")
@@ -147,7 +153,7 @@ def main():
     for N, col in zip(N_LIST, ["tab:green", "tab:blue", "tab:red"]):
         pinn_t = [float(pinn_on(model, device, [SX], [SY], tt, z=BREATHING_HEIGHT, n_people=N)[0]) for tt in t_fine]
         ref_t = [N * float(interp(out1[tt], grid, SX, SY, BREATHING_HEIGHT)) for tt in t_ref]
-        ax.plot(t_fine, pinn_t, color=col, lw=2, label=f"GNOT, {N:.0f} people")
+        ax.plot(t_fine, pinn_t, color=col, lw=2, label=f"PINN, {N:.0f} people")
         ax.plot(t_ref, ref_t, "o", color=col, mfc="white", mew=1.5, label=f"reference, {N:.0f} people")
     ax.set_xlabel("time [s]")
     ax.set_ylabel("excess CO2 at the source [model units]")

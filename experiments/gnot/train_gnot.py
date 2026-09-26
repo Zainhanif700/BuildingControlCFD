@@ -364,13 +364,21 @@ def gradnorm_weight_update(grad_ns, grad_co2, prev_weight):
 #                     ~14-15% (in the low-concentration tails) is systematic, not
 #                     optimizer noise. v10 remains the best model. Live defaults
 #                     reset to v10's setup (RESUME_FROM/LR_DECAY_START = None).
+#   v12_linear_n    -- v10 + HARD proportionality of CO2 to occupancy:
+#                     C = C_REF*(t/T_MAX)*(N/N_MAX)*C_hat (exact for this model, see
+#                     gnot_model.py). Found from validate_closed_room.py on v10 (27
+#                     cases): plane L2 11-14% at 50 people, 14-17% at 20, but 47-54% at
+#                     5 -- an N-independent error component dominating at low
+#                     occupancy. Single change vs v10 (fresh run, constant LR).
+#                     Check: validate_closed_room.py -- 5-people plane error should
+#                     drop to the level of the 20/50-people cases.
 #
 # IMPORTANT: this VERSION variable (and CKPT_DIR below) is what train_gnot.py's own
 # main() uses for a FULL 20k-iteration production run. Bump this to match whichever
 # fix combination is confirmed working via the closed-window diagnostic BEFORE
 # launching the next full run through this file, so production checkpoints aren't
 # mislabeled with stale physics/sampling.
-VERSION = "v12_next"  # placeholder -- RENAME to describe the next experiment before running.
+VERSION = "v12_linear_n"
 # main() refuses to start if checkpoints for this VERSION already exist, so an old
 # result can never be overwritten by forgetting to bump this.
 

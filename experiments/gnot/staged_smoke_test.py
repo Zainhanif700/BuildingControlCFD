@@ -270,7 +270,8 @@ def test_nondim(device):
         _, _, _, C_one, _ = zero_c(x.detach(), y.detach(), z.detach(),
                                    torch.full((n, 1), 60.0, device=device), V, N_people)
     # v10: C = C_REF * (t/T_MAX) * C_hat, so at t=60 s and C_hat=1 expect C_REF*60/T_MAX
-    c_expected = C_REF * 60.0 / T_MAX
+    # v12: ... * (N/N_MAX) as well; this call uses N = N_PEOPLE_MAX, so that factor is 1
+    c_expected = C_REF * 60.0 / T_MAX * (N_people[0, 0].item() / N_PEOPLE_MAX)  # plain float (printed with :.4f below)
     max_dev = (C_one - c_expected).abs().max().item()
     print(f"  output scaling: C_hat=1, t=60s -> C={C_one.mean().item():.4f} (expected C_REF*60/T_MAX={c_expected:.4f})")
     assert max_dev < 1e-5, f"C deviates from C_REF*t/T_MAX by {max_dev:.2e} -- output scaling wrong"
@@ -301,14 +302,15 @@ def test_nondim(device):
     # constraint) checkpoints must both be refused; the live format accepted.
     from gnot_model import MODEL_FORMAT_KEY, MODEL_FORMAT
     for old in ({"version": "v5_closed_window_fix"}, {"version": "v8_nondim", "nondim": True},
-                {"version": "v9_zeroflow_bc", "nondim": True, "model_format": "v9_zeroflow"}):
+                {"version": "v9_zeroflow_bc", "nondim": True, "model_format": "v9_zeroflow"},
+                {"version": "v10_hardic", "nondim": True, "model_format": "v10_hardic"}):
         try:
             check_checkpoint_compat(old, "fake_old.pth")
             raise AssertionError(f"check_checkpoint_compat accepted an old checkpoint: {old}")
         except RuntimeError:
             pass
     check_checkpoint_compat({"version": "v9", "nondim": True, MODEL_FORMAT_KEY: MODEL_FORMAT}, "fake_new.pth")
-    print(f"  checkpoint guard: rejects v5, v8 and v9, accepts {MODEL_FORMAT} -- OK")
+    print(f"  checkpoint guard: rejects v5, v8, v9 and v10, accepts {MODEL_FORMAT} -- OK")
 
     # (e) v9 HARD ZERO-FLOW: with all windows closed the velocity must be
     # EXACTLY zero by construction (the loophole v8 exploited: a spurious slow
@@ -340,6 +342,19 @@ def test_nondim(device):
           f"max|C(t=60)|={C_t60.abs().max().item():.2e} (must be > 0)")
     assert C_t0.abs().max().item() == 0.0, "C(t=0) is not exactly 0 -- hard IC not applied"
     assert C_t60.abs().max().item() > 0.0, "C(t=60) is exactly 0 -- CO2 output is dead"
+
+    # (g) v12 EXACT LINEARITY IN OCCUPANCY: C must be exactly 0 for an empty room
+    # and exactly double when N doubles (same x, t, V), for ANY weights.
+    t60 = torch.full((n, 1), 60.0, device=device)
+    with torch.no_grad():
+        _, _, _, C_n0, _ = model(xe, ye, ze, t60, V_mix, torch.zeros(n, 1, device=device))
+        _, _, _, C_n10, _ = model(xe, ye, ze, t60, V_mix, torch.full((n, 1), 10.0, device=device))
+        _, _, _, C_n20, _ = model(xe, ye, ze, t60, V_mix, torch.full((n, 1), 20.0, device=device))
+    lin_dev = (C_n20 - 2 * C_n10).abs().max().item() / max(C_n20.abs().max().item(), 1e-30)
+    print(f"  occupancy linearity: max|C(N=0)|={C_n0.abs().max().item():.2e} (must be 0), "
+          f"relative |C(20) - 2*C(10)| = {lin_dev:.2e} (must be ~0)")
+    assert C_n0.abs().max().item() == 0.0, "C is not exactly 0 for an empty room"
+    assert lin_dev < 1e-5, f"C does not scale linearly with N (rel. deviation {lin_dev:.2e})"
 
 
 @stage("1. FourierFeatures -- shape + finiteness + 1st/2nd derivative w.r.t. raw coords")

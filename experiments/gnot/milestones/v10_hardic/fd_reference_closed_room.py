@@ -1,8 +1,7 @@
 # ============================================================================
-# MILESTONE SNAPSHOT: v10_hardic (2026-09-26) -- frozen copy, DO NOT EDIT.
-# Model/training code from git commit 6529b15 (exactly what the v10 run trained
-# with); fd_reference_closed_room.py from a0b2992. See README.md. Run scripts
-# from INSIDE this folder so they import this frozen model code.
+# MILESTONE SNAPSHOT: v10_hardic -- analysis tool added 2026-09-26 (current version),
+# so v10 checkpoints can still be validated after the live model changes (v12).
+# Run from INSIDE this folder. DO NOT EDIT.
 # ============================================================================
 
 """
@@ -44,7 +43,7 @@ PROBES = {"source (7.76,4.58)": (SX, SY), "2.5 m east of source": (SX + 2.5, SY)
           "far corner (1.0,1.0)": (1.0, 1.0)}
 
 
-def solve(dx_target, windows):
+def solve(dx_target, windows, n_people=N_PEOPLE):
     Lx, Ly, Lz = ROOM_X[1] - ROOM_X[0], ROOM_Y[1] - ROOM_Y[0], ROOM_Z[1] - ROOM_Z[0]
     nx, ny, nz = (max(4, round(L / dx_target)) for L in (Lx, Ly, Lz))
     dx, dy, dz = Lx / nx, Ly / ny, Lz / nz
@@ -56,7 +55,7 @@ def solve(dx_target, windows):
     fluid = np.ones((nx, ny, nz), dtype=bool)
     for cx, cy, r, _, _ in COLUMNS:          # floor-to-ceiling solid columns
         fluid &= (X - cx) ** 2 + (Y - cy) ** 2 > r ** 2
-    S = N_PEOPLE * EMISSION_PER_PERSON * np.exp(
+    S = n_people * EMISSION_PER_PERSON * np.exp(
         -((X - SX) ** 2 + (Y - SY) ** 2 + (Z - BREATHING_HEIGHT) ** 2) / CO2_SOURCE_SIGMA ** 2) * fluid
 
     # open faces between neighbouring FLUID cells (no flux into solids / through walls)
@@ -122,17 +121,17 @@ def breathing_grid():
     return xs, ys, xg, yg, inside
 
 
-def pinn_on(model, device, xg, yg, t):
+def pinn_on(model, device, xg, yg, t, z=BREATHING_HEIGHT, n_people=N_PEOPLE):
     import torch
     n = len(xg)
     with torch.no_grad():
         _, _, _, C, _ = model(
             torch.tensor(xg, dtype=torch.float32, device=device).view(-1, 1),
             torch.tensor(yg, dtype=torch.float32, device=device).view(-1, 1),
-            torch.full((n, 1), BREATHING_HEIGHT, device=device),
+            torch.full((n, 1), float(z), device=device),
             torch.full((n, 1), float(t), device=device),
             torch.zeros(n, NUM_WINDOWS, device=device),
-            torch.full((n, 1), N_PEOPLE, device=device))
+            torch.full((n, 1), float(n_people), device=device))
     return C.cpu().numpy().ravel()
 
 

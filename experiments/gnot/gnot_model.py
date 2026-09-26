@@ -56,7 +56,7 @@ NONDIM_CHECKPOINT_KEY = "nondim"
 # load without error but predict the wrong velocity. Every checkpoint from v9
 # on records MODEL_FORMAT; bump it whenever forward() changes meaning.
 MODEL_FORMAT_KEY = "model_format"
-MODEL_FORMAT = "v10_hardic"  # v9_zeroflow -> v10_hardic: C output now multiplied by t/T_MAX
+MODEL_FORMAT = "v12_linear_n"  # v10_hardic -> v12_linear_n: C output now also multiplied by N/N_MAX
 
 
 def check_checkpoint_compat(ckpt, path=""):
@@ -70,7 +70,7 @@ def check_checkpoint_compat(ckpt, path=""):
         f"model_format={ckpt.get(MODEL_FORMAT_KEY, 'none')}) was trained with an older model "
         f"(live format is {MODEL_FORMAT!r}); loading it here would give WRONG predictions. "
         f"Run the frozen scripts inside milestones/<that version>/ instead "
-        f"(e.g. milestones/v8_nondim/ for v8, milestones/v9_zeroflow_bc/ for v9 checkpoints)."
+        f"(e.g. milestones/v8_nondim/, milestones/v9_zeroflow_bc/, milestones/v10_hardic/)."
     )
 
 
@@ -415,7 +415,21 @@ class GNOTOperator(nn.Module):
         # (dimensionless) accumulation rate. C_hat still depends freely on t,
         # x, y, z, V and N, so saturation / flushing by open windows remains
         # learnable. The velocity path (A1..A3) is unaffected.
-        C = C_REF * (t / T_MAX) * C_hat
+        #
+        # v12: HARD linearity in occupancy, C proportional to N_people. This is EXACT for
+        # this model: the CO2 equation dc/dt + u.grad(c) - D lap(c) = S is linear in c;
+        # S is proportional to N; the initial condition (c=0) and ALL CO2 boundary
+        # conditions (c=0 at windows, no-flux walls/columns, zero-gradient doors) are
+        # homogeneous; and the velocity does not depend on N (no buoyancy term in
+        # the momentum equation). Hence c(x,t;V,N) = N * c1(x,t;V) exactly.
+        # Found from validate_closed_room.py on v10: plane error 11-14% at 50 people
+        # but 47-54% at 5 people -- v10 carried an error component that did NOT
+        # scale with N (far-field drift), which dominates at low occupancy. Building
+        # the proportionality in removes that component, gives C = 0 exactly for an
+        # empty room, and means C_hat no longer has to learn the N-dependence.
+        # REVISIT this factor if buoyancy, a non-zero background/inflow CO2, or any
+        # other N-independent CO2 source is ever added -- it would no longer be exact.
+        C = C_REF * (t / T_MAX) * (N_people / N_PEOPLE_MAX) * C_hat
         return A1, A2, A3, C, p
 
     def velocity_from_potential(self, A1, A2, A3, x, y, z):
