@@ -1,0 +1,99 @@
+=== v9_zeroflow_bc final diagnostics, Sat Sep 26 12:19:41 AM CEST 2026 ===
+
+--- co2_residual_breakdown (final) ---
+../../checkpoints/v9_zeroflow_bc/gnot_v9_zeroflow_bc_final.pth (iter=20000), 200 points per scenario, all values RMS in units of S_REF=5.75e-03
+scenario          loss   floor loss/floor |   dc/dt u.grad(c) D lap(c)       S | mean speed
+closed          0.0030  0.1011       0.03 |  0.2740    0.0000   0.0764  0.3180 |     0.0000
+open            0.0087  0.0839       0.10 |  0.0395    0.2648   0.0239  0.2896 |     0.2657
+training mix    0.0032  0.0722       0.04 |  0.1893    0.1168   0.0543  0.2687 |     0.1282
+
+HOW TO READ THIS:
+  loss/floor ~1 -> that scenario is still on the trivial solution (nothing learned).
+  loss/floor << 1 -> the equation is satisfied there; the term columns show HOW:
+    closed windows should balance S mainly with dc/dt (CO2 accumulating);
+    if instead u.grad(c) carries it with closed windows, the network is faking the
+    source with the leftover spurious velocity.
+
+--- probe_co2_time (iter10000, iter15000, final) ---
+
+=== ../../checkpoints/v9_zeroflow_bc/gnot_v9_zeroflow_bc_iter10000.pth (iter=10000) -- closed windows, N=20, z=1.10 m ===
+point                    t=   0s t=  10s t=  30s t=  60s t=  90s t= 120s
+source (7.76,4.58)       -0.0055 +0.0154 +0.0587 +0.1122 +0.1604 +0.2053   <- predicted
+                         +0.0000 +0.0230 +0.0690 +0.1380 +0.2070 +0.2760   <- expected
+2.5 m east of source     -0.0141 -0.0070 +0.0076 +0.0281 +0.0471 +0.0682   <- predicted
+                         +0.0000 +0.0085 +0.0254 +0.0508 +0.0762 +0.1015   <- expected
+far corner (1.0,1.0)     -0.0093 -0.0090 -0.0090 -0.0088 -0.0087 -0.0084   <- predicted
+                         +0.0000 +0.0000 +0.0000 +0.0000 +0.0000 +0.0000   <- expected
+
+C at t=0 (initial condition says exactly 0 everywhere): min -0.0179  max -0.0018  mean -0.0116
+growth C(60)-C(0): min +0.0001  max +0.1179  (expected max ~0.138 at the source, ~0 far away)
+growth peak at (x,y)=(7.96, 4.47); true source (7.76, 4.58)
+growth above half-max: along y 19/40, along x 11/40 (physically expected for sigma=2.5 m: 18/40 along y, 10/40 along x)
+
+=== ../../checkpoints/v9_zeroflow_bc/gnot_v9_zeroflow_bc_iter15000.pth (iter=15000) -- closed windows, N=20, z=1.10 m ===
+point                    t=   0s t=  10s t=  30s t=  60s t=  90s t= 120s
+source (7.76,4.58)       +0.0002 +0.0002 +0.0002 +0.0002 +0.0002 +0.0002   <- predicted
+                         +0.0000 +0.0230 +0.0690 +0.1380 +0.2070 +0.2760   <- expected
+2.5 m east of source     +0.0002 +0.0002 +0.0002 +0.0002 +0.0002 +0.0002   <- predicted
+                         +0.0000 +0.0085 +0.0254 +0.0508 +0.0762 +0.1015   <- expected
+far corner (1.0,1.0)     +0.0002 +0.0002 +0.0002 +0.0002 +0.0002 +0.0002   <- predicted
+                         +0.0000 +0.0000 +0.0000 +0.0000 +0.0000 +0.0000   <- expected
+
+C at t=0 (initial condition says exactly 0 everywhere): min +0.0001  max +0.0002  mean +0.0002
+growth C(60)-C(0): min -0.0000  max +0.0000  (expected max ~0.138 at the source, ~0 far away)
+growth peak at (x,y)=(0.10, 7.91); true source (7.76, 4.58)
+growth above half-max: along y 32/40, along x 40/40 (physically expected for sigma=2.5 m: 18/40 along y, 10/40 along x)
+
+=== ../../checkpoints/v9_zeroflow_bc/gnot_v9_zeroflow_bc_final.pth (iter=20000) -- closed windows, N=20, z=1.10 m ===
+point                    t=   0s t=  10s t=  30s t=  60s t=  90s t= 120s
+source (7.76,4.58)       +0.0005 +0.0227 +0.0735 +0.1373 +0.1895 +0.2365   <- predicted
+                         +0.0000 +0.0230 +0.0690 +0.1380 +0.2070 +0.2760   <- expected
+2.5 m east of source     -0.0010 +0.0050 +0.0215 +0.0457 +0.0690 +0.0934   <- predicted
+                         +0.0000 +0.0085 +0.0254 +0.0508 +0.0762 +0.1015   <- expected
+far corner (1.0,1.0)     -0.0010 -0.0004 +0.0011 +0.0031 +0.0046 +0.0059   <- predicted
+                         +0.0000 +0.0000 +0.0000 +0.0000 +0.0000 +0.0000   <- expected
+
+C at t=0 (initial condition says exactly 0 everywhere): min -0.0028  max +0.0033  mean -0.0003
+growth C(60)-C(0): min -0.0082  max +0.1371  (expected max ~0.138 at the source, ~0 far away)
+growth peak at (x,y)=(7.96, 4.69); true source (7.76, 4.58)
+growth above half-max: along y 19/40, along x 11/40 (physically expected for sigma=2.5 m: 18/40 along y, 10/40 along x)
+
+HOW TO READ THIS:
+  - C(t=0) clearly non-zero (e.g. -0.1) but growth ~ expected  -> OFFSET problem: the
+    initial condition is too weakly enforced. Fix: hard-enforce C(t=0)=0 in the model.
+  - C(t=0) ~ 0 but growth much smaller than expected            -> GROWTH problem: the
+    network isn't satisfying dc/dt = S near the source.
+  - growth peak near the source with sensible half-max counts   -> shape/localization OK.
+
+--- closed_window_diagnostic (final, closed) ---
+Loaded checkpoint: ../../checkpoints/v9_zeroflow_bc/gnot_v9_zeroflow_bc_final.pth (iter=20000, version=v9_zeroflow_bc, co2_weight=1.0)
+Scenario: closed
+
+CO2 min/max/mean: -0.006073 / 0.137296 / 0.019429
+speed min/max/mean (all windows closed -- should be near 0): 0.000000 / 0.000000 / 0.000000
+CO2 peak at grid cell (20, 20) -> (x,y) = (7.96, 4.69) (true source is at room center: (7.76, 4.58))
+row (fixed x=7.96, varying y) above half-max count: 18 / 40
+col (fixed y=4.69, varying x) above half-max count: 11 / 40
+
+Interpretation: if CO2 max/min are both tiny and close together (e.g. both ~1e-3 in magnitude), the field is still too undertrained to show real structure. If the row/col counts are both similarly small (e.g. both under ~10/40), that's good localization. If ONE of them is much larger than the other (e.g. one near 40/40), that's the room-wide 'band' artifact repeating.
+
+--- closed_window_diagnostic (final, open) ---
+Loaded checkpoint: ../../checkpoints/v9_zeroflow_bc/gnot_v9_zeroflow_bc_final.pth (iter=20000, version=v9_zeroflow_bc, co2_weight=1.0)
+Scenario: open
+
+CO2 min/max/mean: -0.001404 / 0.040039 / 0.007197
+speed min/max/mean (all windows at V_MAX=5.0 -- should be clearly non-zero, inflow-directed): 0.002870 / 5.108129 / 0.420088
+CO2 peak at grid cell (22, 16) -> (x,y) = (8.75, 3.78) (true source is at room center: (7.76, 4.58))
+row (fixed x=8.75, varying y) above half-max count: 17 / 40
+col (fixed y=3.78, varying x) above half-max count: 11 / 40
+
+Interpretation: if CO2 max/min are both tiny and close together (e.g. both ~1e-3 in magnitude), the field is still too undertrained to show real structure. If the row/col counts are both similarly small (e.g. both under ~10/40), that's good localization. If ONE of them is much larger than the other (e.g. one near 40/40), that's the room-wide 'band' artifact repeating.
+
+--- probe_source_co2 (iter5000 ... final) ---
+Probing CO2 prediction AT the true source location (7.76, 4.58, 1.10), all windows closed, N_people=20, t=60s:
+(physically expected: roughly 20 * 0.000115 * 60 = 0.138; every run before v8 gave ~0.00-0.02)
+
+../../checkpoints/v9_zeroflow_bc/gnot_v9_zeroflow_bc_iter5000.pth (iter=5000): C(source) = 0.106674
+../../checkpoints/v9_zeroflow_bc/gnot_v9_zeroflow_bc_iter10000.pth (iter=10000): C(source) = 0.112224
+../../checkpoints/v9_zeroflow_bc/gnot_v9_zeroflow_bc_iter15000.pth (iter=15000): C(source) = 0.000175
+../../checkpoints/v9_zeroflow_bc/gnot_v9_zeroflow_bc_final.pth (iter=20000): C(source) = 0.137287
