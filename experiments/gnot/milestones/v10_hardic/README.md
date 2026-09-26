@@ -67,8 +67,27 @@ Residual breakdown (final checkpoint, loss/floor; lower is better):
    rate and recovered; v10 did not. One clean run is not proof, so a repeat with a
    different seed would confirm it.
 
-## Next step (not yet attempted)
+## Follow-up tried: v11_latedecay, a negative result
 
-Reduce the ~14% plane error, which sits in the tails, with a late-phase learning-rate
-decay only after CO2 has been learned. v6's decay failed because it throttled CO2
-before CO2 was learned at all; that is no longer the situation.
+Resumed this model at iter 20000, with its Adam state, and cosine-decayed the LR from
+1e-3 to 1e-5 over 10,000 more iterations (code: git `3cb59d8`). The relative L2 error
+against the FD reference at t = 60 s did not improve:
+
+| checkpoint | plane L2 error |
+|---|---|
+| v10 final (this model) | **13.9%** |
+| v11 iter 22000 | 18.1% |
+| v11 iter 25000 | 15.8% |
+| v11 iter 28000 | 15.2% |
+| v11 final (iter 30000) | 15.5% |
+
+The decay settled the error at about 15% rather than lowering it. Checkpoints of one
+run differ by a few percent, so this reads as "no measurable change". **The ~14-15%
+error in the low-concentration tails is systematic, not optimizer noise.** The network
+sits at the minimum of the loss we give it, and a small residual at the sampled points
+does not pin down the field where residuals are cheap: the tails, where the source is
+tiny and only 40% of points are sampled uniformly. **This v10 model remains the best.**
+
+Possible future refinement for the tails (not attempted): residual-based adaptive
+sampling (e.g. Wu et al. 2023, a comparison of non-adaptive and residual-based
+adaptive sampling for PINNs).

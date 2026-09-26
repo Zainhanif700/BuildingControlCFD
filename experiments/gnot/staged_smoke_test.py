@@ -522,12 +522,8 @@ def test_one_training_step(device):
     print(f"  {n_changed}/{len(params)} parameter tensors changed after one step (expected: all of them)")
 
 
-@stage("7. v11 LR schedule + resume -- constant then cosine; resume checkpoint loads cleanly")
-def test_lr_schedule_and_resume(device):
-    import os
-    from train_gnot import lr_at, LR, LR_MIN, LR_DECAY_START, MAX_ITERS, RESUME_FROM, HERE
-    from gnot_model import GNOTOperator, check_checkpoint_compat
-    # schedule: exactly LR up to the decay start, monotone cosine, exactly LR_MIN at the end
+def _check_decay_schedule(lr_at, LR, LR_MIN, LR_DECAY_START, MAX_ITERS):
+    """Constant LR up to the decay start, monotone cosine, exact endpoints/midpoint."""
     assert lr_at(0) == LR and lr_at(LR_DECAY_START) == LR, "LR must be constant before LR_DECAY_START"
     assert abs(lr_at(MAX_ITERS) - LR_MIN) < 1e-15, f"final LR {lr_at(MAX_ITERS)} != LR_MIN {LR_MIN}"
     vals = [lr_at(i) for i in range(LR_DECAY_START, MAX_ITERS + 1, 50)]
@@ -535,6 +531,19 @@ def test_lr_schedule_and_resume(device):
     mid = lr_at((LR_DECAY_START + MAX_ITERS) // 2)
     assert abs(mid - (LR_MIN + 0.5 * (LR - LR_MIN))) < 1e-9, f"cosine midpoint {mid} is wrong"
     print(f"  LR: {lr_at(0):.1e} until iter {LR_DECAY_START}, {mid:.2e} at midpoint, {lr_at(MAX_ITERS):.1e} at {MAX_ITERS}")
+
+
+@stage("7. LR schedule + resume -- schedule as configured; resume checkpoint (if any) loads cleanly")
+def test_lr_schedule_and_resume(device):
+    import os
+    from train_gnot import lr_at, LR, LR_MIN, LR_DECAY_START, MAX_ITERS, RESUME_FROM, HERE
+    from gnot_model import GNOTOperator, check_checkpoint_compat
+    if LR_DECAY_START is None:  # constant-LR configuration (the default)
+        assert all(lr_at(i) == LR for i in range(0, MAX_ITERS + 1, 500)), "LR should be constant"
+        print(f"  LR: constant {LR:g} for all {MAX_ITERS} iterations (LR_DECAY_START=None)")
+    else:
+        _check_decay_schedule(lr_at, LR, LR_MIN, LR_DECAY_START, MAX_ITERS)
+
     # resume path: the exact load sequence train_gnot.main() will perform
     if RESUME_FROM is None:
         print("  RESUME_FROM is None -- fresh run, nothing to resume")

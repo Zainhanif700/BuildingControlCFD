@@ -61,7 +61,7 @@ POINTS_COLUMNS_PER = 40   # x 4 columns = 160 -- no-slip on the columns' curved 
 POINTS_WINDOWS_PER = 40   # x 8 windows = 320
 POINTS_DOORS = 200
 POINTS_IC = 400
-MAX_ITERS = 30000  # v11: v10 trained iterations 0-20000; v11 continues 20001-30000
+MAX_ITERS = 20000  # v10's validated setup (v11 used 30000 via resume -- see history)
 LOG_EVERY = 10
 CKPT_EVERY = 1000
 LR = 1e-3
@@ -82,15 +82,21 @@ LR = 1e-3
 # state, so there is no optimizer restart transient) instead of redoing
 # v10's 20000 iterations. Set to None to train from scratch -- the SAME
 # schedule then applies (constant LR to LR_DECAY_START, decay afterwards).
-RESUME_FROM = "checkpoints/v10_hardic/gnot_v10_hardic_iter20000.pth"  # relative to this file
-LR_DECAY_START = 20000
+#
+# DEFAULTS RESET after v11 (see version history): v11 showed the late decay does
+# NOT reduce the error, so the live defaults are v10's validated setup again --
+# fresh run, constant LR. The mechanism is kept for future experiments:
+#   v11 used: RESUME_FROM = "checkpoints/v10_hardic/gnot_v10_hardic_iter20000.pth",
+#             MAX_ITERS = 30000, LR_DECAY_START = 20000, LR_MIN = 1e-5
+RESUME_FROM = None       # e.g. "checkpoints/<version>/gnot_<version>_iter20000.pth" (relative to this file)
+LR_DECAY_START = None    # None = constant LR throughout; an iteration number = cosine decay after it
 LR_MIN = 1e-5
 
 
 def lr_at(it):
     """LR for iteration `it`: LR until LR_DECAY_START, then cosine from LR down
-    to exactly LR_MIN at MAX_ITERS."""
-    if it <= LR_DECAY_START:
+    to exactly LR_MIN at MAX_ITERS. LR_DECAY_START=None -> constant LR."""
+    if LR_DECAY_START is None or it <= LR_DECAY_START:
         return LR
     frac = min(1.0, (it - LR_DECAY_START) / (MAX_ITERS - LR_DECAY_START))
     return LR_MIN + 0.5 * (LR - LR_MIN) * (1.0 + math.cos(math.pi * frac))
@@ -350,13 +356,23 @@ def gradnorm_weight_update(grad_ns, grad_co2, prev_weight):
 #                     its Adam state) and cosine-decay LR 1e-3 -> 1e-5 over iters
 #                     20001-30000 (see RESUME_FROM / lr_at). Single change vs v10.
 #                     Check: FD-reference plane error vs v10's ~14%.
+#                     RESULT (code: git 3cb59d8): NEGATIVE. Relative L2 vs the FD
+#                     reference at t=60 s: 18.1% (iter 22000), 15.8% (25000), 15.2%
+#                     (28000), 15.5% (final) vs v10's 13.9%. The decay settled the
+#                     error at ~15% instead of lowering it; checkpoint-to-checkpoint
+#                     spread is a few %, so this is 'no measurable change'. The
+#                     ~14-15% (in the low-concentration tails) is systematic, not
+#                     optimizer noise. v10 remains the best model. Live defaults
+#                     reset to v10's setup (RESUME_FROM/LR_DECAY_START = None).
 #
 # IMPORTANT: this VERSION variable (and CKPT_DIR below) is what train_gnot.py's own
 # main() uses for a FULL 20k-iteration production run. Bump this to match whichever
 # fix combination is confirmed working via the closed-window diagnostic BEFORE
 # launching the next full run through this file, so production checkpoints aren't
 # mislabeled with stale physics/sampling.
-VERSION = "v11_latedecay"
+VERSION = "v12_next"  # placeholder -- RENAME to describe the next experiment before running.
+# main() refuses to start if checkpoints for this VERSION already exist, so an old
+# result can never be overwritten by forgetting to bump this.
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 CKPT_DIR = os.path.join(HERE, "checkpoints", VERSION)
@@ -562,6 +578,12 @@ def trivial_co2_floor(device, n=200000):
 
 
 def main():
+    # Refuse to overwrite an existing result: if this VERSION's checkpoint folder
+    # already holds checkpoints, the user forgot to bump VERSION.
+    existing = [f for f in os.listdir(CKPT_DIR) if f.endswith(".pth")]
+    if existing:
+        raise SystemExit(f"{CKPT_DIR} already contains {len(existing)} checkpoint(s) -- set a NEW "
+                         f"VERSION in train_gnot.py before training, so existing results are not overwritten.")
     device = "cuda" if torch.cuda.is_available() else "cpu"
     print(f"Using device: {device}")
 
@@ -601,7 +623,10 @@ def main():
         start_iter = ckpt["iter"] + 1
         print(f"[v11] resumed from {resume_path} (iter={ckpt['iter']}, version={ckpt.get('version')}); "
               f"continuing at iter {start_iter}")
-    print(f"[v11] LR schedule: {LR:g} constant until iter {LR_DECAY_START}, cosine to {LR_MIN:g} at iter {MAX_ITERS}")
+    if LR_DECAY_START is None:
+        print(f"LR schedule: constant {LR:g}")
+    else:
+        print(f"LR schedule: {LR:g} constant until iter {LR_DECAY_START}, cosine to {LR_MIN:g} at iter {MAX_ITERS}")
     guide_w = float("nan")  # diagnostic only: Expert's Guide norm-balancing weight
 
     # Best-loss checkpointing (added in v7): a safety net that keeps whichever
