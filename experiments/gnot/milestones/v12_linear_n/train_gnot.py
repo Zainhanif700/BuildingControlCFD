@@ -1,3 +1,9 @@
+# ============================================================================
+# MILESTONE SNAPSHOT: v12_linear_n (2026-09-26) -- frozen copy, DO NOT EDIT.
+# Code from git commit 0340b21 (exactly what the v12 run trained with).
+# See README.md. Run scripts from INSIDE this folder.
+# ============================================================================
+
 """
 Physics-only training loop for GNOT on the real room.
 
@@ -22,7 +28,7 @@ from point_sampler import (
     sample_interior, sample_walls, sample_doors, sample_windows, sample_ic,
     sample_columns_surface, _generate_interior_batch,
     ROOM_X, ROOM_Y, ROOM_Z, NUM_WINDOWS, CO2_SOURCE_SIGMA, BREATHING_HEIGHT,
-    EMISSION_PER_PERSON, S_REF, C_REF, TAU_RAMP, COLUMNS, N_PEOPLE_MAX,
+    EMISSION_PER_PERSON, S_REF, C_REF, TAU_RAMP, COLUMNS,
 )
 
 # --- physical constants (matching Alexander's config exactly) ---
@@ -219,26 +225,6 @@ def guide_norm_ratio(grad_ns, grad_co2):
     return (ns_sq.sqrt() / co2_sq.sqrt()).item()
 
 
-# v13: evaluate ALL CO2 losses at full occupancy N = N_MAX.
-# Diagnosed from v12 (milestones/v12_linear_n/README.md): with C exactly
-# proportional to N (v12), each sample's CO2 residual is (N/N_MAX) * r_hat with
-# r_hat independent of N, so the squared CO2 loss silently weighted every sample
-# by (N/N_MAX)^2 -- on average only 1/3 of the intended weight, and an
-# effective sample size of ~0.56 (samples with few people contributed almost
-# nothing). That matches v12's late guide_w of ~20 and its stalled accuracy at
-# 20-50 people. Because C is EXACTLY linear in N and the flow does not depend
-# on N, the residual at N = N_MAX is exactly r_hat: training on it loses
-# nothing and gives every sample full weight, with no division by small N.
-# Applied to physics_loss (NS part unaffected: flow is N-independent),
-# windows_loss, ic_loss, co2_boundary_loss and the trivial-floor reference.
-CO2_LOSS_AT_FULL_OCCUPANCY = True
-
-
-def _co2_occupancy(N_people):
-    """Occupancy used inside the loss functions -- see CO2_LOSS_AT_FULL_OCCUPANCY."""
-    return torch.full_like(N_people, N_PEOPLE_MAX) if CO2_LOSS_AT_FULL_OCCUPANCY else N_people
-
-
 def compute_param_grads(loss, params, retain_graph):
     """torch.autograd.grad (NOT .backward()) so we get each loss term's
     gradient in isolation, without touching .grad / accumulating -- needed to
@@ -396,23 +382,13 @@ def gradnorm_weight_update(grad_ns, grad_co2, prev_weight):
 #                     test: is that common error at or below v10's BEST case (11-14% plane
 #                     L2 at 50 people) -- i.e. did removing the N-dependence make the
 #                     field itself better, not just rescale it?
-#                     RESULT (milestones/v12_linear_n/README.md): mixed. Source error
-#                     1.9% (best), plane L2 19-26% at EVERY N (5 people: 50% -> 22%), but
-#                     worse than v10 at 20-50 people (v10: 11-17%). Cause: CO2 residual
-#                     of each sample scaled by N/N_MAX, so the loss weighted samples by
-#                     (N/N_MAX)^2 -- ~1/3 of the intended CO2 weight (guide_w ~20 late).
-#   v13_fullocc     -- v12 + all CO2 losses evaluated at N = N_MAX
-#                     (CO2_LOSS_AT_FULL_OCCUPANCY): exact by linearity, gives every
-#                     sample full weight. Single change vs v12. Trivial-floor reference
-#                     is 0.279 (= 3 x 0.093). Check: validate_closed_room.py plane L2 at
-#                     or below v10's best (11-14%), and guide_w back in ~1-10.
 #
 # IMPORTANT: this VERSION variable (and CKPT_DIR below) is what train_gnot.py's own
 # main() uses for a FULL 20k-iteration production run. Bump this to match whichever
 # fix combination is confirmed working via the closed-window diagnostic BEFORE
 # launching the next full run through this file, so production checkpoints aren't
 # mislabeled with stale physics/sampling.
-VERSION = "v13_fullocc"
+VERSION = "v12_linear_n"
 # main() refuses to start if checkpoints for this VERSION already exist, so an old
 # result can never be overwritten by forgetting to bump this.
 
@@ -440,7 +416,6 @@ def physics_loss(model, device):
     above (CO2_WEIGHT_* constants) for why these are no longer combined into
     one number."""
     x, y, z, t, V, N_people = sample_interior(POINTS_INTERIOR, device)
-    N_people = _co2_occupancy(N_people)  # v13
     x.requires_grad_(True); y.requires_grad_(True); z.requires_grad_(True); t.requires_grad_(True)
 
     u, v, w, c, p = get_velocity_and_derivs(model, x, y, z, t, V, N_people)
@@ -502,7 +477,6 @@ def walls_loss(model, device):
 
 def windows_loss(model, device, co2_weight):
     x, y, z, t, V, N_people, window_idx = sample_windows(POINTS_WINDOWS_PER, device)
-    N_people = _co2_occupancy(N_people)  # v13
     x.requires_grad_(True); y.requires_grad_(True); z.requires_grad_(True)
     u, v, w, c, p = get_velocity_and_derivs(model, x, y, z, t, V, N_people)
 
@@ -568,7 +542,6 @@ def co2_boundary_loss(model, device, co2_weight):
     over all boundary points, weighted by co2_weight (1.0 in v8/v9)."""
     # planar faces (door/window openings excluded by sample_walls)
     x, y, z, t, V, N_people = sample_walls(POINTS_WALLS, device)
-    N_people = _co2_occupancy(N_people)  # v13
     x.requires_grad_(True); y.requires_grad_(True); z.requires_grad_(True)
     _, _, _, c, _ = model(x, y, z, t, V, N_people)
     dn_walls, _ = _planar_wall_normal_derivative(x, y, z, grad(c, x), grad(c, y), grad(c, z))
@@ -578,7 +551,7 @@ def co2_boundary_loss(model, device, co2_weight):
     # something to differentiate through)
     xc, yc, zc, tc, Vc, Nc = sample_columns_surface(POINTS_COLUMNS_PER, device)
     xc.requires_grad_(True); yc.requires_grad_(True); zc.requires_grad_(True)
-    _, _, _, cc, _ = model(xc, yc, zc, tc, Vc, _co2_occupancy(Nc))  # v13
+    _, _, _, cc, _ = model(xc, yc, zc, tc, Vc, Nc)
     centers = torch.tensor([[cx, cy] for cx, cy, _, _, _ in COLUMNS], device=device, dtype=xc.dtype)
     radii = torch.tensor([r for _, _, r, _, _ in COLUMNS], device=device, dtype=xc.dtype)
     xd_, yd_ = xc.detach(), yc.detach()
@@ -591,7 +564,7 @@ def co2_boundary_loss(model, device, co2_weight):
     # doors, on the y = ROOM_Y[0] wall: normal is the y axis
     xd, yd, zd, td, Vd, Nd = sample_doors(POINTS_DOORS, device)
     yd.requires_grad_(True)
-    _, _, _, cd, _ = model(xd, yd, zd, td, Vd, _co2_occupancy(Nd))  # v13
+    _, _, _, cd, _ = model(xd, yd, zd, td, Vd, Nd)
     dn_doors = grad(cd, yd)
 
     dn = torch.cat([dn_walls, dn_cols, dn_doors], dim=0) / CO2_GRAD_REF
@@ -600,7 +573,6 @@ def co2_boundary_loss(model, device, co2_weight):
 
 def ic_loss(model, device, co2_weight):
     x, y, z, t, V, N_people = sample_ic(POINTS_IC, device)
-    N_people = _co2_occupancy(N_people)  # v13
     x.requires_grad_(True); y.requires_grad_(True); z.requires_grad_(True)
     u, v, w, c, p = get_velocity_and_derivs(model, x, y, z, t, V, N_people)
     # v8_nondim: CO2 IC term in units of C_REF, consistent with windows_loss.
@@ -618,7 +590,6 @@ def trivial_co2_floor(device, n=200000):
     Uses _generate_interior_batch directly (not sample_interior) so this
     one-off estimate never touches the persistent pool state."""
     x, y, z, t, V, N_people = _generate_interior_batch(n, device)
-    N_people = _co2_occupancy(N_people)  # v13: same occupancy as the training loss
     dist2 = (x - SOURCE_X) ** 2 + (y - SOURCE_Y) ** 2 + (z - BREATHING_HEIGHT) ** 2
     S = N_people * EMISSION_PER_PERSON * torch.exp(-dist2 / (SIGMA ** 2))
     return ((S / S_REF) ** 2).mean().item()

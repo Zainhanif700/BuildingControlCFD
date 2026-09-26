@@ -1,3 +1,9 @@
+# ============================================================================
+# MILESTONE SNAPSHOT: v12_linear_n (2026-09-26) -- frozen copy, DO NOT EDIT.
+# Code from git commit 0340b21 (exactly what the v12 run trained with).
+# See README.md. Run scripts from INSIDE this folder.
+# ============================================================================
+
 """
 Staged smoke test for GNOT -- runs each layer of the pipeline in isolation,
 from lowest-level to full training step, printing PASS/FAIL after each stage
@@ -253,18 +259,12 @@ def test_nondim(device):
         zero_c.out_head[-1].weight[3].zero_()
         zero_c.out_head[-1].bias[3].zero_()
     _, co2_zero = physics_loss(zero_c, device)
-    # expected trivial floor (numpy, same sampling): 0.093 with N ~ U[0,50];
-    # 0.279 (= 3x) since v13 evaluates CO2 losses at N = N_MAX. Using the wrong one
-    # would mean CO2_LOSS_AT_FULL_OCCUPANCY isn't wired into physics_loss.
-    from train_gnot import CO2_LOSS_AT_FULL_OCCUPANCY
-    floor_expected = 0.279 if CO2_LOSS_AT_FULL_OCCUPANCY else 0.093
     floor = trivial_co2_floor(device, n=50000)
     print(f"  physics_loss CO2 term with C forced to 0: {co2_zero.item():.4f}; "
-          f"trivial floor estimate: {floor:.4f} (expected ~{floor_expected:.3f}; was 3.1e-6 before v8)")
-    assert 0.65 * floor_expected < floor < 1.5 * floor_expected, (
-        f"scaled trivial CO2 floor {floor:.4f} is outside the expected ~{floor_expected:.3f} range")
-    assert 0.65 * floor_expected < co2_zero.item() < 1.5 * floor_expected, (
-        f"physics_loss CO2 term is {co2_zero.item():.3e} for a zero CO2 field -- expected ~{floor_expected:.3f}. "
+          f"trivial floor estimate: {floor:.4f} (expected ~0.09; was 3.1e-6 before v8)")
+    assert 0.05 < floor < 0.15, f"scaled trivial CO2 floor {floor:.4f} is outside the expected ~0.09 range"
+    assert 0.05 < co2_zero.item() < 0.15, (
+        f"physics_loss CO2 term is {co2_zero.item():.3e} for a zero CO2 field -- expected ~0.09. "
         f"The /S_REF scaling in physics_loss is missing or wrong."
     )
     # (b2) OUTPUT SCALING (found by audit: nothing else checks it). Force the
