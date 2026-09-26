@@ -31,7 +31,7 @@ from point_sampler import ROOM_X, ROOM_Y, ROOM_Z, WINDOWS, DOORS, COLUMNS, NUM_W
 #   "v1_smooth_co2" -- original run, KNOWN BAD CO2 (room-wide smooth gradient,
 #                      confirmed physically impossible by the closed-window test)
 #   "v2_co2_fix"    -- multi-octave Fourier features + adaptive CO2 loss weight
-VERSION = "v8_nondim"  # pre-v8 checkpoints are refused by check_checkpoint_compat
+VERSION = "v12_linear_n"  # older-format checkpoints are refused by check_checkpoint_compat
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 CKPT_PATH = os.path.join(HERE, "checkpoints", VERSION, f"gnot_{VERSION}_final.pth")

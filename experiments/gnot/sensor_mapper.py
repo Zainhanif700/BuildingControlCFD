@@ -82,6 +82,9 @@ def estimate_occupancy(readings: list[RawSensorReading]) -> float:
     OPEN QUESTION: what counting logic does Alexander's setup actually use
     (people-counting beams? CO2-based inference? manual headcount)? Placeholder
     just returns 0 until this is confirmed.
+    NOTE (v12): the model's CO2 is exactly proportional to N_people, so this
+    placeholder 0 makes predicted CO2 exactly 0 everywhere -- replace it before
+    any sensor-driven use.
     """
     # TODO: replace once we know how occupancy is actually derived
     return 0.0

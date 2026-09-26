@@ -12,7 +12,8 @@ request -- this is not shared code with experiments/pinto/):
   GNOT (this file): the network is given several DIFFERENT TYPES of
   boundary information as separate tokens -- 8 window tokens (each with its
   own position AND its own velocity V_k), 2 door tokens (position only, fixed
-  outlet rule), and 1 occupancy token (room-wide N_people, no position). This
+  outlet rule), and 1 occupancy token (room-wide; since v12 it carries a
+  CONSTANT value -- occupancy enters only via an exact linear factor on CO2). This
   matches GNOT's own idea of handling *heterogeneous* input tokens, rather
   than PINTO's uniform sensor-point idea.
 
@@ -96,7 +97,7 @@ ROOM_CENTER = ((ROOM_X[0] + ROOM_X[1]) / 2, (ROOM_Y[0] + ROOM_Y[1]) / 2, (ROOM_Z
 
 class TokenEncoder(nn.Module):
     """Encodes one context token: its fixed real-world position (3,) + its
-    scenario value (1, e.g. V_k or N_people) + a learned type embedding
+    scenario value (1, e.g. V_k; the occupancy token's value is constant since v12) + a learned type embedding
     (window / door / occupancy) -> a d_model vector."""
 
     def __init__(self, d_model=D_MODEL, n_types=3):
@@ -351,8 +352,8 @@ class GNOTOperator(nn.Module):
 
         # v8_nondim: normalize token inputs to ~[0,1] before the first
         # Linear->Tanh layer. Raw N_people (0-50) saturated ~82% of units at
-        # N=25 (so the network could barely tell 20 people from 50 -- and CO2
-        # emission is proportional to N); raw positions (x up to 15.5 m) had
+        # N=25 (history: since v12 the occupancy token gets a constant value --
+        # see forward()); raw positions (x up to 15.5 m) had
         # the same problem, making the 8 window tokens hard to tell apart.
         # V is in [0,5] m/s, less severe, but scaled too for consistency.
         # Doors carry value 0 either way. Built on the fly from plain Python
@@ -372,7 +373,16 @@ class GNOTOperator(nn.Module):
 
     def forward(self, x, y, z, t, V, N_people):
         """All inputs shape (B,1) except V which is (B,8). Returns u,v,w,p,c each (B,1)."""
-        context = self._build_context(V, N_people)          # (B, 11, D)
+        # v12: the network body must NOT see the occupancy -- N enters ONLY through
+        # the exact linear factor on C at the end of forward(). A first v12 attempt
+        # multiplied C by N/N_MAX but still fed N into the occupancy token, so the
+        # output was N * C_hat(N), which is NOT proportional to N (the smoke test
+        # caught it: C(20) != 2*C(10) by 0.14% at random init). Feeding a CONSTANT
+        # occupancy value makes C exactly linear in N. It is also correct physics
+        # for the flow: with no buoyancy term, velocity and pressure do not depend
+        # on N, and now they cannot. (The occupancy token remains as a learned,
+        # scenario-independent context token.)
+        context = self._build_context(V, torch.full_like(N_people, N_PEOPLE_MAX))  # (B, 11, D)
         q = self.query_encoder(x, y, z, t).unsqueeze(1)      # (B, 1, D)
 
         for block in self.blocks:
@@ -413,8 +423,9 @@ class GNOTOperator(nn.Module):
         # transform). It also matches the physics: in a closed room C grows
         # ~linearly in t near the start, so C_hat only needs to be the
         # (dimensionless) accumulation rate. C_hat still depends freely on t,
-        # x, y, z, V and N, so saturation / flushing by open windows remains
-        # learnable. The velocity path (A1..A3) is unaffected.
+        # x, y, z and V (since v12 NOT on N -- see below), so saturation /
+        # flushing by open windows remains learnable. The velocity path
+        # (A1..A3) is unaffected.
         #
         # v12: HARD linearity in occupancy, C proportional to N_people. This is EXACT for
         # this model: the CO2 equation dc/dt + u.grad(c) - D lap(c) = S is linear in c;

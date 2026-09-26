@@ -6,8 +6,11 @@ occupancies, heights and times -- plus two figures for presentations.
 The closed-room problem (u = 0, pure diffusion + source, c(t=0) = 0) is LINEAR
 in the source, and the source is proportional to N_people. So ONE reference
 solve at N = 1 gives the exact reference for every N by scaling: c_N = N * c_1.
-The PINN, in contrast, is evaluated separately at each N -- this tests its
-ability to generalize across occupancy, which it learned only from physics.
+The network is evaluated separately at each N. Before v12 this tested its
+ability to generalize across occupancy (learned only from physics). From v12 on
+the model is EXACTLY linear in N by construction, so all relative errors are
+identical across N -- compare the common error level against earlier versions'
+best case instead.
 
 Cases: N_people in {5, 20, 50} x height z in {0.5, 1.10, 2.0} m x t in
 {30, 60, 120} s (27 cases). For each: CO2 at the source column (x, y of the

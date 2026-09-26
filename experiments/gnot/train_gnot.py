@@ -370,8 +370,12 @@ def gradnorm_weight_update(grad_ns, grad_co2, prev_weight):
 #                     cases): plane L2 11-14% at 50 people, 14-17% at 20, but 47-54% at
 #                     5 -- an N-independent error component dominating at low
 #                     occupancy. Single change vs v10 (fresh run, constant LR).
-#                     Check: validate_closed_room.py -- 5-people plane error should
-#                     drop to the level of the 20/50-people cases.
+#                     Check: validate_closed_room.py. NOTE: with exact linearity the
+#                     relative error is IDENTICAL at every N by construction, so 'the
+#                     5-people rows improve' is automatic, not a success test. The real
+#                     test: is that common error at or below v10's BEST case (11-14% plane
+#                     L2 at 50 people) -- i.e. did removing the N-dependence make the
+#                     field itself better, not just rescale it?
 #
 # IMPORTANT: this VERSION variable (and CKPT_DIR below) is what train_gnot.py's own
 # main() uses for a FULL 20k-iteration production run. Bump this to match whichever

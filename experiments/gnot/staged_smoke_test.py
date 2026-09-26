@@ -226,15 +226,15 @@ def test_nondim(device):
     sat_q = sat(pre["query"])
     tok = pre["token"]                 # (B, 11, D): 8 windows, 2 doors, 1 occupancy
     sat_win = sat(tok[:, :NUM_WINDOWS])
-    sat_occ = sat(tok[:, -1])          # FIX (found by audit): checked SEPARATELY --
-    # averaged over all 11 tokens, a broken N_people scaling (1 token of 11,
-    # ~9%) could hide under a 10% threshold.
+    sat_occ = sat(tok[:, -1])          # occupancy token -- since v12 it always carries the
+    # CONSTANT value N_MAX/N_MAX = 1 (N enters only via the linear C factor), so this
+    # just checks that constant token isn't saturated; N-independence is tested in (g).
     print(f"  saturated first-layer units at t={T_MAX:.0f}s: {sat_q * 100:.1f}% (was ~88% before v8); "
-          f"window tokens at V={V_MAX}: {sat_win * 100:.1f}%; occupancy token at N={N_PEOPLE_MAX:.0f}: "
-          f"{sat_occ * 100:.1f}% (was ~91%)")
+          f"window tokens at V={V_MAX}: {sat_win * 100:.1f}%; constant occupancy token: "
+          f"{sat_occ * 100:.1f}% (raw N=50 was ~91% before v8)")
     assert sat_q < 0.10, f"query encoder still {sat_q:.2%} saturated at t=T_MAX -- t scaling not applied?"
     assert sat_win < 0.10, f"window tokens {sat_win:.2%} saturated -- V/position scaling not applied?"
-    assert sat_occ < 0.10, f"occupancy token {sat_occ:.2%} saturated at N=N_PEOPLE_MAX -- N scaling not applied?"
+    assert sat_occ < 0.10, f"occupancy token {sat_occ:.2%} saturated"
     in_dim = model.query_encoder.proj[0].in_features
     expected_in = 2 * model.query_encoder.fourier.n_freq + 3  # fourier + t_hat + ramp + proximity
     assert in_dim == expected_in, f"query encoder input dim {in_dim}, expected {expected_in} (ramp feature missing?)"
@@ -355,6 +355,18 @@ def test_nondim(device):
           f"relative |C(20) - 2*C(10)| = {lin_dev:.2e} (must be ~0)")
     assert C_n0.abs().max().item() == 0.0, "C is not exactly 0 for an empty room"
     assert lin_dev < 1e-5, f"C does not scale linearly with N (rel. deviation {lin_dev:.2e})"
+    # ...and the FLOW must not depend on N at all (no buoyancy term in this model)
+    A_10 = model(xe, ye, ze, t60, V_mix, torch.full((n, 1), 10.0, device=device))
+    A_20 = model(xe, ye, ze, t60, V_mix, torch.full((n, 1), 20.0, device=device))
+    u10 = model.velocity_from_potential(A_10[0], A_10[1], A_10[2], xe, ye, ze)
+    u20 = model.velocity_from_potential(A_20[0], A_20[1], A_20[2], xe, ye, ze)
+    flow_dev = max((a - b).abs().max().item() for a, b in zip(u10 + (A_10[4],), u20 + (A_20[4],)))
+    flow_scale = max(q.abs().max().item() for q in u10 + (A_10[4],))
+    print(f"  flow independent of N: max |(u,v,w,p)(N=10) - (u,v,w,p)(N=20)| = {flow_dev:.2e} "
+          f"(flow scale {flow_scale:.2e}; must be ~0)")
+    # tolerance, not exact equality: identical inputs can still differ in the last bits
+    # between two GPU autograd passes; a real N leak shows up at ~1e-3 relative
+    assert flow_dev <= 1e-6 * flow_scale + 1e-12, f"velocity/pressure change with N by {flow_dev:.2e} -- N leaks into the network"
 
 
 @stage("1. FourierFeatures -- shape + finiteness + 1st/2nd derivative w.r.t. raw coords")
