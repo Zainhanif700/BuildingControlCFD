@@ -12,6 +12,7 @@ later cross-checking against his trained model):
     nu=0.01, rho=1.0, diffusivity=0.005, emission_per_person=1.15e-4,
     sigma=2.5, breathing_height=1.10, tau_ramp=2.0
 """
+import math
 import os
 import time
 import torch
@@ -60,10 +61,39 @@ POINTS_COLUMNS_PER = 40   # x 4 columns = 160 -- no-slip on the columns' curved 
 POINTS_WINDOWS_PER = 40   # x 8 windows = 320
 POINTS_DOORS = 200
 POINTS_IC = 400
-MAX_ITERS = 20000
+MAX_ITERS = 30000  # v11: v10 trained iterations 0-20000; v11 continues 20001-30000
 LOG_EVERY = 10
 CKPT_EVERY = 1000
 LR = 1e-3
+
+# --- v11_latedecay: two-phase learning-rate schedule ---
+# Constant LR while the physics is being learned, then a cosine decay to refine
+# it. v10 was validated against a grid-converged finite-difference reference
+# (milestones/v10_hardic/README.md): 2% error at the source but ~14% relative
+# L2 over the breathing-height plane, concentrated in the tails. A late decay
+# is the standard way to reduce that remaining error: a constant LR of 1e-3
+# keeps Adam's steps too large to settle fine detail. v6_lr_decay failed
+# because it decayed from iteration 0 and throttled CO2 BEFORE CO2 had been
+# learned at all (CO2 stayed on the trivial solution then); by iter 20000 of
+# v10 CO2 is learned and validated, so decaying only from there is a
+# different, well-founded experiment.
+#
+# RESUME_FROM: continue from v10's iter-20000 checkpoint (it stores the Adam
+# state, so there is no optimizer restart transient) instead of redoing
+# v10's 20000 iterations. Set to None to train from scratch -- the SAME
+# schedule then applies (constant LR to LR_DECAY_START, decay afterwards).
+RESUME_FROM = "checkpoints/v10_hardic/gnot_v10_hardic_iter20000.pth"  # relative to this file
+LR_DECAY_START = 20000
+LR_MIN = 1e-5
+
+
+def lr_at(it):
+    """LR for iteration `it`: LR until LR_DECAY_START, then cosine from LR down
+    to exactly LR_MIN at MAX_ITERS."""
+    if it <= LR_DECAY_START:
+        return LR
+    frac = min(1.0, (it - LR_DECAY_START) / (MAX_ITERS - LR_DECAY_START))
+    return LR_MIN + 0.5 * (LR - LR_MIN) * (1.0 + math.cos(math.pi * frac))
 
 # REVERTED (v7_higher_co2_weight): v6_lr_decay tested a cosine LR decay to
 # address the CO2 magnitude oscillation seen in v5 (see
@@ -312,13 +342,21 @@ def gradnorm_weight_update(grad_ns, grad_co2, prev_weight):
 #                     Single change vs v9. The CO2 part of ic_loss is now identically
 #                     0 (kept; harmless). Check: probe_co2_time.py C(t=0) row = 0,
 #                     far-corner CO2 ~0 instead of -0.04, growth unchanged or better.
+#                     RESULT: validated against a grid-converged finite-difference
+#                     reference (fd_reference_closed_room.py): 2% error at the source,
+#                     identical peak location, ~14% relative L2 over the breathing-height
+#                     plane (error in the tails). No training collapse.
+#   v11_latedecay   -- v10 + a LATE learning-rate decay: resume v10 at iter 20000 (with
+#                     its Adam state) and cosine-decay LR 1e-3 -> 1e-5 over iters
+#                     20001-30000 (see RESUME_FROM / lr_at). Single change vs v10.
+#                     Check: FD-reference plane error vs v10's ~14%.
 #
 # IMPORTANT: this VERSION variable (and CKPT_DIR below) is what train_gnot.py's own
 # main() uses for a FULL 20k-iteration production run. Bump this to match whichever
 # fix combination is confirmed working via the closed-window diagnostic BEFORE
 # launching the next full run through this file, so production checkpoints aren't
 # mislabeled with stale physics/sampling.
-VERSION = "v10_hardic"
+VERSION = "v11_latedecay"
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 CKPT_DIR = os.path.join(HERE, "checkpoints", VERSION)
@@ -544,6 +582,26 @@ def main():
     # (after a warm-up) by gradnorm_weight_update(); tracked as running state
     # across iterations, so it lives here in main().
     co2_weight = 1.0
+
+    # v11: optionally resume (model weights + Adam state) -- see RESUME_FROM.
+    start_iter = 0
+    if RESUME_FROM is not None:
+        from gnot_model import check_checkpoint_compat
+        resume_path = os.path.join(HERE, RESUME_FROM)
+        if not os.path.isfile(resume_path):
+            raise SystemExit(f"RESUME_FROM checkpoint not found: {resume_path}")
+        ckpt = torch.load(resume_path, map_location=device)
+        check_checkpoint_compat(ckpt, resume_path)
+        if "optimizer_state" not in ckpt:
+            raise SystemExit(f"{resume_path} has no optimizer_state -- resume from an "
+                             f"iter-numbered checkpoint, not _final/_best")
+        model.load_state_dict(ckpt["model_state"])        # in place: optimizer keeps the same tensors
+        optimizer.load_state_dict(ckpt["optimizer_state"])
+        co2_weight = ckpt.get("co2_weight", 1.0)
+        start_iter = ckpt["iter"] + 1
+        print(f"[v11] resumed from {resume_path} (iter={ckpt['iter']}, version={ckpt.get('version')}); "
+              f"continuing at iter {start_iter}")
+    print(f"[v11] LR schedule: {LR:g} constant until iter {LR_DECAY_START}, cosine to {LR_MIN:g} at iter {MAX_ITERS}")
     guide_w = float("nan")  # diagnostic only: Expert's Guide norm-balancing weight
 
     # Best-loss checkpointing (added in v7): a safety net that keeps whichever
@@ -562,7 +620,10 @@ def main():
     # though nvidia-smi showed several GB still free (classic "several
     # medium graphs at once" problem, not a hard memory ceiling).
     start = time.time()
-    for it in range(MAX_ITERS + 1):
+    for it in range(start_iter, MAX_ITERS + 1):
+        cur_lr = lr_at(it)                      # v11: set explicitly every iteration
+        for group in optimizer.param_groups:    # (no scheduler object -> no scheduler state to resume)
+            group["lr"] = cur_lr
         optimizer.zero_grad()
 
         # L_ns and L_co2 both come from the SAME forward pass in physics_loss()
@@ -640,11 +701,11 @@ def main():
 
         if it % LOG_EVERY == 0:
             elapsed = time.time() - start
-            speed = (it + 1) / elapsed if elapsed > 0 else 0.0
+            speed = (it - start_iter + 1) / elapsed if elapsed > 0 else 0.0
             print(f"[Iter {it:05d}/{MAX_ITERS}] Total={total_val:.5f} | "
                   f"NS={L_ns.item():.5f} CO2(scaled)={L_co2.item():.5f} CO2_weight={co2_weight:.2f} guide_w={guide_w:.3g} "
                   f"Walls={L_walls.item():.5f} Windows={L_windows.item():.5f} Doors={L_doors.item():.5f} "
-                  f"IC={L_ic.item():.5f} CO2_BC={L_co2bc.item():.5f} | {speed:.2f} it/s")
+                  f"IC={L_ic.item():.5f} CO2_BC={L_co2bc.item():.5f} LR={cur_lr:.2e} | {speed:.2f} it/s")
 
         # v7_higher_co2_weight: save a new best-loss checkpoint any time
         # unweighted_total hits a new low, overwriting the previous best each
@@ -659,20 +720,20 @@ def main():
             best_total_val = unweighted_total
             best_path = os.path.join(CKPT_DIR, f"gnot_{VERSION}_best.pth")
             torch.save({"iter": it, "version": VERSION, "co2_weight": co2_weight,
-                        "unweighted_total": best_total_val, NONDIM_CHECKPOINT_KEY: True, MODEL_FORMAT_KEY: MODEL_FORMAT,
+                        "unweighted_total": best_total_val, NONDIM_CHECKPOINT_KEY: True, MODEL_FORMAT_KEY: MODEL_FORMAT, "lr": cur_lr,
                         "model_state": model.state_dict()}, best_path)
 
         if it % CKPT_EVERY == 0 and it > 0:
             ckpt_path = os.path.join(CKPT_DIR, f"gnot_{VERSION}_iter{it}.pth")
             torch.save({"iter": it, "version": VERSION, "co2_weight": co2_weight,
-                        NONDIM_CHECKPOINT_KEY: True, MODEL_FORMAT_KEY: MODEL_FORMAT,
+                        NONDIM_CHECKPOINT_KEY: True, MODEL_FORMAT_KEY: MODEL_FORMAT, "lr": cur_lr,
                         "model_state": model.state_dict(),
                         "optimizer_state": optimizer.state_dict()}, ckpt_path)
             print(f"  -> saved checkpoint: {ckpt_path}")
 
     final_path = os.path.join(CKPT_DIR, f"gnot_{VERSION}_final.pth")
     torch.save({"iter": MAX_ITERS, "version": VERSION, "co2_weight": co2_weight,
-                NONDIM_CHECKPOINT_KEY: True, MODEL_FORMAT_KEY: MODEL_FORMAT,
+                NONDIM_CHECKPOINT_KEY: True, MODEL_FORMAT_KEY: MODEL_FORMAT, "lr": cur_lr,
                 "model_state": model.state_dict()}, final_path)
     print(f"Training complete. Final checkpoint: {final_path}")
     print(f"Best checkpoint (lowest unweighted_total={best_total_val:.5f}): "

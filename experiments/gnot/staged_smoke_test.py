@@ -522,6 +522,37 @@ def test_one_training_step(device):
     print(f"  {n_changed}/{len(params)} parameter tensors changed after one step (expected: all of them)")
 
 
+@stage("7. v11 LR schedule + resume -- constant then cosine; resume checkpoint loads cleanly")
+def test_lr_schedule_and_resume(device):
+    import os
+    from train_gnot import lr_at, LR, LR_MIN, LR_DECAY_START, MAX_ITERS, RESUME_FROM, HERE
+    from gnot_model import GNOTOperator, check_checkpoint_compat
+    # schedule: exactly LR up to the decay start, monotone cosine, exactly LR_MIN at the end
+    assert lr_at(0) == LR and lr_at(LR_DECAY_START) == LR, "LR must be constant before LR_DECAY_START"
+    assert abs(lr_at(MAX_ITERS) - LR_MIN) < 1e-15, f"final LR {lr_at(MAX_ITERS)} != LR_MIN {LR_MIN}"
+    vals = [lr_at(i) for i in range(LR_DECAY_START, MAX_ITERS + 1, 50)]
+    assert all(a >= b for a, b in zip(vals, vals[1:])), "LR schedule is not monotonically decreasing"
+    mid = lr_at((LR_DECAY_START + MAX_ITERS) // 2)
+    assert abs(mid - (LR_MIN + 0.5 * (LR - LR_MIN))) < 1e-9, f"cosine midpoint {mid} is wrong"
+    print(f"  LR: {lr_at(0):.1e} until iter {LR_DECAY_START}, {mid:.2e} at midpoint, {lr_at(MAX_ITERS):.1e} at {MAX_ITERS}")
+    # resume path: the exact load sequence train_gnot.main() will perform
+    if RESUME_FROM is None:
+        print("  RESUME_FROM is None -- fresh run, nothing to resume")
+        return
+    path = os.path.join(HERE, RESUME_FROM)
+    assert os.path.isfile(path), f"RESUME_FROM checkpoint not found: {path}"
+    ckpt = torch.load(path, map_location=device)
+    check_checkpoint_compat(ckpt, path)
+    assert "optimizer_state" in ckpt, "resume checkpoint has no optimizer_state"
+    model = GNOTOperator().to(device)
+    opt = torch.optim.Adam(model.parameters(), lr=LR)
+    model.load_state_dict(ckpt["model_state"])
+    opt.load_state_dict(ckpt["optimizer_state"])
+    assert ckpt["iter"] + 1 <= MAX_ITERS, f"resume iter {ckpt['iter']} is already past MAX_ITERS {MAX_ITERS}"
+    print(f"  resume checkpoint OK: {RESUME_FROM} (iter={ckpt['iter']}, version={ckpt.get('version')}), "
+          f"model + Adam state load; will train iters {ckpt['iter'] + 1}-{MAX_ITERS}")
+
+
 def main():
     device = "cuda" if torch.cuda.is_available() else "cpu"
     print(f"Device: {device}")
@@ -539,6 +570,7 @@ def main():
     test_physics_loss(device)
     test_boundary_losses(device)
     test_one_training_step(device)
+    test_lr_schedule_and_resume(device)
 
     print("\n" + "=" * 60)
     if FAILED:
