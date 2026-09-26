@@ -406,13 +406,22 @@ def gradnorm_weight_update(grad_ns, grad_co2, prev_weight):
 #                     sample full weight. Single change vs v12. Trivial-floor reference
 #                     is 0.279 (= 3 x 0.093). Check: validate_closed_room.py plane L2 at
 #                     or below v10's best (11-14%), and guide_w back in ~1-10.
+#                     RESULT (milestones/v13_fullocc): plane L2 14.4-17.9% (mean 15.9%)
+#                     at every N, guide_w 2-5 -- best all-round model; source ~5-7% low.
+#                     diagnose_residual_map.py: error = accumulated residual (corr 0.93);
+#                     far field holds 91% of the squared error but only 44% of the loss.
+#   v14_uniform     -- v13 + UNIFORM interior sampling (point_sampler.SOURCE_SAMPLE_FRAC
+#                     0.6 -> 0), so the loss weights the room like the error metric.
+#                     Single change vs v13. Trivial-floor reference becomes 0.0527.
+#                     Check: validate_closed_room.py plane L2 below v13's 15.9%;
+#                     diagnose_residual_map.py far-field error share down.
 #
 # IMPORTANT: this VERSION variable (and CKPT_DIR below) is what train_gnot.py's own
 # main() uses for a FULL 20k-iteration production run. Bump this to match whichever
 # fix combination is confirmed working via the closed-window diagnostic BEFORE
 # launching the next full run through this file, so production checkpoints aren't
 # mislabeled with stale physics/sampling.
-VERSION = "v13_fullocc"
+VERSION = "v14_uniform"
 # main() refuses to start if checkpoints for this VERSION already exist, so an old
 # result can never be overwritten by forgetting to bump this.
 

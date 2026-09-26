@@ -112,10 +112,17 @@ def test_sample_interior(device):
     room_volume = (ROOM_X[1] - ROOM_X[0]) * (ROOM_Y[1] - ROOM_Y[0]) * (ROOM_Z[1] - ROOM_Z[0])
     sphere_volume = (4.0 / 3.0) * torch.pi * CO2_SOURCE_SIGMA ** 3
     uniform_baseline = min(1.0, sphere_volume / room_volume)
-    assert frac_near > uniform_baseline, (
-        f"fraction near source ({frac_near:.3f}) is not higher than the pure-uniform baseline "
-        f"({uniform_baseline:.3f}) -- source-concentrated sampling may not be working"
-    )
+    if SOURCE_SAMPLE_FRAC > 0:
+        assert frac_near > uniform_baseline, (
+            f"fraction near source ({frac_near:.3f}) is not higher than the pure-uniform baseline "
+            f"({uniform_baseline:.3f}) -- source-concentrated sampling may not be working"
+        )
+    else:
+        # v14 uniform sampling: numpy estimate for truly uniform points is 0.116 (the
+        # sphere/room ratio above ignores floor/ceiling clipping, so it is higher)
+        assert 0.07 < frac_near < 0.16, (
+            f"fraction near source {frac_near:.3f} is not the uniform-sampling value ~0.116 -- "
+            f"sampling is not uniform")
 
     # sanity-check fix #3 (closed/partial-closed window-scenario oversampling):
     # verify a meaningful fraction of V rows are EXACTLY all-zero (the all-closed
@@ -257,7 +264,14 @@ def test_nondim(device):
     # 0.279 (= 3x) since v13 evaluates CO2 losses at N = N_MAX. Using the wrong one
     # would mean CO2_LOSS_AT_FULL_OCCUPANCY isn't wired into physics_loss.
     from train_gnot import CO2_LOSS_AT_FULL_OCCUPANCY
-    floor_expected = 0.279 if CO2_LOSS_AT_FULL_OCCUPANCY else 0.093
+    # the trivial floor depends on WHERE points are sampled too (numpy estimates):
+    #   source-concentrated (SOURCE_SAMPLE_FRAC=0.6): 0.279 at N_MAX, 0.093 with N~U[0,50]
+    #   uniform (SOURCE_SAMPLE_FRAC=0, v14):           0.0527 at N_MAX
+    from point_sampler import SOURCE_SAMPLE_FRAC as _ssf
+    if _ssf == 0:
+        floor_expected = 0.0527 if CO2_LOSS_AT_FULL_OCCUPANCY else 0.0527 / 3
+    else:
+        floor_expected = 0.279 if CO2_LOSS_AT_FULL_OCCUPANCY else 0.093
     floor = trivial_co2_floor(device, n=50000)
     print(f"  physics_loss CO2 term with C forced to 0: {co2_zero.item():.4f}; "
           f"trivial floor estimate: {floor:.4f} (expected ~{floor_expected:.3f}; was 3.1e-6 before v8)")

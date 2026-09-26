@@ -225,10 +225,18 @@ SOURCE_Y = (ROOM_Y[0] + ROOM_Y[1]) / 2
 # spread (std=sigma/2), so a much larger share of the concentrated subset
 # clusters close to the true peak instead of merely somewhere within a few
 # sigma of it.
-SOURCE_SAMPLE_FRAC = 0.6  # was 0.4 -- raised since 0.4 wasn't enough signal
-# concentrated near the source to overcome the general-domain "C~0 nearly
-# everywhere" pull; the remaining 40% still stays uniform so general-domain
-# NS structure and the rest of the room keep reasonable coverage.
+SOURCE_SAMPLE_FRAC = 0.0  # v14: UNIFORM sampling (was 0.6 in v4b-v13).
+# HISTORY: 0.4 -> 0.6 were added in v4/v4b while CO2 was stuck on the trivial
+# C~0 solution. v8 found the real cause of that (missing non-dimensionalization)
+# and fixed it at the root, so the concentration is no longer needed -- and
+# diagnose_residual_map.py on v13 showed it now HURTS: the near-source region
+# (22% of the room plane) received 56% of the training CO2 loss but held only
+# 9% of the squared error, while the far field held 91% of the error with 44%
+# of the loss (a positive far-field residual = CO2 slowly 'created' where there
+# is no source). Uniform sampling makes the loss measure the room the same way
+# the error metric does (per unit volume). Uniform resampling every iteration
+# is also a strong baseline in Wu et al. 2023 (CMAME, arXiv:2207.10289).
+# The source-concentrated code path is kept (set > 0 to re-enable).
 SOURCE_SAMPLE_XY_STD = CO2_SOURCE_SIGMA / 2.0  # was CO2_SOURCE_SIGMA (2.5) --
 # halved so points cluster closer to the actual peak, not just somewhere
 # within the broader region where the source term is merely non-negligible.
