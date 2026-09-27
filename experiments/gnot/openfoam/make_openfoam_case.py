@@ -5,7 +5,8 @@ window setting -- the SAME equations and boundary conditions as the physics-info
   incompressible laminar Navier-Stokes, nu = 0.01 m^2/s (train_gnot.NU), rho = 1 (kinematic p)
   open windows  : uniform inflow v = -V_k tanh(3 t / TAU_RAMP)  (tabulated time series)
   closed windows, walls, floor, ceiling, columns : no-slip
-  doors         : p = 0, velocity inletOutlet (zero-gradient outflow)
+  doors         : p = 0, velocity pressureInletOutletVelocity (free, backflow allowed)
+  window speed scaled so each window delivers exactly V_k * A_k on the grid (flux matching)
   initial state : at rest
 CO2 is NOT solved in OpenFOAM (no compiler in the conda build for a coded Gaussian source);
 compare_with_openfoam.py transports CO2 through the OpenFOAM flow with the verified
@@ -27,7 +28,11 @@ import sys
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.dirname(HERE))
-from point_sampler import ROOM_X, ROOM_Y, ROOM_Z, WINDOWS, DOORS, COLUMNS, TAU_RAMP, T_MAX  # noqa: E402
+try:  # the room geometry lives in point_sampler.py, which imports torch/numpy
+    from point_sampler import ROOM_X, ROOM_Y, ROOM_Z, WINDOWS, DOORS, COLUMNS, TAU_RAMP, T_MAX  # noqa: E402
+except ImportError as exc:
+    raise SystemExit(f"{exc}: run this generator in the training environment (conda activate cfd); "
+                     f"only the OpenFOAM run itself needs the 'foam' environment.")
 
 NU = 0.01          # must equal train_gnot.NU (checked at the end of main())
 HEADER = """/*--------------------------------*- C++ -*----------------------------------*\\
@@ -157,6 +162,14 @@ actions
           "\npointSync false;\npatches\n(\n" + "\n".join(pats) + "\n);\n")
 
     # ---------------- 0/U and 0/p
+    # flux matching: on the grid a window is the set of boundary faces whose centre lies inside it
+    # (e.g. 6 x 0.1002 m = 0.601 m instead of 0.61 m); scale its speed so it delivers exactly
+    # V_k * A_k, the model's exact inflow
+    xc = [x0 + (i + 0.5) * h[0] for i in range(n[0])]
+    flux_fix = []
+    for (a, b, c, d) in WINDOWS:
+        n_x = sum(1 for xi in xc if a <= xi <= b)
+        flux_fix.append((b - a) / (n_x * h[0]))
     ubc = ["    walls   { type noSlip; }", "    columns { type noSlip; }"]
     for k in range(len(WINDOWS)):
         if V[k] > 0:
@@ -168,14 +181,16 @@ actions
             type table;
             values
             (
-{ramp_table(V[k], args.t_end)}
+{ramp_table(V[k] * flux_fix[k], args.t_end)}
             );
         }}
     }}""")
         else:
             ubc.append(f"    window{k + 1} {{ type noSlip; }}")
     for j in range(len(DOORS)):
-        ubc.append(f"    door{j + 1} {{ type inletOutlet; inletValue uniform (0 0 0); value uniform (0 0 0); }}")
+        # p = 0 with a free velocity, exactly like the model's door condition (backflow allowed;
+        # inletOutlet would forbid it)
+        ubc.append(f"    door{j + 1} {{ type pressureInletOutletVelocity; value uniform (0 0 0); }}")
     write(os.path.join(case, "0.orig/U"), "volVectorField", "U",
           "\ndimensions [0 1 -1 0 0 0 0];\ninternalField uniform (0 0 0);\nboundaryField\n{\n" + "\n".join(ubc) + "\n}\n")
     pbc = ["    walls   { type zeroGradient; }", "    columns { type zeroGradient; }"]
