@@ -200,6 +200,54 @@ def test_sample_interior(device):
     reset_interior_pools()  # leave a clean slate for the rest of this test run
 
 
+@stage("0c. v16 scenario/location independence -- every window, wall face, column and interior region sees all scenario types")
+def test_scenario_location_independence(device):
+    """Guards the v16 bug fix (point_sampler.sample_scenario shuffles its rows). Before it,
+    windows 5-6 only ever saw all-closed scenarios, the x-max wall / floor / column 3 never
+    saw flow, and far-field interior points never saw closed windows."""
+    import numpy as np
+    from point_sampler import (sample_windows, sample_walls, sample_columns_surface, sample_doors,
+                               sample_interior, CLOSED_SCENARIO_FRAC, SOURCE_X, SOURCE_Y,
+                               BREATHING_HEIGHT, CO2_SOURCE_SIGMA, ROOM_X, ROOM_Z, COLUMNS, NUM_WINDOWS)
+    torch.manual_seed(0)
+    lo, hi = CLOSED_SCENARIO_FRAC - 0.12, CLOSED_SCENARIO_FRAC + 0.12
+    groups = []
+    x, y, z, t, V, N, idx = sample_windows(400, device)
+    closed_all = (V == 0).all(dim=1).cpu().numpy()
+    own_open = (V.gather(1, idx) > 0).squeeze(1).cpu().numpy()
+    idx = idx.squeeze(1).cpu().numpy()
+    for k in range(NUM_WINDOWS):
+        groups.append((f"window {k + 1}", closed_all[idx == k]))
+        assert own_open[idx == k].mean() > 0.4, (
+            f"window {k + 1}: only {own_open[idx == k].mean():.2f} of its points have it OPEN -- "
+            f"it is barely trained as an inflow")
+    x, y, z, t, V, N = sample_walls(3000, device)
+    ca = (V == 0).all(dim=1).cpu().numpy()
+    xn, zn = x.squeeze(1).cpu().numpy(), z.squeeze(1).cpu().numpy()
+    groups += [("wall x=max", ca[xn == ROOM_X[1]]), ("wall x=0", ca[xn == ROOM_X[0]]),
+               ("floor", ca[zn == ROOM_Z[0]]), ("ceiling", ca[zn == ROOM_Z[1]])]
+    x, y, z, t, V, N = sample_columns_surface(400, device)
+    ca = (V == 0).all(dim=1).cpu().numpy()
+    xn, yn = x.squeeze(1).cpu().numpy(), y.squeeze(1).cpu().numpy()
+    for k, (cx, cy, r, _, _) in enumerate(COLUMNS):
+        groups.append((f"column {k + 1}", ca[np.abs(np.hypot(xn - cx, yn - cy) - r) < 1e-3]))
+    x, y, z, t, V, N = sample_doors(800, device)
+    ca = (V == 0).all(dim=1).cpu().numpy()
+    xn = x.squeeze(1).cpu().numpy()
+    groups += [("door 1", ca[xn < ROOM_X[1] / 2]), ("door 2", ca[xn >= ROOM_X[1] / 2])]
+    x, y, z, t, V, N = sample_interior(4000, device)
+    ca = (V == 0).all(dim=1).cpu().numpy()
+    d = torch.sqrt((x - SOURCE_X) ** 2 + (y - SOURCE_Y) ** 2 + (z - BREATHING_HEIGHT) ** 2).squeeze(1).cpu().numpy()
+    groups += [("interior near source", ca[d < CO2_SOURCE_SIGMA]), ("interior far field", ca[d >= CO2_SOURCE_SIGMA])]
+    bad = []
+    for name, g in groups:
+        f = g.mean() if len(g) else float("nan")
+        if not (len(g) >= 30 and lo <= f <= hi):
+            bad.append(f"{name}: {f:.2f} (n={len(g)})")
+    print("  all-closed share per location: " + ", ".join(f"{n} {g.mean():.2f}" for n, g in groups))
+    assert not bad, (f"all-closed share should be ~{CLOSED_SCENARIO_FRAC} everywhere, but: " + "; ".join(bad))
+
+
 @stage("0b. v8 non-dimensionalization -- no input saturation, training CO2 loss actually scaled, checkpoint guard")
 def test_nondim(device):
     from gnot_model import GNOTOperator, check_checkpoint_compat
@@ -648,6 +696,7 @@ def main():
               "but won't tell you anything about GPU memory behavior.")
 
     test_sample_interior(device)
+    test_scenario_location_independence(device)
     test_nondim(device)
     test_fourier_features(device)
     test_query_encoder(device)

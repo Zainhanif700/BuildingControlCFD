@@ -172,6 +172,18 @@ def sample_scenario(n, device):
         V_partial = V_partial * (~closed_mask).float()
         V_parts.append(V_partial)
     V = torch.cat(V_parts, dim=0)
+    # v16 BUG FIX: shuffle the scenario rows. V_parts is built in BLOCKS
+    # (uniform | all-closed | partial), and every sampler lays out its points in
+    # a FIXED spatial order (window 1..8, wall face by face, uniform-then-source
+    # interior points) -- so without this, each location always got the same
+    # scenario type. Found in v13 by check_physics_consistency.py +
+    # crosscheck_windows.py: windows 5-6 (and most of 7) only ever saw
+    # all-closed scenarios (never trained as open inflows); the x = ROOM_X[1]
+    # wall, most of the floor and column 3 never had no-slip enforced while air
+    # was flowing; far-field interior points only ever saw all-open scenarios,
+    # so the closed-room far field was never trained (where D1 found 91% of the
+    # closed-room error). Present since fix #3 (v4); affects v4-v15.
+    V = V[torch.randperm(n, device=device)]
 
     return t, V, N_people
 

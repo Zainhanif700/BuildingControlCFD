@@ -433,17 +433,33 @@ def gradnorm_weight_update(grad_ns, grad_co2, prev_weight):
 #                     1e-3, same clipping, same 20k iterations -- single change vs v13.
 #                     Check: plane L2 below v13's 15.9% at every N and source error
 #                     not worse; expect each iteration ~1.1-1.5x slower.
+#                     RESULT (mid-run, CPU validation): 1.16 vs 1.18 it/s (SOAP nearly free).
+#                     iter 5000: plane L2 21.8% (v13 at 5000: 29.4%) -- faster start; but
+#                     iter 10000: 21.6% (v13 at 10000: 15.4%) -- stalled. Not better than v13.
+#                     Confounded by the sampler bug found the same day (see v16).
+#   v16_shuffle     -- v13 setup (Adam) + BUG FIX in point_sampler.sample_scenario: scenario
+#                     rows are now shuffled. Before, scenario TYPE was tied to point ORDER
+#                     (uniform | all-closed | partial blocks vs. window 1..8 / wall-by-face /
+#                     uniform-then-source point layout): windows 5-6 never trained open, the
+#                     x-max wall + floor + column 3 never had no-slip with flow, far-field
+#                     interior never saw closed windows. Found by check_physics_consistency.py
+#                     (air leaks through walls, ~0 through doors) + crosscheck_windows.py
+#                     (inflow error 13% on the training mix, 59% on random V at the same
+#                     points). Affects v4-v15. Single change vs v13.
+#                     Check: validate_closed_room.py plane L2 vs v13's 15.9% (expect lower:
+#                     the far field, 91% of v13's error, is now trained with closed windows);
+#                     check_physics_consistency.py: window inflow, door outflow, leakage.
 #
 # IMPORTANT: this VERSION variable (and CKPT_DIR below) is what train_gnot.py's own
 # main() uses for a FULL 20k-iteration production run. Bump this to match whichever
 # fix combination is confirmed working via the closed-window diagnostic BEFORE
 # launching the next full run through this file, so production checkpoints aren't
 # mislabeled with stale physics/sampling.
-VERSION = "v15_soap"
+VERSION = "v16_shuffle"
 
 # v15: optimizer switch. "adam" = v1-v14 behaviour; "soap" = soap.py (official
 # implementation, github.com/nikhilvyas/SOAP, MIT licence, unmodified copy).
-OPTIMIZER = "soap"
+OPTIMIZER = "adam"   # v16: back to v13's optimizer so the sampler fix is the only change
 SOAP_BETAS = (0.99, 0.999)        # Wang et al. 2025 PINN setting (library default (0.95, 0.95))
 SOAP_PRECONDITION_FREQUENCY = 2   # Wang et al. 2025 (library default 10)
 SOAP_WEIGHT_DECAY = 0.0           # library default 0.01 -- off, as with Adam in v1-v14
