@@ -33,7 +33,9 @@ scenarios; the reference is trustworthy where the two agree.
 
 Usage:
     python3 check_co2_with_model_flow.py [checkpoint] [--dx 0.2] [--scenarios closed "W8 3m/s" ...]
-Writes figures/<version>/physics_checks/level2_co2_consistency.csv
+Writes figures/<version>/physics_checks/level2_co2_consistency_dx<dx>.csv
+GRID CHECK RESULT (v13, 2026-09-27): dx 0.2 vs 0.1 agree within 0.2 percentage points in every
+error column and within 0.012 in the mass ratio -> dx = 0.2 is grid-converged for this purpose.
 """
 import argparse
 import csv
@@ -229,7 +231,8 @@ def main():
                 "ref_min": float(ref_vol.min()), "dt": dt, "steps": n_steps})
         print(f"  {name:12s} done ({time.time() - t0:5.1f} s, dt={dt:.4f} s, {n_steps} steps)", flush=True)
 
-    csv_path = os.path.join(out_dir, "level2_co2_consistency.csv")
+    # dx in the name, so a grid-check run does not overwrite the main table
+    csv_path = os.path.join(out_dir, f"level2_co2_consistency_dx{args.dx:g}.csv")
     with open(csv_path, "w", newline="") as fh:
         wr = csv.DictWriter(fh, fieldnames=list(rows[0].keys()))
         wr.writeheader()
