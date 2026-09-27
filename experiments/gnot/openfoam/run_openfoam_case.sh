@@ -8,6 +8,12 @@ NP="${2:-4}"
 cd "$CASE"
 command -v pimpleFoam > /dev/null || { echo "OpenFOAM not found -- run: conda activate foam"; exit 1; }
 say() { echo "[$(date '+%T')] $*"; }
+trap 'echo "FAILED at: $BASH_COMMAND -- see the newest log.* file in $CASE"; ls -t log.* 2>/dev/null | head -1' ERR
+
+# clean leftovers of an earlier run: an existing 0/ (fields with window/door patches that do not
+# exist yet on the fresh blockMesh mesh) makes subsetMesh fail; also old sets, time dirs, processors
+rm -rf 0 processor* constant/polyMesh
+find . -maxdepth 1 -regextype posix-extended -regex './[0-9.]+(e[-+]?[0-9]+)?' ! -name '0.orig' -exec rm -rf {} +
 
 say "mesh: blockMesh";                 blockMesh > log.blockMesh 2>&1
 say "mesh: remove the columns";        cp system/topoSetDict.fluid system/topoSetDict
