@@ -22,7 +22,7 @@ from point_sampler import (
     sample_interior, sample_walls, sample_doors, sample_windows, sample_ic,
     sample_columns_surface, _generate_interior_batch,
     ROOM_X, ROOM_Y, ROOM_Z, NUM_WINDOWS, CO2_SOURCE_SIGMA, BREATHING_HEIGHT,
-    EMISSION_PER_PERSON, S_REF, C_REF, TAU_RAMP, COLUMNS, N_PEOPLE_MAX,
+    EMISSION_PER_PERSON, S_REF, C_REF, TAU_RAMP, COLUMNS, N_PEOPLE_MAX, WINDOWS, DOORS,
 )
 
 # --- physical constants (matching Alexander's config exactly) ---
@@ -461,13 +461,24 @@ def gradnorm_weight_update(grad_ns, grad_co2, prev_weight):
 #                         uniform instead of source-concentrated.
 #                     Check (post_training_checks.sh): closed-room plane L2 vs v13's 15.9%;
 #                     window inflow / door outflow / leakage / CO2 budget in the level-3 check.
+#                     RESULT at iter 5000 (stopped there for v17): closed room 25.6% (v13 at
+#                     5000: 29.4%); window inflow 70-98% of target at 1-5 m/s (v13: 6-60%), but
+#                     85-93% error at 0.2 m/s; door outflow still ~0.01 m^3/s -- air leaves
+#                     through the WALLS (soft no-slip too cheap for a spread-out leak).
+#   v17_fluxbc      -- v16_fixes + flux-based scaling of the velocity BCs (see the v17_fluxbc
+#                     comment above walls_loss): wall/column normal velocity scaled by
+#                     A_SOLID / Q_scale(V,t) (term = (leak flux / inflow)^2), window inflow error
+#                     relative to the window's own speed. An exact hard wall constraint was
+#                     checked numerically and rejected (Stokes: zero net flux per opening).
+#                     Check: level 3 door outflow ~ window inflow, leak < 10% of inflow; 0.2 m/s
+#                     rows like the 1-5 m/s rows; closed room not worse than v16 at the same iter.
 #
 # IMPORTANT: this VERSION variable (and CKPT_DIR below) is what train_gnot.py's own
 # main() uses for a FULL 20k-iteration production run. Bump this to match whichever
 # fix combination is confirmed working via the closed-window diagnostic BEFORE
 # launching the next full run through this file, so production checkpoints aren't
 # mislabeled with stale physics/sampling.
-VERSION = "v16_fixes"
+VERSION = "v17_fluxbc"
 
 # v15: optimizer switch. "adam" = v1-v14 behaviour; "soap" = soap.py (official
 # implementation, github.com/nikhilvyas/SOAP, MIT licence, unmodified copy).
@@ -556,12 +567,66 @@ def physics_loss(model, device):
     return ns_loss, co2_loss
 
 
-def walls_loss(model, device):
+# --- v17_fluxbc: flux-based scaling of the velocity boundary conditions -------------
+# Found by check_physics_consistency.py on v16_fixes (iter 5000): air entered through the
+# windows (70-98% of the target) but left through the WALLS, not the doors (door outflow
+# ~0.01 m^3/s). Cause: the pointwise no-slip loss mean(u^2) makes a leak of ~0.01 m/s cost
+# only ~1e-4 per point, yet spread over ~440 m^2 of solid surface it carries as much air as
+# the windows. (An exact hard constraint u = curl(phi^2 A) with phi = 0 on the walls was
+# checked numerically first and REJECTED: by Stokes' theorem the net flux through every
+# opening is then the circulation of phi^2 A around its rim, which is 0 -- no through-flow
+# possible without an additional particular solution.)
+# Fix = measure the leak as what it physically is, a FLUX relative to the scenario's
+# through-flow: the normal velocity at each solid-surface point is scaled by
+# A_SOLID / Q_scale(V, t), so the term equals (leaked flux / window inflow)^2 -- a leak as
+# large as the inflow costs ~1, the same as a completely wrong window. With the velocity
+# exactly divergence-free, no leak means the air MUST leave through the doors.
+# Same idea for the window inflow: the error is measured RELATIVE to the window's own
+# speed (floor V_REL_FLOOR), so a 0.2 m/s window counts as much as a 5 m/s one (before, the
+# loss scaled with V^2: slow openings were ~600x under-weighted, audit suspicion S1;
+# v16 at iter 5000 had 85-93% inflow error at 0.2 m/s).
+# Both are non-dimensionalizations by the scenario's own scales (as v8 did globally and
+# v13 for occupancy), not new loss terms.
+_LX, _LY, _LZ = ROOM_X[1] - ROOM_X[0], ROOM_Y[1] - ROOM_Y[0], ROOM_Z[1] - ROOM_Z[0]
+WINDOW_AREAS = [(x1 - x0) * (z1 - z0) for x0, x1, z0, z1 in WINDOWS]
+A_SOLID = (2 * _LX * _LZ + 2 * _LY * _LZ + 2 * _LX * _LY
+           - sum((x1 - x0) * (z1 - z0) for x0, x1, z0, z1 in DOORS) - sum(WINDOW_AREAS)
+           - 2 * sum(math.pi * r ** 2 for _, _, r, _, _ in COLUMNS)
+           + sum(2 * math.pi * r * (zh - zl) for _, _, r, zl, zh in COLUMNS))  # ~441 m^2 (closed windows excluded)
+Q_FLOOR = 0.1        # m^3/s: floor on the flux scale (very slow openings; all-closed rows have u = 0 exactly)
+V_REL_FLOOR = 0.1    # m/s: floor on the window-speed scale in the relative inflow error
+BC_SCALING_WARMUP = 2000   # iterations over which both v17 scalings are blended in (review: at random
+# init the flux term is O(10-1000) vs O(1) for the rest and would swamp the PDE terms / push the flow to 0)
+
+
+def throughflow_scale(V, t=None):
+    """Q_scale = max(sum_k V_k A_k, Q_FLOOR): the steady inflow of the open windows for this
+    scenario, per point, shape (B, 1). Deliberately WITHOUT the tanh(3t/TAU_RAMP) ramp
+    (independent review of v17): the network's velocity does not ramp with t, so a ramped
+    scale made the weight explode for t -> 0 (loss spikes up to ~1e4). The true normal velocity
+    is 0 at every wall point at every time, so a time-independent scale is equally correct.
+    (t is accepted and ignored, so callers need not change.)"""
+    areas = torch.tensor(WINDOW_AREAS, device=V.device, dtype=V.dtype).view(1, -1)
+    return (V * areas).sum(dim=1, keepdim=True).clamp_min(Q_FLOOR)
+
+
+def _planar_normal_component(x, y, z, u, v, w):
+    """Velocity component normal to the planar face each wall point lies on (exact
+    coordinate equality, as in _planar_wall_normal_derivative; sign irrelevant, squared)."""
+    on_x = (x == ROOM_X[0]) | (x == ROOM_X[1])
+    on_y = (y == ROOM_Y[0]) | (y == ROOM_Y[1])
+    return torch.where(on_x, u, torch.where(on_y, v, w))
+
+
+def walls_loss(model, device, flux_weight=1.0):
+    """flux_weight: v17 warm-up factor for the flux-scaled leak term (0 -> 1 over BC_SCALING_WARMUP)."""
     # planar room faces (walls, floor, ceiling; door/window openings excluded)
     x, y, z, t, V, N_people = sample_walls(POINTS_WALLS, device)
     x.requires_grad_(True); y.requires_grad_(True); z.requires_grad_(True)
     u, v, w, c, p = get_velocity_and_derivs(model, x, y, z, t, V, N_people)
     loss = (u ** 2).mean() + (v ** 2).mean() + (w ** 2).mean()
+    un = _planar_normal_component(x.detach(), y.detach(), z.detach(), u, v, w)
+    un_scaled = [A_SOLID * un / throughflow_scale(V, t)]           # v17: leak as flux ratio
 
     # FIX (found by audit): the 4 columns are solid, floor-to-ceiling pillars --
     # no-slip must also hold on their curved surfaces, or nothing stops the
@@ -570,10 +635,19 @@ def walls_loss(model, device):
     xc.requires_grad_(True); yc.requires_grad_(True); zc.requires_grad_(True)
     uc, vc, wc, cc, pc = get_velocity_and_derivs(model, xc, yc, zc, tc, Vc, Nc)
     loss = loss + (uc ** 2).mean() + (vc ** 2).mean() + (wc ** 2).mean()
-    return loss
+    # v17: radial (normal) velocity on the column surfaces, same flux scaling
+    centers = torch.tensor([[cx, cy] for cx, cy, _, _, _ in COLUMNS], device=device, dtype=xc.dtype)
+    radii = torch.tensor([r for _, _, r, _, _ in COLUMNS], device=device, dtype=xc.dtype)
+    xd_, yd_ = xc.detach(), yc.detach()
+    k = ((xd_ - centers[:, 0]) ** 2 + (yd_ - centers[:, 1]) ** 2).argmin(dim=1)
+    nx = ((xd_.squeeze(-1) - centers[k, 0]) / radii[k]).unsqueeze(-1)
+    ny = ((yd_.squeeze(-1) - centers[k, 1]) / radii[k]).unsqueeze(-1)
+    un_scaled.append(A_SOLID * (uc * nx + vc * ny) / throughflow_scale(Vc, tc))
+    return loss + flux_weight * (torch.cat(un_scaled, dim=0) ** 2).mean()
 
 
-def windows_loss(model, device, co2_weight):
+def windows_loss(model, device, co2_weight, rel_weight=1.0):
+    """rel_weight: v17 warm-up blend from the absolute (0) to the relative (1) inflow error."""
     x, y, z, t, V, N_people, window_idx = sample_windows(POINTS_WINDOWS_PER, device)
     N_people = _co2_occupancy(N_people)  # v13
     x.requires_grad_(True); y.requires_grad_(True); z.requires_grad_(True)
@@ -593,7 +667,10 @@ def windows_loss(model, device, co2_weight):
     # ~0.5% of the CO2 lost by 120 s). Averaged over ALL window points, so each open
     # point keeps the same weight as before.
     is_open = (V_at_point > 0).float()
-    return ((u ** 2).mean() + ((v - target_v) ** 2).mean() + (w ** 2).mean()
+    # v17: velocity error RELATIVE to the window's own speed (floor V_REL_FLOOR; closed
+    # windows, target 0, are measured against the floor) -- see the v17_fluxbc comment above.
+    scale2 = ((1.0 - rel_weight) + rel_weight * target_v.abs().clamp_min(V_REL_FLOOR)) ** 2
+    return ((u ** 2 / scale2).mean() + ((v - target_v) ** 2 / scale2).mean() + (w ** 2 / scale2).mean()
             + co2_weight * (is_open * (c / C_REF) ** 2).mean())
 
 
@@ -827,10 +904,13 @@ def main():
                 continue
             p.grad = total_grad.clone() if p.grad is None else p.grad + total_grad
 
-        L_walls = walls_loss(model, device)
+        # v17: blend in the flux-scaled leak term and the relative inflow error over the
+        # first BC_SCALING_WARMUP iterations (see BC_SCALING_WARMUP comment)
+        bc_lam = min(1.0, it / BC_SCALING_WARMUP)
+        L_walls = walls_loss(model, device, flux_weight=bc_lam)
         L_walls.backward()
 
-        L_windows = windows_loss(model, device, co2_weight)
+        L_windows = windows_loss(model, device, co2_weight, rel_weight=bc_lam)
         L_windows.backward()
 
         L_doors = doors_loss(model, device)

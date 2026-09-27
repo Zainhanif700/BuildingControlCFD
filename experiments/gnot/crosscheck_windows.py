@@ -1,7 +1,8 @@
 """
 Cross-check for check_physics_consistency.py: does the model reproduce the
 window inflow BC? Uses the TRAINING code's own sampler (sample_windows) and
-the same velocity terms as train_gnot.windows_loss, then swaps in fixed window
+the ABSOLUTE velocity error (train_gnot.windows_loss uses a relative one since v17;
+the percentages printed here are relative per window either way), then swaps in fixed window
 settings at the SAME points, to separate a bug in the level-3 check from a real
 model limitation.
 

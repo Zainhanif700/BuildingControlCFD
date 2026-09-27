@@ -48,7 +48,8 @@ N_PEOPLE, T_EVAL = 20.0, 60.0
 
 
 def total_loss(model, device, seed, backward):
-    """Exactly the v13 training loss (co2_weight = 1), on the batch defined by `seed`.
+    """The CURRENT train_gnot loss functions (co2_weight = 1; since v17 incl. the flux-scaled wall
+    term and the relative window error at full weight), on the batch defined by `seed`.
     Each term is backward()-ed right away (like train_gnot.main) to keep memory low."""
     torch.manual_seed(seed)
     parts = {}

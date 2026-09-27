@@ -298,15 +298,74 @@ def test_audit_fixes(device):
     torch.manual_seed(123)                                   # same draw as inside windows_loss
     xw, yw, zw, tw, Vw, Nw, idx = sample_windows(POINTS_WINDOWS_PER, "cpu")
     Vk = Vw.gather(1, idx)
-    vel = ((Vk * torch.tanh(3.0 * tw / TAU_RAMP)) ** 2).mean().item()
+    target = Vk * torch.tanh(3.0 * tw / TAU_RAMP)
+    from train_gnot import V_REL_FLOOR
+    vel = (target ** 2 / target.abs().clamp_min(V_REL_FLOOR) ** 2).mean().item()   # v17: relative error
     frac_open = (Vk > 0).float().mean().item()
     assert abs(L - (vel + frac_open)) < 1e-4, (
-        f"windows_loss {L:.5f} != velocity {vel:.5f} + open share {frac_open:.3f}: CO2 c=0 must apply only at "
-        f"OPEN windows (old behaviour would give {vel + 1:.5f})")
+        f"windows_loss {L:.5f} != relative velocity term {vel:.5f} + open share {frac_open:.3f}: CO2 c=0 must "
+        f"apply only at OPEN windows (old behaviour would give {vel + 1:.5f})")
     Lic = ic_loss(stub, "cpu", 1.0).item()
     assert abs(Lic - 1.0) < 1e-5, f"ic_loss {Lic:.5f} != 1 (CO2 term only): a pressure term is still in the IC"
     print(f"  floor/ceiling pile-up {on_bound:.4f}; wall counts area-proportional; IC near-source share {near:.3f}; "
           f"windows_loss CO2 term on {frac_open:.2f} of window points (open only); ic_loss has no pressure term")
+
+
+@stage("0e. v17 flux-scaled wall BC -- leak term = (A_SOLID * u_n / Q_scale)^2 on walls and columns")
+def test_flux_scaled_walls(device):
+    """Stub model with a CONSTANT velocity (a, b, c): walls_loss must equal the no-slip part
+    a^2+b^2+c^2 (planar) + a^2+b^2+c^2 (columns) plus mean((A_SOLID*u_n/Q)^2) with u_n = a / b / c on
+    x / y / z faces and a*nx + b*ny on columns. Also checks A_SOLID and throughflow_scale."""
+    from point_sampler import sample_walls, sample_columns_surface, ROOM_X, ROOM_Y, COLUMNS, WINDOWS
+    from train_gnot import (walls_loss, throughflow_scale, A_SOLID, Q_FLOOR, POINTS_WALLS, POINTS_COLUMNS_PER)
+    assert 430 < A_SOLID < 450, f"A_SOLID = {A_SOLID:.1f} m^2, expected ~441"
+    V = torch.tensor([[3.0] + [0.0] * 7, [0.0] * 8, [5.0] * 8])
+    t = torch.tensor([[60.0], [60.0], [0.0]])
+    q = throughflow_scale(V, t).squeeze(1).tolist()
+    areas = [(w[1] - w[0]) * (w[3] - w[2]) for w in WINDOWS]
+    expect_q = [3.0 * areas[0], Q_FLOOR, 5.0 * sum(areas)]   # time-independent (no ramp), floor only if ~closed
+    assert all(abs(a - b) < 1e-3 for a, b in zip(q, expect_q)), f"throughflow_scale {q} != {expect_q}"
+    a, b, c = 0.03, -0.02, 0.01
+
+    class Stub(torch.nn.Module):
+        def forward(self, x, y, z, t, V, N):
+            zero = 0.0 * (x + y + z)
+            return zero, zero, zero, zero, zero
+
+        def velocity_from_potential(self, A1, A2, A3, x, y, z):
+            return a + 0.0 * x, b + 0.0 * y, c + 0.0 * z
+    torch.manual_seed(7)
+    L = walls_loss(Stub(), "cpu").item()
+    torch.manual_seed(7)
+    x, y, z, tw, Vw, _ = sample_walls(POINTS_WALLS, "cpu")
+    xc, yc, zc, tc, Vc, _ = sample_columns_surface(POINTS_COLUMNS_PER, "cpu")
+    on_x = (x == ROOM_X[0]) | (x == ROOM_X[1])
+    on_y = (y == ROOM_Y[0]) | (y == ROOM_Y[1])
+    un = torch.where(on_x, torch.full_like(x, a), torch.where(on_y, torch.full_like(x, b), torch.full_like(x, c)))
+    cols = []
+    for xi, yi in zip(xc.squeeze(1).tolist(), yc.squeeze(1).tolist()):
+        cx, cy, r, _, _ = min(COLUMNS, key=lambda C: (xi - C[0]) ** 2 + (yi - C[1]) ** 2)
+        cols.append(a * (xi - cx) / r + b * (yi - cy) / r)
+    unc = torch.tensor(cols).view(-1, 1)
+    flux = torch.cat([A_SOLID * un / throughflow_scale(Vw, tw), A_SOLID * unc / throughflow_scale(Vc, tc)])
+    expected = 2 * (a * a + b * b + c * c) + (flux ** 2).mean().item()
+    assert abs(L - expected) < 1e-4 * max(1.0, expected), f"walls_loss {L:.6f} != expected {expected:.6f}"
+    # warm-up factor 0 must remove the leak term entirely (only the old no-slip part remains)
+    torch.manual_seed(7)
+    L0 = walls_loss(Stub(), "cpu", flux_weight=0.0).item()
+    assert abs(L0 - 2 * (a * a + b * b + c * c)) < 1e-7, f"walls_loss with flux_weight=0 is {L0}, not the no-slip part"
+    # windows_loss with rel_weight=0 must reproduce the old ABSOLUTE velocity error
+    from train_gnot import windows_loss, POINTS_WINDOWS_PER
+    from point_sampler import sample_windows, TAU_RAMP
+    torch.manual_seed(11)
+    Lw = windows_loss(Stub(), "cpu", 0.0, rel_weight=0.0).item()        # co2_weight 0: velocity part only
+    torch.manual_seed(11)
+    _, _, _, tw_, Vw_, _, idx_ = sample_windows(POINTS_WINDOWS_PER, "cpu")
+    tgt = -Vw_.gather(1, idx_) * torch.tanh(3.0 * tw_ / TAU_RAMP)
+    expect_w = (a * a) + ((b - tgt) ** 2).mean().item() + (c * c)
+    assert abs(Lw - expect_w) < 1e-4 * max(1.0, expect_w), f"windows_loss(rel_weight=0) {Lw:.6f} != absolute {expect_w:.6f}"
+    print(f"  A_SOLID={A_SOLID:.1f} m^2; walls_loss for a constant 0.01-0.03 m/s velocity = {L:.3f} "
+          f"(no-slip part only would be {2 * (a * a + b * b + c * c):.5f}) -- leak is now expensive")
 
 
 @stage("0b. v8 non-dimensionalization -- no input saturation, training CO2 loss actually scaled, checkpoint guard")
@@ -759,6 +818,7 @@ def main():
     test_sample_interior(device)
     test_scenario_location_independence(device)
     test_audit_fixes(device)
+    test_flux_scaled_walls(device)
     test_nondim(device)
     test_fourier_features(device)
     test_query_encoder(device)
