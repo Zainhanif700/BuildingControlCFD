@@ -76,9 +76,9 @@ def check_checkpoint_compat(ckpt, path=""):
         f"(live format is {MODEL_FORMAT!r}); loading it here would give WRONG predictions. "
         f"Run the frozen scripts inside milestones/<that version>/ instead "
         f"(e.g. milestones/v8_nondim/, milestones/v9_zeroflow_bc/, milestones/v10_hardic/, "
-        f"milestones/v13_fullocc/). For any 'v12_linear_n' checkpoint (v12-v18) use the tagged code: "
-        f"git worktree add ../gnot_v12format code-v12-format; for 'v19_throughflow' (v19): "
-        f"git worktree add ../gnot_v19format code-v19-format; then run the scripts from there."
+        f"milestones/v13_fullocc/). From v16 on, every version is a git tag named like its VERSION: "
+        f"git worktree add ../<version> <version> (e.g. git worktree add ../v19 v19_throughflow), "
+        f"then run the scripts from that folder."
     )
 
 
