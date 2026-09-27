@@ -14,13 +14,25 @@
 #   bash post_training_checks.sh checkpoints/v16_fixes/gnot_v16_fixes_final.pth          # on CPU
 #   bash post_training_checks.sh checkpoints/v16_fixes/gnot_v16_fixes_iter5000.pth       # mid-run
 #   bash post_training_checks.sh <checkpoint> --gpu      # only when no training is running
+#   bash post_training_checks.sh <iterN checkpoint> --skip-smoke   # mid-run: the smoke test checks
+#        the CODE, not the checkpoint, so once per code version is enough (saves 5-15 min on CPU)
 #
 # Results: checks_<checkpoint name>.log, figures in figures/<version>/ (for an iterN
 # checkpoint they are moved to figures/<version>_iterN/ so the final run never mixes with them).
+# The log fills line by line (unbuffered), so progress can be followed with tail -f.
 set -u
-CKPT="${1:?usage: bash post_training_checks.sh <checkpoint> [--gpu]}"
+CKPT="${1:?usage: bash post_training_checks.sh <checkpoint> [--gpu] [--skip-smoke]}"
 [ -f "$CKPT" ] || { echo "checkpoint not found: $CKPT"; exit 1; }
-if [ "${2:-}" = "--gpu" ]; then DEV=cuda; else DEV=cpu; export CUDA_VISIBLE_DEVICES=""; fi
+DEV=cpu; SKIP_SMOKE=0
+for opt in "${@:2}"; do
+    case "$opt" in
+        --gpu) DEV=cuda ;;
+        --skip-smoke) SKIP_SMOKE=1 ;;
+        *) echo "unknown option: $opt (use --gpu and/or --skip-smoke)"; exit 1 ;;
+    esac
+done
+[ "$DEV" = cpu ] && export CUDA_VISIBLE_DEVICES=""
+export PYTHONUNBUFFERED=1
 NAME=$(basename "$CKPT" .pth)
 [ -f staged_smoke_test.py ] || { echo "run this from experiments/gnot"; exit 1; }
 case "$CKPT" in *"'"*) echo "checkpoint path must not contain a quote"; exit 1 ;; esac
@@ -39,7 +51,11 @@ run() {  # run <title> <command...>: print a header, run, report PASS/FAIL by ex
 FAILED=""
 {
     echo "post-training checks: $CKPT  (version=$VERSION, device=$DEV, $(date))"
-    run "1 code smoke test" bash -c "python3 staged_smoke_test.py 2>&1 | grep -E 'STAGE|PASS|FAIL|all-closed share|RESULT|Error' ; exit \${PIPESTATUS[0]}"
+    if [ "$SKIP_SMOKE" = 1 ]; then
+        echo; echo "== 1 code smoke test: SKIPPED (--skip-smoke; run it once per code version)"
+    else
+        run "1 code smoke test" bash -c "python3 staged_smoke_test.py 2>&1 | grep --line-buffered -E 'STAGE|PASS|FAIL|all-closed share|RESULT|Error' ; exit \${PIPESTATUS[0]}"
+    fi
     run "2 closed-room validation (FD reference)" bash -c "python3 validate_closed_room.py '$CKPT' 2>&1 | grep -A8 SUMMARY; exit \${PIPESTATUS[0]}"
     run "3 residual diagnosis D1 (closed room)" bash -c "python3 diagnose_residual_map.py '$CKPT' 2>&1 | tail -22; exit \${PIPESTATUS[0]}"
     run "4 window-BC cross-check" python3 crosscheck_windows.py "$CKPT"
