@@ -522,21 +522,13 @@ def test_boundary_losses(device):
           f"doors={L_doors.item():.5f} ic={L_ic.item():.5f} co2_bc={L_co2bc.item():.5f}")
 
 
-@stage("6. One full combined training step -- weights actually change, no crash")
-def test_one_training_step(device):
+def _training_step(model, params, optimizer, device):
+    """One iteration exactly as train_gnot.main() does it."""
     from train_gnot import (
         physics_loss, walls_loss, windows_loss, doors_loss, ic_loss,
-        compute_param_grads, GRAD_CLIP_MAX_NORM, LR,
+        compute_param_grads, GRAD_CLIP_MAX_NORM,
     )
-    from gnot_model import GNOTOperator
-    model = GNOTOperator().to(device)
-    params = list(model.parameters())
-    optimizer = torch.optim.Adam(params, lr=LR)
     co2_weight = 1.0
-
-    # snapshot weights before the step
-    before = [p.detach().clone() for p in params]
-
     optimizer.zero_grad()
     L_ns, L_co2 = physics_loss(model, device)
     grad_ns = compute_param_grads(L_ns, params, retain_graph=True)
@@ -562,11 +554,47 @@ def test_one_training_step(device):
     torch.nn.utils.clip_grad_norm_(params, GRAD_CLIP_MAX_NORM)
     optimizer.step()
 
+
+@stage("6. Full combined training steps (configured optimizer) -- weights change, state finite, resumable")
+def test_one_training_step(device):
+    """v15: uses the CONFIGURED optimizer (train_gnot.make_optimizer). SOAP's first
+    step only initialises its preconditioner and leaves the weights unchanged
+    (by design, soap.py), so 3 steps are run and the weights checked after them."""
+    import io
+    from train_gnot import make_optimizer, OPTIMIZER
+    from gnot_model import GNOTOperator
+    model = GNOTOperator().to(device)
+    params = list(model.parameters())
+    optimizer = make_optimizer(params)
+    before = [p.detach().clone() for p in params]
+
+    for _ in range(3):
+        _training_step(model, params, optimizer, device)
+
     n_changed = sum(1 for b, p in zip(before, params) if not torch.equal(b, p.detach()))
     assert n_changed > 0, "optimizer.step() ran but NO parameters changed -- gradients may all be zero/None"
     for p in params:
         assert_finite(p.detach(), "a model parameter after optimizer.step()")
-    print(f"  {n_changed}/{len(params)} parameter tensors changed after one step (expected: all of them)")
+    n_state = 0
+    for st in optimizer.state.values():   # moments (+ SOAP's preconditioner matrices) finite
+        for v in st.values():
+            for t in (v if isinstance(v, list) else [v]):
+                if torch.is_tensor(t):
+                    assert_finite(t, "an optimizer state tensor")
+                    n_state += 1
+    print(f"  optimizer={OPTIMIZER}: {n_changed}/{len(params)} parameter tensors changed after 3 steps "
+          f"(expected: all of them); {n_state} state tensors finite")
+
+    # checkpoint round trip: save the optimizer state, load into a fresh optimizer, keep training
+    buf = io.BytesIO()
+    torch.save(optimizer.state_dict(), buf)
+    buf.seek(0)
+    opt2 = make_optimizer(params)
+    opt2.load_state_dict(torch.load(buf, map_location=device))
+    _training_step(model, params, opt2, device)
+    for p in params:
+        assert_finite(p.detach(), "a model parameter after a step with the reloaded optimizer")
+    print("  optimizer state saves, reloads and keeps training (resume path OK)")
 
 
 def _check_decay_schedule(lr_at, LR, LR_MIN, LR_DECAY_START, MAX_ITERS):
@@ -600,13 +628,16 @@ def test_lr_schedule_and_resume(device):
     ckpt = torch.load(path, map_location=device)
     check_checkpoint_compat(ckpt, path)
     assert "optimizer_state" in ckpt, "resume checkpoint has no optimizer_state"
+    from train_gnot import make_optimizer, OPTIMIZER
+    assert ckpt.get("optimizer", "adam") == OPTIMIZER, \
+        f"resume checkpoint used {ckpt.get('optimizer', 'adam')!r}, OPTIMIZER is {OPTIMIZER!r}"
     model = GNOTOperator().to(device)
-    opt = torch.optim.Adam(model.parameters(), lr=LR)
+    opt = make_optimizer(model.parameters())
     model.load_state_dict(ckpt["model_state"])
     opt.load_state_dict(ckpt["optimizer_state"])
     assert ckpt["iter"] + 1 <= MAX_ITERS, f"resume iter {ckpt['iter']} is already past MAX_ITERS {MAX_ITERS}"
     print(f"  resume checkpoint OK: {RESUME_FROM} (iter={ckpt['iter']}, version={ckpt.get('version')}), "
-          f"model + Adam state load; will train iters {ckpt['iter'] + 1}-{MAX_ITERS}")
+          f"model + {OPTIMIZER} state load; will train iters {ckpt['iter'] + 1}-{MAX_ITERS}")
 
 
 def main():

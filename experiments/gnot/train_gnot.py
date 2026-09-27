@@ -415,13 +415,49 @@ def gradnorm_weight_update(grad_ns, grad_co2, prev_weight):
 #                     Single change vs v13. Trivial-floor reference becomes 0.0527.
 #                     Check: validate_closed_room.py plane L2 below v13's 15.9%;
 #                     diagnose_residual_map.py far-field error share down.
+#                     RESULT (negative, not a milestone): plane L2 17.8% mean (v13 15.9%),
+#                     source -10 to -25% (v13 -5 to -7%). Far field improved, source
+#                     region starved (near-source share of error^2 9% -> 61%). Reverted
+#                     to SOURCE_SAMPLE_FRAC = 0.6. Same night, lbfgs_probe.py on v13: a
+#                     fixed-batch loss 46,000x lower and plane L2 14.6% -> 7.4%, but
+#                     held-out loss 2x HIGHER -> the optimizer is a real limit, yet a
+#                     second-order fit to one fixed batch overfits. Hence v15.
+#   v15_soap        -- v13 setup + SOAP optimizer instead of Adam (OPTIMIZER = "soap").
+#                     SOAP = Adam run in the eigenbasis of a Shampoo preconditioner
+#                     (Vyas et al. 2024, arXiv:2409.11321); for PINNs it gave large
+#                     gains over Adam with points RESAMPLED every step (Wang, Bhartari,
+#                     Li & Perdikaris 2025, arXiv:2502.00604) -- i.e. the curvature
+#                     benefit L-BFGS showed, without the fixed batch. Settings from that
+#                     paper: betas (0.99, 0.999), precondition_frequency 2; weight_decay
+#                     0 (the library default 0.01 is not used in PINN training). Same LR
+#                     1e-3, same clipping, same 20k iterations -- single change vs v13.
+#                     Check: plane L2 below v13's 15.9% at every N and source error
+#                     not worse; expect each iteration ~1.1-1.5x slower.
 #
 # IMPORTANT: this VERSION variable (and CKPT_DIR below) is what train_gnot.py's own
 # main() uses for a FULL 20k-iteration production run. Bump this to match whichever
 # fix combination is confirmed working via the closed-window diagnostic BEFORE
 # launching the next full run through this file, so production checkpoints aren't
 # mislabeled with stale physics/sampling.
-VERSION = "v14_uniform"
+VERSION = "v15_soap"
+
+# v15: optimizer switch. "adam" = v1-v14 behaviour; "soap" = soap.py (official
+# implementation, github.com/nikhilvyas/SOAP, MIT licence, unmodified copy).
+OPTIMIZER = "soap"
+SOAP_BETAS = (0.99, 0.999)        # Wang et al. 2025 PINN setting (library default (0.95, 0.95))
+SOAP_PRECONDITION_FREQUENCY = 2   # Wang et al. 2025 (library default 10)
+SOAP_WEIGHT_DECAY = 0.0           # library default 0.01 -- off, as with Adam in v1-v14
+
+
+def make_optimizer(params):
+    """Build the optimizer selected by OPTIMIZER. Shared by main() and the smoke test."""
+    if OPTIMIZER == "adam":
+        return torch.optim.Adam(params, lr=LR)
+    if OPTIMIZER == "soap":
+        from soap import SOAP
+        return SOAP(params, lr=LR, betas=SOAP_BETAS, weight_decay=SOAP_WEIGHT_DECAY,
+                    precondition_frequency=SOAP_PRECONDITION_FREQUENCY, eps=1e-8)
+    raise ValueError(f"unknown OPTIMIZER {OPTIMIZER!r} (use 'adam' or 'soap')")
 # main() refuses to start if checkpoints for this VERSION already exist, so an old
 # result can never be overwritten by forgetting to bump this.
 
@@ -652,8 +688,13 @@ def main():
     print(f"[v8_nondim] adaptive CO2 weighting: {'ON' if USE_ADAPTIVE_CO2_WEIGHT else 'OFF (co2_weight fixed at 1.0)'}; "
           f"guide_w column = norm-balancing weight the Expert's Guide rule would pick (diagnostic)")
 
-    optimizer = torch.optim.Adam(model.parameters(), lr=LR)
+    optimizer = make_optimizer(model.parameters())
     params = list(model.parameters())
+    if OPTIMIZER == "soap":
+        print(f"Optimizer: SOAP (betas={SOAP_BETAS}, precondition_frequency={SOAP_PRECONDITION_FREQUENCY}, "
+              f"weight_decay={SOAP_WEIGHT_DECAY}); its first step only initialises the preconditioner")
+    else:
+        print("Optimizer: Adam")
 
     # CO2 loss weight -- 1.0 and held there in v8 (USE_ADAPTIVE_CO2_WEIGHT is
     # False, see its comment). If re-enabled, it's rebalanced periodically
@@ -673,6 +714,9 @@ def main():
         if "optimizer_state" not in ckpt:
             raise SystemExit(f"{resume_path} has no optimizer_state -- resume from an "
                              f"iter-numbered checkpoint, not _final/_best")
+        if ckpt.get("optimizer", "adam") != OPTIMIZER:   # pre-v15 checkpoints carry no tag = Adam
+            raise SystemExit(f"{resume_path} was trained with {ckpt.get('optimizer', 'adam')!r}, but "
+                             f"OPTIMIZER = {OPTIMIZER!r} -- optimizer states are not interchangeable")
         model.load_state_dict(ckpt["model_state"])        # in place: optimizer keeps the same tensors
         optimizer.load_state_dict(ckpt["optimizer_state"])
         co2_weight = ckpt.get("co2_weight", 1.0)
@@ -808,7 +852,7 @@ def main():
             ckpt_path = os.path.join(CKPT_DIR, f"gnot_{VERSION}_iter{it}.pth")
             torch.save({"iter": it, "version": VERSION, "co2_weight": co2_weight,
                         NONDIM_CHECKPOINT_KEY: True, MODEL_FORMAT_KEY: MODEL_FORMAT, "lr": cur_lr,
-                        "model_state": model.state_dict(),
+                        "optimizer": OPTIMIZER, "model_state": model.state_dict(),
                         "optimizer_state": optimizer.state_dict()}, ckpt_path)
             print(f"  -> saved checkpoint: {ckpt_path}")
 

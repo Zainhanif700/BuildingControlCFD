@@ -225,7 +225,11 @@ SOURCE_Y = (ROOM_Y[0] + ROOM_Y[1]) / 2
 # spread (std=sigma/2), so a much larger share of the concentrated subset
 # clusters close to the true peak instead of merely somewhere within a few
 # sigma of it.
-SOURCE_SAMPLE_FRAC = 0.0  # v14: UNIFORM sampling (was 0.6 in v4b-v13).
+SOURCE_SAMPLE_FRAC = 0.6  # v4b-v13 value; restored for v15 after v14's negative result.
+# v14 RESULT (negative): uniform sampling (0.0) improved the far field but
+# starved the source region -- plane L2 17.8% mean (v13: 15.9%), source error
+# -10 to -25% (v13: -5 to -7%), residual at the source -44% -> -20% of S over
+# time. Net worse, so 0.6 is back; v13 stays the reference.
 # HISTORY: 0.4 -> 0.6 were added in v4/v4b while CO2 was stuck on the trivial
 # C~0 solution. v8 found the real cause of that (missing non-dimensionalization)
 # and fixed it at the root, so the concentration is no longer needed -- and
@@ -236,7 +240,7 @@ SOURCE_SAMPLE_FRAC = 0.0  # v14: UNIFORM sampling (was 0.6 in v4b-v13).
 # is no source). Uniform sampling makes the loss measure the room the same way
 # the error metric does (per unit volume). Uniform resampling every iteration
 # is also a strong baseline in Wu et al. 2023 (CMAME, arXiv:2207.10289).
-# The source-concentrated code path is kept (set > 0 to re-enable).
+# (The v14 hypothesis above was tested and rejected -- see v14 RESULT.)
 SOURCE_SAMPLE_XY_STD = CO2_SOURCE_SIGMA / 2.0  # was CO2_SOURCE_SIGMA (2.5) --
 # halved so points cluster closer to the actual peak, not just somewhere
 # within the broader region where the source term is merely non-negligible.
