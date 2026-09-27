@@ -299,8 +299,11 @@ def test_audit_fixes(device):
     xw, yw, zw, tw, Vw, Nw, idx = sample_windows(POINTS_WINDOWS_PER, "cpu")
     Vk = Vw.gather(1, idx)
     target = Vk * torch.tanh(3.0 * tw / TAU_RAMP)
-    from train_gnot import V_REL_FLOOR
-    vel = (target ** 2 / target.abs().clamp_min(V_REL_FLOOR) ** 2).mean().item()   # v17: relative error
+    from train_gnot import V_REL_FLOOR, USE_WINDOW_NORMAL_TARGET
+    if USE_WINDOW_NORMAL_TARGET:
+        vel = (target ** 2 / target.abs().clamp_min(V_REL_FLOOR) ** 2).mean().item()   # v17: relative error
+    else:
+        vel = 0.0   # v19: no normal-velocity target (flux exact); stub has u = w = 0
     frac_open = (Vk > 0).float().mean().item()
     assert abs(L - (vel + frac_open)) < 1e-4, (
         f"windows_loss {L:.5f} != relative velocity term {vel:.5f} + open share {frac_open:.3f}: CO2 c=0 must "
@@ -348,24 +351,114 @@ def test_flux_scaled_walls(device):
         cols.append(a * (xi - cx) / r + b * (yi - cy) / r)
     unc = torch.tensor(cols).view(-1, 1)
     flux = torch.cat([A_SOLID * un / throughflow_scale(Vw, tw), A_SOLID * unc / throughflow_scale(Vc, tc)])
-    expected = 2 * (a * a + b * b + c * c) + (flux ** 2).mean().item()
+    from train_gnot import velocity_scale, USE_WINDOW_NORMAL_TARGET
+    s2 = a * a + b * b + c * c
+    slip = (s2 / velocity_scale(Vw) ** 2).mean().item() + (s2 / velocity_scale(Vc) ** 2).mean().item()  # v19: relative
+    expected = slip + (flux ** 2).mean().item()
     assert abs(L - expected) < 1e-4 * max(1.0, expected), f"walls_loss {L:.6f} != expected {expected:.6f}"
-    # warm-up factor 0 must remove the leak term entirely (only the old no-slip part remains)
+    # warm-up factor 0 must remove the leak term entirely (only the no-slip part remains)
     torch.manual_seed(7)
     L0 = walls_loss(Stub(), "cpu", flux_weight=0.0).item()
-    assert abs(L0 - 2 * (a * a + b * b + c * c)) < 1e-7, f"walls_loss with flux_weight=0 is {L0}, not the no-slip part"
-    # windows_loss with rel_weight=0 must reproduce the old ABSOLUTE velocity error
+    assert abs(L0 - slip) < 1e-5 * max(1.0, slip), f"walls_loss with flux_weight=0 is {L0}, not the no-slip part {slip}"
+    # windows_loss velocity part (co2_weight 0)
     from train_gnot import windows_loss, POINTS_WINDOWS_PER
     from point_sampler import sample_windows, TAU_RAMP
     torch.manual_seed(11)
-    Lw = windows_loss(Stub(), "cpu", 0.0, rel_weight=0.0).item()        # co2_weight 0: velocity part only
+    Lw = windows_loss(Stub(), "cpu", 0.0, rel_weight=0.0).item()
     torch.manual_seed(11)
     _, _, _, tw_, Vw_, _, idx_ = sample_windows(POINTS_WINDOWS_PER, "cpu")
-    tgt = -Vw_.gather(1, idx_) * torch.tanh(3.0 * tw_ / TAU_RAMP)
-    expect_w = (a * a) + ((b - tgt) ** 2).mean().item() + (c * c)
-    assert abs(Lw - expect_w) < 1e-4 * max(1.0, expect_w), f"windows_loss(rel_weight=0) {Lw:.6f} != absolute {expect_w:.6f}"
+    if USE_WINDOW_NORMAL_TARGET:   # rel_weight = 0 -> the old absolute error
+        tgt = -Vw_.gather(1, idx_) * torch.tanh(3.0 * tw_ / TAU_RAMP)
+        expect_w = (a * a) + ((b - tgt) ** 2).mean().item() + (c * c)
+    else:                          # v19: tangential components only, relative to U_ref
+        expect_w = ((a * a + c * c) / velocity_scale(Vw_) ** 2).mean().item()
+    assert abs(Lw - expect_w) < 1e-4 * max(1.0, expect_w), f"windows_loss {Lw:.6f} != expected {expect_w:.6f}"
     print(f"  A_SOLID={A_SOLID:.1f} m^2; walls_loss for a constant 0.01-0.03 m/s velocity = {L:.3f} "
-          f"(no-slip part only would be {2 * (a * a + b * b + c * c):.5f}) -- leak is now expensive")
+          f"(no-slip part only would be {slip:.5f}) -- leak is expensive; window/slip terms relative to U_ref")
+
+
+@stage("0f. v19 exact through-flow -- no normal velocity on ANY solid surface, exact window/door fluxes, alpha split")
+def test_throughflow_exact(device):
+    """Random-init REAL model: velocity = curl(B_p + s*phi*A). Normal velocity must vanish on walls,
+    floor, ceiling, columns, closed windows and the wall strips above the doors (up to float32
+    round-off), each open window must deliver exactly V_k*A_k (quadrature), and the doors must
+    release exactly the total inflow, split alpha : 1-alpha."""
+    import math
+    from gnot_model import GNOTOperator
+    from train_gnot import get_velocity_and_derivs
+    from point_sampler import (sample_walls, sample_columns_surface, WINDOWS, DOORS, COLUMNS,
+                               ROOM_X, ROOM_Y, ROOM_Z, NUM_WINDOWS)
+    torch.manual_seed(3)
+    model = GNOTOperator().to(device)
+    with torch.no_grad():      # review: at init alpha = 0.5 exactly, which would hide a door-order swap
+        model.alpha_head[2].bias.fill_(1.5)                                          # -> alpha ~ 0.82
+    Vrow = torch.tensor([[2.5, 0.0, 4.0, 0.0, 1.0, 0.0, 0.0, 5.0]], device=device)   # mixed open/closed
+    t60 = 60.0
+
+    def vel(x, y, z, V=Vrow, t=t60):
+        n = x.shape[0]
+        x, y, z = (a.detach().clone().requires_grad_(True) for a in (x, y, z))
+        u, v, w, _, _ = get_velocity_and_derivs(model, x, y, z, torch.full((n, 1), t, device=device),
+                                                V.expand(n, -1), torch.full((n, 1), 20.0, device=device))
+        return u.detach(), v.detach(), w.detach()
+
+    # interior speed scale
+    g = torch.Generator().manual_seed(0)
+    xi = (torch.rand(2000, 1, generator=g) * (ROOM_X[1] - 2) + 1).to(device)
+    yi = (torch.rand(2000, 1, generator=g) * (ROOM_Y[1] - 2) + 1).to(device)
+    zi = (torch.rand(2000, 1, generator=g) * (ROOM_Z[1] - 0.6) + 0.3).to(device)
+    u, v, w = vel(xi, yi, zi)
+    scale = torch.sqrt(u ** 2 + v ** 2 + w ** 2).mean().item()
+    assert scale > 0.05, f"interior speed {scale:.3e} -- the through-flow is missing"
+
+    worst = {}
+    x, y, z, _, _, _ = sample_walls(3000, device)                   # planar walls without openings
+    u, v, w = vel(x, y, z)
+    on_x = (x == ROOM_X[0]) | (x == ROOM_X[1])
+    on_y = (y == ROOM_Y[0]) | (y == ROOM_Y[1])
+    un = torch.where(on_x, u, torch.where(on_y, v, w))
+    worst["walls/floor/ceiling"] = un.abs().max().item()
+    xc, yc, zc, _, _, _ = sample_columns_surface(300, device)       # columns
+    u, v, w = vel(xc, yc, zc)
+    k = torch.stack([(xc - cx) ** 2 + (yc - cy) ** 2 for cx, cy, _, _, _ in COLUMNS], 0).argmin(0)
+    ctr = torch.tensor([[cx, cy, r] for cx, cy, r, _, _ in COLUMNS], device=device)[k.squeeze(-1)]
+    nx, ny = (xc.squeeze(-1) - ctr[:, 0]) / ctr[:, 2], (yc.squeeze(-1) - ctr[:, 1]) / ctr[:, 2]
+    worst["columns"] = (u.squeeze(-1) * nx + v.squeeze(-1) * ny).abs().max().item()
+    pts = []                                                         # closed windows + strips above doors
+    for kk, (a, b, c, d) in enumerate(WINDOWS):
+        if Vrow[0, kk] == 0:
+            pts.append((torch.rand(300, 1, device=device) * (b - a) + a, torch.full((300, 1), ROOM_Y[1], device=device),
+                        torch.rand(300, 1, device=device) * (d - c) + c))
+    for a, b, c, d in DOORS:
+        pts.append((torch.rand(300, 1, device=device) * (b - a) + a, torch.full((300, 1), ROOM_Y[0], device=device),
+                    torch.rand(300, 1, device=device) * (ROOM_Z[1] - d) + d))
+    x, y, z = (torch.cat([p[i] for p in pts]) for i in range(3))
+    _, v, _ = vel(x, y, z)
+    worst["closed windows + above doors"] = v.abs().max().item()
+    for name, val in worst.items():
+        assert val < 1e-3 * scale, f"normal velocity {val:.2e} m/s on {name} (interior speed {scale:.2f}) -- LEAK"
+
+    def flux(a, b, c, d, yval, m1=60, m2=30):                        # outward flux, midpoint rule
+        xs = a + (torch.arange(m1, device=device) + 0.5) * (b - a) / m1
+        zs = c + (torch.arange(m2, device=device) + 0.5) * (d - c) / m2
+        X, Z = torch.meshgrid(xs, zs, indexing="ij")
+        X, Z = X.reshape(-1, 1), Z.reshape(-1, 1)
+        _, v, _ = vel(X, torch.full_like(X, yval), Z)
+        sign = 1.0 if yval == ROOM_Y[1] else -1.0
+        return sign * v.mean().item() * (b - a) * (d - c)
+    ramp = math.tanh(3.0 * t60 / 2.0)
+    for kk, (a, b, c, d) in enumerate(WINDOWS):
+        target = -Vrow[0, kk].item() * ramp * (b - a) * (d - c)
+        got = flux(a, b, c, d, ROOM_Y[1])
+        assert abs(got - target) < 0.01 * max(1.0, abs(target)), f"window {kk + 1}: flux {got:.4f} != {target:.4f}"
+    q_in = sum(Vrow[0, kk].item() * ramp * (b - a) * (d - c) for kk, (a, b, c, d) in enumerate(WINDOWS))
+    fd = [flux(a, b, c, d, ROOM_Y[0], 60, 60) for a, b, c, d in DOORS]
+    assert abs(sum(fd) - q_in) < 0.01 * q_in, f"door outflow {sum(fd):.4f} != inflow {q_in:.4f}"
+    alpha = model.door_split(torch.full((1, 1), t60, device=device), Vrow).item()
+    assert abs(fd[0] / sum(fd) - alpha) < 0.01, f"door split {fd[0] / sum(fd):.3f} != alpha {alpha:.3f}"
+    print(f"  interior speed {scale:.2f} m/s; max normal velocity: " +
+          ", ".join(f"{k_} {v_:.1e}" for k_, v_ in worst.items()) +
+          f"; inflow {q_in:.3f} = door outflow {sum(fd):.3f} m^3/s, split {fd[0] / sum(fd):.3f} (alpha {alpha:.3f})")
 
 
 @stage("0b. v8 non-dimensionalization -- no input saturation, training CO2 loss actually scaled, checkpoint guard")
@@ -491,14 +584,15 @@ def test_nondim(device):
     from gnot_model import MODEL_FORMAT_KEY, MODEL_FORMAT
     for old in ({"version": "v5_closed_window_fix"}, {"version": "v8_nondim", "nondim": True},
                 {"version": "v9_zeroflow_bc", "nondim": True, "model_format": "v9_zeroflow"},
-                {"version": "v10_hardic", "nondim": True, "model_format": "v10_hardic"}):
+                {"version": "v10_hardic", "nondim": True, "model_format": "v10_hardic"},
+                {"version": "v13_fullocc", "nondim": True, "model_format": "v12_linear_n"}):
         try:
             check_checkpoint_compat(old, "fake_old.pth")
             raise AssertionError(f"check_checkpoint_compat accepted an old checkpoint: {old}")
         except RuntimeError:
             pass
     check_checkpoint_compat({"version": "v9", "nondim": True, MODEL_FORMAT_KEY: MODEL_FORMAT}, "fake_new.pth")
-    print(f"  checkpoint guard: rejects v5, v8, v9 and v10, accepts {MODEL_FORMAT} -- OK")
+    print(f"  checkpoint guard: rejects v5, v8, v9, v10 and v12-v18, accepts {MODEL_FORMAT} -- OK")
 
     # (e) v9 HARD ZERO-FLOW: with all windows closed the velocity must be
     # EXACTLY zero by construction (the loophole v8 exploited: a spurious slow
@@ -819,6 +913,7 @@ def main():
     test_scenario_location_independence(device)
     test_audit_fixes(device)
     test_flux_scaled_walls(device)
+    test_throughflow_exact(device)
     test_nondim(device)
     test_fourier_features(device)
     test_query_encoder(device)

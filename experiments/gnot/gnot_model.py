@@ -32,6 +32,7 @@ from point_sampler import (
     NUM_WINDOWS, WINDOWS, DOORS, ROOM_X, ROOM_Y, ROOM_Z, CO2_SOURCE_SIGMA, BREATHING_HEIGHT,
     T_MAX, V_MAX, N_PEOPLE_MAX, C_REF, TAU_RAMP,
 )
+from throughflow import through_flow_potential, solid_distance_phi
 
 D_MODEL = 128
 N_HEADS = 4
@@ -57,7 +58,9 @@ NONDIM_CHECKPOINT_KEY = "nondim"
 # load without error but predict the wrong velocity. Every checkpoint from v9
 # on records MODEL_FORMAT; bump it whenever forward() changes meaning.
 MODEL_FORMAT_KEY = "model_format"
-MODEL_FORMAT = "v12_linear_n"  # v10_hardic -> v12_linear_n: C output now also multiplied by N/N_MAX
+MODEL_FORMAT = "v19_throughflow"  # v12_linear_n -> v19_throughflow: velocity = curl(B_p + s*phi*A), see throughflow.py
+# (v10_hardic -> v12_linear_n: C output multiplied by N/N_MAX). Checkpoints v12-v18 carry
+# "v12_linear_n" and must be evaluated with the frozen code in milestones/<version>/.
 
 
 def check_checkpoint_compat(ckpt, path=""):
@@ -71,7 +74,9 @@ def check_checkpoint_compat(ckpt, path=""):
         f"model_format={ckpt.get(MODEL_FORMAT_KEY, 'none')}) was trained with an older model "
         f"(live format is {MODEL_FORMAT!r}); loading it here would give WRONG predictions. "
         f"Run the frozen scripts inside milestones/<that version>/ instead "
-        f"(e.g. milestones/v8_nondim/, milestones/v9_zeroflow_bc/, milestones/v10_hardic/)."
+        f"(e.g. milestones/v8_nondim/, milestones/v9_zeroflow_bc/, milestones/v10_hardic/, "
+        f"milestones/v13_fullocc/). For any 'v12_linear_n' checkpoint (v12-v18) use the tagged code: "
+        f"git worktree add ../gnot_v12format code-v12-format, then run the scripts from there."
     )
 
 
@@ -323,6 +328,12 @@ class GNOTOperator(nn.Module):
         self.out_head = nn.Sequential(
             nn.Linear(d_model, d_model), nn.Tanh(), nn.Linear(d_model, 5)  # A1,A2,A3,C,p
         )
+        # v19: door split alpha(V, t) in (0,1) -- the share of the through-flow leaving by
+        # door 1 (see throughflow.py). A function of the scenario only (not of x,y,z), so
+        # B_p stays a valid potential. Last layer zero-initialised -> alpha = 0.5 at start.
+        self.alpha_head = nn.Sequential(nn.Linear(NUM_WINDOWS + 2, 32), nn.Tanh(), nn.Linear(32, 1))
+        nn.init.zeros_(self.alpha_head[2].weight)
+        nn.init.zeros_(self.alpha_head[2].bias)
 
         # fixed real-world token positions, registered as buffers (not trained)
         self.register_buffer("window_pos", torch.tensor(WINDOW_CENTERS, dtype=torch.float32))  # (8,3)
@@ -408,7 +419,15 @@ class GNOTOperator(nn.Module):
         # constraints by construction: Lagaris et al. 1998; Sukumar &
         # Srivastava 2021 (arXiv:2104.08426).
         s = torch.sqrt(((V / V_MAX) ** 2).mean(dim=1, keepdim=True))  # (B,1), in [0,1]
-        A1, A2, A3 = s * A1, s * A2, s * A3
+        # v19_throughflow: velocity = curl(B_p + s*phi*A). phi = 0 on every solid surface
+        # (incl. closed windows) -> the network's part can never leak or change any
+        # opening's net flux; B_p = (chi, 0, psi) carries exactly the prescribed air from
+        # the open windows to the doors. See throughflow.py (derivation + verification).
+        # The correction is also multiplied by the window ramp tanh(3t/TAU_RAMP) (review): the
+        # velocity initial condition u(t=0) = 0 is then EXACT (B_p already carries the ramp).
+        phi = solid_distance_phi(x, y, z, V) * torch.tanh(3.0 * t / TAU_RAMP)
+        chi, psi = through_flow_potential(x, y, z, t, V, self.door_split(t, V))
+        A1, A2, A3 = chi + s * phi * A1, s * phi * A2, psi + s * phi * A3
         # v8_nondim: the network predicts a dimensionless CO2 value C_hat of
         # order 1; the physical concentration is C_REF * C_hat (C_REF = 0.69,
         # the closed-room accumulation bound -- see point_sampler.py). The
@@ -442,6 +461,11 @@ class GNOTOperator(nn.Module):
         # other N-independent CO2 source is ever added -- it would no longer be exact.
         C = C_REF * (t / T_MAX) * (N_people / N_PEOPLE_MAX) * C_hat
         return A1, A2, A3, C, p
+
+    def door_split(self, t, V):
+        """v19: alpha(V, t) in (0,1), (B,1): share of the through-flow leaving by door 1."""
+        feats = torch.cat([V / V_MAX, t / T_MAX, torch.tanh(3.0 * t / TAU_RAMP)], dim=-1)
+        return torch.sigmoid(self.alpha_head(feats))
 
     def velocity_from_potential(self, A1, A2, A3, x, y, z):
         """Curl trick: differentiate the vector potential to get a

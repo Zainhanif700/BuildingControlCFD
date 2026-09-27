@@ -472,13 +472,46 @@ def gradnorm_weight_update(grad_ns, grad_co2, prev_weight):
 #                     checked numerically and rejected (Stokes: zero net flux per opening).
 #                     Check: level 3 door outflow ~ window inflow, leak < 10% of inflow; 0.2 m/s
 #                     rows like the 1-5 m/s rows; closed room not worse than v16 at the same iter.
+#                     RESULT at iter 5000 (NEGATIVE, stopped at ~7000): the flow COLLAPSED -- inflow
+#                     0.3% of target with one window open (v16: 71%), 22% with all open; door
+#                     outflow still only ~5% of what enters. Windows loss flat at 0.35-0.40 from
+#                     iter 3000, guide_w fell to ~0.1-0.2 (NS gradient ~0 = almost no flow). Closed
+#                     room 18.3% (v16 at 5000: 25.6%), but with no flow to learn, not a v17 success.
+#   v18_fluxonly    -- v16_fixes + ONLY the flux-scaled leak term (USE_RELATIVE_WINDOW_LOSS = False,
+#                     absolute window error as in v16). Isolates the two v17 changes: if v18 keeps
+#                     the inflow and the leak shrinks, the relative window error caused the collapse;
+#                     if not, the cause is deeper (door jets / representability) -> exact route.
+#                     NOT RUN: a literature review (Sun et al. 2020 CMAME: soft BCs 'completely
+#                     wrong' for internal flows; Daw et al. 2023 / Rohrhofer et al. 2023: trivial
+#                     solutions as loss minima; Lagaris 1998 / Lee et al. 2026: particular solution
+#                     + correction) ranked the soft route low -> went straight to the exact route.
+#   v19_throughflow -- v16_fixes losses (absolute window error) + EXACT velocity BCs by
+#                     construction (gnot_model.MODEL_FORMAT 'v19_throughflow', throughflow.py):
+#                     u = curl(B_p + s(V)*phi*A). B_p = analytic through-flow potential: exact
+#                     inflow V_k*A_k per open window, exact zero normal velocity on walls, floor,
+#                     ceiling, columns, closed windows and above the doors, door outflow = inflow,
+#                     learned door split alpha(V,t). phi = 0 on solid surfaces -> the network part
+#                     cannot leak or change any opening's net flux (Stokes). Leak and zero-flow
+#                     collapse are impossible by construction. Tangential no-slip, window profile,
+#                     door p = 0, NS and CO2 stay soft. (The v17 flux leak term is kept but is ~0.)
+#                     After an independent review: (i) momentum residual, wall slip and window
+#                     tangential terms non-dimensionalised PER SCENARIO by U_ref = door jet speed
+#                     (velocity_scale; B_p's own residual would otherwise swamp all terms);
+#                     (ii) DOOR_STRIP 1 -> 2 m (halves B_p's residual); (iii) the correction is
+#                     multiplied by the ramp -> u(t=0) = 0 exact; (iv) no normal-velocity target at
+#                     windows (flux exact; USE_WINDOW_NORMAL_TARGET = False). Old v12-v18 checkpoints
+#                     are checked with the git tag code-v12-format.
+#                     Check: level 3 leak ~0 and door outflow = inflow (exact, sanity); closed room
+#                     vs v13's 15.9%; NS residual level; level 2 CO2 consistency. NOTE: level 3
+#                     'winErr' compares with a UNIFORM profile, so the 0.1 m edge taper of B_p shows
+#                     up there by design; the net window flux (Q_in vs Q_target) is the exact one.
 #
 # IMPORTANT: this VERSION variable (and CKPT_DIR below) is what train_gnot.py's own
 # main() uses for a FULL 20k-iteration production run. Bump this to match whichever
 # fix combination is confirmed working via the closed-window diagnostic BEFORE
 # launching the next full run through this file, so production checkpoints aren't
 # mislabeled with stale physics/sampling.
-VERSION = "v17_fluxbc"
+VERSION = "v19_throughflow"
 
 # v15: optimizer switch. "adam" = v1-v14 behaviour; "soap" = soap.py (official
 # implementation, github.com/nikhilvyas/SOAP, MIT licence, unmodified copy).
@@ -556,7 +589,13 @@ def physics_loss(model, device):
     S = N_people * EMISSION_PER_PERSON * torch.exp(-dist2 / (SIGMA ** 2))
     res_c = dc_dt + conv_c - DIFFUSIVITY * d2c - S
 
-    ns_loss = (res_u ** 2).mean() + (res_v ** 2).mean() + (res_w ** 2).mean()
+    # v19: momentum residual non-dimensionalised PER SCENARIO by U_ref^2 / L_NS (U_ref = the
+    # scenario's door jet speed, see velocity_scale) -- the same idea v8 applied to CO2. With the
+    # exact through-flow B_p (throughflow.py) the flow speed spans 0.5-17 m/s across scenarios and
+    # the raw residual ~U^2: unnormalised, B_p's own residual (training-mix mean ~1e2) would swamp
+    # every other term and make the fast scenarios dominate (independent review of v19).
+    ns_scale = velocity_scale(V) ** 2 / L_NS
+    ns_loss = ((res_u / ns_scale) ** 2).mean() + ((res_v / ns_scale) ** 2).mean() + ((res_w / ns_scale) ** 2).mean()
     # v8_nondim: divide by S_REF so the CO2 residual is O(1) instead of
     # O(6e-3) -- every term in res_c (dc/dt, conv_c, D*lap(c), S) has units
     # of concentration/second, so this is a pure rescaling of the same
@@ -595,8 +634,31 @@ A_SOLID = (2 * _LX * _LZ + 2 * _LY * _LZ + 2 * _LX * _LY
            + sum(2 * math.pi * r * (zh - zl) for _, _, r, zl, zh in COLUMNS))  # ~441 m^2 (closed windows excluded)
 Q_FLOOR = 0.1        # m^3/s: floor on the flux scale (very slow openings; all-closed rows have u = 0 exactly)
 V_REL_FLOOR = 0.1    # m/s: floor on the window-speed scale in the relative inflow error
+USE_RELATIVE_WINDOW_LOSS = False   # v18: OFF. v17 (relative window error ON) collapsed to almost no
+# flow: zero flow satisfies NS exactly, removes the leak term, and cost only ~0.5 under the relative
+# window error (closed windows at weight 1/0.1^2 = 100). With the absolute error (v16), zero flow costs
+# ~5, so collapsing is no escape. v18 isolates the flux leak term.
 BC_SCALING_WARMUP = 2000   # iterations over which both v17 scalings are blended in (review: at random
 # init the flux term is O(10-1000) vs O(1) for the rest and would swamp the PDE terms / push the flow to 0)
+
+
+A_DOORS = sum((x1 - x0) * (z1 - z0) for x0, x1, z0, z1 in DOORS)   # 4.47 m^2
+U_NS_FLOOR = 0.5     # m/s: floor on the per-scenario velocity scale (closed / very slow scenarios)
+L_NS = _LZ           # m: length scale of the momentum-residual normalisation (room height)
+USE_WINDOW_NORMAL_TARGET = False   # v19: the window inflow FLUX is exact by construction (B_p); a
+# uniform-profile target for v would only fight B_p's tapered profile (review). Kept: u = w = 0
+# (air enters normal to the window) and c = 0 at open windows.
+
+
+_ALPHA_PROBE_V = torch.tensor([[3.0] + [0.0] * 7, [0.0] * 7 + [3.0], [3.0] * 8])   # logged door splits
+
+
+def velocity_scale(V):
+    """v19: U_ref(V) = max(sum_k V_k A_k / A_DOORS, U_NS_FLOOR), (B,1): the mean door jet speed of
+    the scenario's steady through-flow -- the characteristic speed used to non-dimensionalise the
+    momentum residual and the velocity boundary terms (every scenario then counts O(1))."""
+    areas = torch.tensor(WINDOW_AREAS, device=V.device, dtype=V.dtype).view(1, -1)
+    return ((V * areas).sum(dim=1, keepdim=True) / A_DOORS).clamp_min(U_NS_FLOOR)
 
 
 def throughflow_scale(V, t=None):
@@ -624,7 +686,8 @@ def walls_loss(model, device, flux_weight=1.0):
     x, y, z, t, V, N_people = sample_walls(POINTS_WALLS, device)
     x.requires_grad_(True); y.requires_grad_(True); z.requires_grad_(True)
     u, v, w, c, p = get_velocity_and_derivs(model, x, y, z, t, V, N_people)
-    loss = (u ** 2).mean() + (v ** 2).mean() + (w ** 2).mean()
+    us2 = velocity_scale(V) ** 2                                   # v19: slip relative to U_ref
+    loss = (u ** 2 / us2).mean() + (v ** 2 / us2).mean() + (w ** 2 / us2).mean()
     un = _planar_normal_component(x.detach(), y.detach(), z.detach(), u, v, w)
     un_scaled = [A_SOLID * un / throughflow_scale(V, t)]           # v17: leak as flux ratio
 
@@ -634,7 +697,8 @@ def walls_loss(model, device, flux_weight=1.0):
     xc, yc, zc, tc, Vc, Nc = sample_columns_surface(POINTS_COLUMNS_PER, device)
     xc.requires_grad_(True); yc.requires_grad_(True); zc.requires_grad_(True)
     uc, vc, wc, cc, pc = get_velocity_and_derivs(model, xc, yc, zc, tc, Vc, Nc)
-    loss = loss + (uc ** 2).mean() + (vc ** 2).mean() + (wc ** 2).mean()
+    usc2 = velocity_scale(Vc) ** 2
+    loss = loss + (uc ** 2 / usc2).mean() + (vc ** 2 / usc2).mean() + (wc ** 2 / usc2).mean()
     # v17: radial (normal) velocity on the column surfaces, same flux scaling
     centers = torch.tensor([[cx, cy] for cx, cy, _, _, _ in COLUMNS], device=device, dtype=xc.dtype)
     radii = torch.tensor([r for _, _, r, _, _ in COLUMNS], device=device, dtype=xc.dtype)
@@ -669,6 +733,12 @@ def windows_loss(model, device, co2_weight, rel_weight=1.0):
     is_open = (V_at_point > 0).float()
     # v17: velocity error RELATIVE to the window's own speed (floor V_REL_FLOOR; closed
     # windows, target 0, are measured against the floor) -- see the v17_fluxbc comment above.
+    if not USE_WINDOW_NORMAL_TARGET:
+        # v19: flux exact by construction; only the tangential components (air enters normal to
+        # the window), relative to the scenario's U_ref, plus clean inflow c = 0 at open windows.
+        us2 = velocity_scale(V) ** 2
+        return ((u ** 2 / us2).mean() + (w ** 2 / us2).mean()
+                + co2_weight * (is_open * (c / C_REF) ** 2).mean())
     scale2 = ((1.0 - rel_weight) + rel_weight * target_v.abs().clamp_min(V_REL_FLOOR)) ** 2
     return ((u ** 2 / scale2).mean() + ((v - target_v) ** 2 / scale2).mean() + (w ** 2 / scale2).mean()
             + co2_weight * (is_open * (c / C_REF) ** 2).mean())
@@ -797,6 +867,21 @@ def trivial_co2_floor(device, n=200000):
 
 
 def main():
+    # v19: optional short dry run (--iters N --tag dry) into checkpoints/<VERSION>_<tag>/, to check
+    # loss balance, door split and speed before committing the GPU to a full run.
+    import argparse
+    global VERSION, CKPT_DIR, MAX_ITERS
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--iters", type=int, default=None, help="override MAX_ITERS (dry run)")
+    ap.add_argument("--tag", default=None, help="suffix for VERSION / checkpoint folder (dry run)")
+    args = ap.parse_args()
+    if args.tag:
+        VERSION = f"{VERSION}_{args.tag}"
+        CKPT_DIR = os.path.join(HERE, "checkpoints", VERSION)
+        os.makedirs(CKPT_DIR, exist_ok=True)
+    if args.iters:
+        MAX_ITERS = args.iters
+    print(f"VERSION={VERSION}, MAX_ITERS={MAX_ITERS}, checkpoints -> {CKPT_DIR}")
     # Refuse to overwrite an existing result: if this VERSION's checkpoint folder
     # already holds checkpoints, the user forgot to bump VERSION.
     existing = [f for f in os.listdir(CKPT_DIR) if f.endswith(".pth")]
@@ -910,7 +995,8 @@ def main():
         L_walls = walls_loss(model, device, flux_weight=bc_lam)
         L_walls.backward()
 
-        L_windows = windows_loss(model, device, co2_weight, rel_weight=bc_lam)
+        L_windows = windows_loss(model, device, co2_weight,
+                                 rel_weight=bc_lam if USE_RELATIVE_WINDOW_LOSS else 0.0)
         L_windows.backward()
 
         L_doors = doors_loss(model, device)
@@ -957,10 +1043,13 @@ def main():
         if it % LOG_EVERY == 0:
             elapsed = time.time() - start
             speed = (it - start_iter + 1) / elapsed if elapsed > 0 else 0.0
+            with torch.no_grad():   # v19: door split for three probe scenarios (W1 only / W8 only / all 3 m/s)
+                a_probe = model.door_split(torch.full((3, 1), 60.0, device=device), _ALPHA_PROBE_V.to(device))
             print(f"[Iter {it:05d}/{MAX_ITERS}] Total={total_val:.5f} | "
                   f"NS={L_ns.item():.5f} CO2(scaled)={L_co2.item():.5f} CO2_weight={co2_weight:.2f} guide_w={guide_w:.3g} "
                   f"Walls={L_walls.item():.5f} Windows={L_windows.item():.5f} Doors={L_doors.item():.5f} "
-                  f"IC={L_ic.item():.5f} CO2_BC={L_co2bc.item():.5f} LR={cur_lr:.2e} | {speed:.2f} it/s")
+                  f"IC={L_ic.item():.5f} CO2_BC={L_co2bc.item():.5f} LR={cur_lr:.2e} "
+                  f"alpha(W1/W8/all)={a_probe[0].item():.2f}/{a_probe[1].item():.2f}/{a_probe[2].item():.2f} | {speed:.2f} it/s")
 
         # v7_higher_co2_weight: save a new best-loss checkpoint any time
         # unweighted_total hits a new low, overwriting the previous best each

@@ -16,6 +16,7 @@
 #   bash post_training_checks.sh <checkpoint> --gpu      # only when no training is running
 #   bash post_training_checks.sh <iterN checkpoint> --skip-smoke   # mid-run: the smoke test checks
 #        the CODE, not the checkpoint, so once per code version is enough (saves 5-15 min on CPU)
+#   bash post_training_checks.sh <iterN checkpoint> --skip-smoke --quick  # + skip level 2 (~20 min total)
 #
 # Results: checks_<checkpoint name>.log, figures in figures/<version>/ (for an iterN
 # checkpoint they are moved to figures/<version>_iterN/ so the final run never mixes with them).
@@ -23,12 +24,13 @@
 set -u
 CKPT="${1:?usage: bash post_training_checks.sh <checkpoint> [--gpu] [--skip-smoke]}"
 [ -f "$CKPT" ] || { echo "checkpoint not found: $CKPT"; exit 1; }
-DEV=cpu; SKIP_SMOKE=0
+DEV=cpu; SKIP_SMOKE=0; QUICK=0
 for opt in "${@:2}"; do
     case "$opt" in
         --gpu) DEV=cuda ;;
         --skip-smoke) SKIP_SMOKE=1 ;;
-        *) echo "unknown option: $opt (use --gpu and/or --skip-smoke)"; exit 1 ;;
+        --quick) QUICK=1 ;;      # skip level 2 (the slowest step, ~25-35 min on CPU); mid-run only
+        *) echo "unknown option: $opt (use --gpu, --skip-smoke, --quick)"; exit 1 ;;
     esac
 done
 [ "$DEV" = cpu ] && export CUDA_VISIBLE_DEVICES=""
@@ -60,7 +62,11 @@ FAILED=""
     run "3 residual diagnosis D1 (closed room)" bash -c "python3 diagnose_residual_map.py '$CKPT' 2>&1 | tail -22; exit \${PIPESTATUS[0]}"
     run "4 window-BC cross-check" python3 crosscheck_windows.py "$CKPT"
     run "5 level-3 physics consistency (open + closed)" bash -c "python3 check_physics_consistency.py '$CKPT' --device $DEV 2>&1 | tail -52; exit \${PIPESTATUS[0]}"
-    run "6 level-2 CO2 vs FV solve with the model's own flow" bash -c "python3 check_co2_with_model_flow.py '$CKPT' --device $DEV 2>&1 | tail -26; exit \${PIPESTATUS[0]}"
+    if [ "$QUICK" = 1 ]; then
+        echo; echo "== 6 level-2 CO2 check: SKIPPED (--quick; run it on the final model)"
+    else
+        run "6 level-2 CO2 vs FV solve with the model's own flow" bash -c "python3 check_co2_with_model_flow.py '$CKPT' --device $DEV 2>&1 | tail -26; exit \${PIPESTATUS[0]}"
+    fi
     echo; echo "=================================================================="
     if [ -z "$FAILED" ]; then echo "ALL CHECK SCRIPTS RAN ($(( ($(date +%s) - START) / 60 )) min). Read the numbers above."
     else echo "SOME CHECK SCRIPTS FAILED: $FAILED"; fi
