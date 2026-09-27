@@ -445,17 +445,29 @@ def gradnorm_weight_update(grad_ns, grad_co2, prev_weight):
 #                     interior never saw closed windows. Found by check_physics_consistency.py
 #                     (air leaks through walls, ~0 through doors) + crosscheck_windows.py
 #                     (inflow error 13% on the training mix, 59% on random V at the same
-#                     points). Affects v4-v15. Single change vs v13.
-#                     Check: validate_closed_room.py plane L2 vs v13's 15.9% (expect lower:
-#                     the far field, 91% of v13's error, is now trained with closed windows);
-#                     check_physics_consistency.py: window inflow, door outflow, leakage.
+#                     points). Affects v4-v15. (Started as v16_shuffle, stopped after a few
+#                     minutes to add the fixes below -- run as v16_fixes.)
+#   v16_fixes       -- v16_shuffle + the CONFIRMED bugs from an independent code audit
+#                     (all correctness fixes, no tuning):
+#                     (a) closed windows were CO2 sinks (c = 0 at every window): now c = 0 only
+#                         at OPEN windows, no-flux dc/dn = 0 at closed ones (windows_loss,
+#                         co2_boundary_loss) -- matches the FD reference ('noflux').
+#                     (b) ic_loss no longer forces p = 0 at t = 0 (contradicted the start-up
+#                         momentum balance; no pressure IC in incompressible flow).
+#                     (c) source-concentrated points are rejected outside the room instead of
+#                         clamped (~5% of interior points sat exactly on the floor).
+#                     (d) sample_walls: points per face proportional to net area; floor/
+#                         ceiling points inside column footprints rejected. sample_ic:
+#                         uniform instead of source-concentrated.
+#                     Check (post_training_checks.sh): closed-room plane L2 vs v13's 15.9%;
+#                     window inflow / door outflow / leakage / CO2 budget in the level-3 check.
 #
 # IMPORTANT: this VERSION variable (and CKPT_DIR below) is what train_gnot.py's own
 # main() uses for a FULL 20k-iteration production run. Bump this to match whichever
 # fix combination is confirmed working via the closed-window diagnostic BEFORE
 # launching the next full run through this file, so production checkpoints aren't
 # mislabeled with stale physics/sampling.
-VERSION = "v16_shuffle"
+VERSION = "v16_fixes"
 
 # v15: optimizer switch. "adam" = v1-v14 behaviour; "soap" = soap.py (official
 # implementation, github.com/nikhilvyas/SOAP, MIT licence, unmodified copy).
@@ -574,7 +586,15 @@ def windows_loss(model, device, co2_weight):
     # (fixed at 1.0 in v8 -- see USE_ADAPTIVE_CO2_WEIGHT).
     # v8_nondim: measured in units of C_REF (dimensionless), consistent with
     # the scaled interior residual.
-    return (u ** 2).mean() + ((v - target_v) ** 2).mean() + (w ** 2).mean() + co2_weight * ((c / C_REF) ** 2).mean()
+    # v16 fix (audit): c = 0 only where THIS window is OPEN (clean inflow). A closed
+    # window is a wall: its velocity target is already 0 (V_k = 0 -> no-slip) and its
+    # CO2 condition is no-flux, enforced in co2_boundary_loss. Before, c = 0 was imposed
+    # on closed windows too, turning them into CO2 sinks (FD: 0.6-1.4% plane error,
+    # ~0.5% of the CO2 lost by 120 s). Averaged over ALL window points, so each open
+    # point keeps the same weight as before.
+    is_open = (V_at_point > 0).float()
+    return ((u ** 2).mean() + ((v - target_v) ** 2).mean() + (w ** 2).mean()
+            + co2_weight * (is_open * (c / C_REF) ** 2).mean())
 
 
 def doors_loss(model, device):
@@ -655,7 +675,16 @@ def co2_boundary_loss(model, device, co2_weight):
     _, _, _, cd, _ = model(xd, yd, zd, td, Vd, _co2_occupancy(Nd))  # v13
     dn_doors = grad(cd, yd)
 
-    dn = torch.cat([dn_walls, dn_cols, dn_doors], dim=0) / CO2_GRAD_REF
+    # v16 fix (audit): CLOSED windows are walls -> no-flux dc/dn = 0 there (normal = y).
+    # Open windows keep c = 0 (windows_loss). Only the closed-window points are appended
+    # (not zeros for the open ones), so the wall/column/door terms are not diluted.
+    xw, yw, zw, tw, Vw, Nw, idxw = sample_windows(POINTS_WINDOWS_PER, device)
+    yw.requires_grad_(True)
+    _, _, _, cw, _ = model(xw, yw, zw, tw, Vw, _co2_occupancy(Nw))
+    is_closed = (Vw.gather(1, idxw) == 0).squeeze(1)
+    dn_closed_windows = grad(cw, yw)[is_closed]          # (k, 1), k ~ 40% of the window points
+
+    dn = torch.cat([dn_walls, dn_cols, dn_doors, dn_closed_windows], dim=0) / CO2_GRAD_REF
     return co2_weight * (dn ** 2).mean()
 
 
@@ -665,7 +694,12 @@ def ic_loss(model, device, co2_weight):
     x.requires_grad_(True); y.requires_grad_(True); z.requires_grad_(True)
     u, v, w, c, p = get_velocity_and_derivs(model, x, y, z, t, V, N_people)
     # v8_nondim: CO2 IC term in units of C_REF, consistent with windows_loss.
-    return (u ** 2).mean() + (v ** 2).mean() + (w ** 2).mean() + (p ** 2).mean() + co2_weight * ((c / C_REF) ** 2).mean()
+    # v16 fix (audit): NO pressure term. Incompressible flow has no pressure initial
+    # condition (the doors fix the gauge, p = 0). At t = 0 the windows start to
+    # accelerate the air (dv/dt = -1.5 V_k), which needs grad(p) != 0 inside the room;
+    # forcing p = 0 at t = 0 contradicted the momentum equation during start-up.
+    # (The CO2 term is exactly 0 anyway since v10's hard IC; kept for completeness.)
+    return (u ** 2).mean() + (v ** 2).mean() + (w ** 2).mean() + co2_weight * ((c / C_REF) ** 2).mean()
 
 
 def trivial_co2_floor(device, n=200000):

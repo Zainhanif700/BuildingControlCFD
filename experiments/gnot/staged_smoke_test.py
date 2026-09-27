@@ -83,8 +83,8 @@ def test_sample_interior(device):
         assert_finite(tensor, name)
     assert x.shape[0] == n, f"expected {n} points, got {x.shape[0]}"
 
-    # every point must be within room bounds (the Gaussian branch clamps, but
-    # verify no bug slipped a point outside)
+    # every point must be within room bounds (the Gaussian branch rejects out-of-room
+    # draws since v16 -- verify no bug slipped a point outside)
     assert (x >= ROOM_X[0]).all() and (x <= ROOM_X[1]).all(), "x out of room bounds"
     assert (y >= ROOM_Y[0]).all() and (y <= ROOM_Y[1]).all(), "y out of room bounds"
     assert (z >= ROOM_Z[0]).all() and (z <= ROOM_Z[1]).all(), "z out of room bounds"
@@ -246,6 +246,67 @@ def test_scenario_location_independence(device):
             bad.append(f"{name}: {f:.2f} (n={len(g)})")
     print("  all-closed share per location: " + ", ".join(f"{n} {g.mean():.2f}" for n, g in groups))
     assert not bad, (f"all-closed share should be ~{CLOSED_SCENARIO_FRAC} everywhere, but: " + "; ".join(bad))
+
+
+@stage("0d. v16 audit fixes -- no floor pile-up, area-proportional walls, uniform IC, closed-window CO2, no pressure IC")
+def test_audit_fixes(device):
+    import math
+    import numpy as np
+    from point_sampler import (sample_interior, sample_walls, sample_ic, sample_windows, ROOM_X, ROOM_Y,
+                               ROOM_Z, COLUMNS, DOORS, WINDOWS, SOURCE_X, SOURCE_Y, BREATHING_HEIGHT,
+                               CO2_SOURCE_SIGMA, C_REF, TAU_RAMP)
+    from train_gnot import windows_loss, ic_loss, POINTS_WINDOWS_PER
+    torch.manual_seed(0)
+    # (c) no source-sampling pile-up on floor/ceiling (was ~5% of interior points at z = 0)
+    x, y, z, t, V, N = sample_interior(4000, device)
+    on_bound = ((z == ROOM_Z[0]) | (z == ROOM_Z[1])).float().mean().item()
+    assert on_bound < 1e-3, f"{on_bound:.3f} of interior points sit exactly on floor/ceiling (clamping?)"
+    # (d) walls: counts proportional to net face area; nothing inside column footprints
+    n = 6000
+    x, y, z, t, V, N = sample_walls(n, device)
+    x, y, z = (a.squeeze(1).cpu().numpy() for a in (x, y, z))
+    Lx, Ly, Lz = ROOM_X[1] - ROOM_X[0], ROOM_Y[1] - ROOM_Y[0], ROOM_Z[1] - ROOM_Z[0]
+    col = sum(math.pi * r ** 2 for _, _, r, _, _ in COLUMNS)
+    faces = {"y=0": ((y == ROOM_Y[0]), Lx * Lz - sum((a1 - a0) * (b1 - b0) for a0, a1, b0, b1 in DOORS)),
+             "y=max": ((y == ROOM_Y[1]), Lx * Lz - sum((a1 - a0) * (b1 - b0) for a0, a1, b0, b1 in WINDOWS)),
+             "x=0": ((x == ROOM_X[0]), Ly * Lz), "x=max": ((x == ROOM_X[1]), Ly * Lz),
+             "floor": ((z == ROOM_Z[0]), Lx * Ly - col), "ceiling": ((z == ROOM_Z[1]), Lx * Ly - col)}
+    total = sum(a for _, a in faces.values())
+    for name, (mask, area) in faces.items():
+        assert abs(mask.sum() - n * area / total) <= 2, (
+            f"wall face {name}: {mask.sum()} points, expected {n * area / total:.0f} (area-proportional)")
+    fc = (z == ROOM_Z[0]) | (z == ROOM_Z[1])
+    for cx, cy, r, _, _ in COLUMNS:
+        assert not (fc & ((x - cx) ** 2 + (y - cy) ** 2 <= r ** 2)).any(), "floor/ceiling point inside a column"
+    # (d) IC points uniform (near-source fraction ~0.116 for uniform points, ~0.45 if source-concentrated)
+    x, y, z, t, V, N = sample_ic(4000, device)
+    near = (torch.sqrt((x - SOURCE_X) ** 2 + (y - SOURCE_Y) ** 2 + (z - BREATHING_HEIGHT) ** 2)
+            < CO2_SOURCE_SIGMA).float().mean().item()
+    assert 0.07 < near < 0.16 and (t == 0).all(), f"IC points not uniform at t=0 (near-source share {near:.3f})"
+
+    # (a)/(b) loss formulas, with a stub model: zero velocity, C = C_REF everywhere, p = 1
+    class Stub(torch.nn.Module):
+        def forward(self, x, y, z, t, V, N):
+            zero = 0.0 * (x + y + z)
+            return zero, zero, zero, C_REF + zero, 1.0 + zero
+
+        def velocity_from_potential(self, A1, A2, A3, x, y, z):
+            return 0.0 * x, 0.0 * y, 0.0 * z
+    stub = Stub()
+    torch.manual_seed(123)
+    L = windows_loss(stub, "cpu", 1.0).item()
+    torch.manual_seed(123)                                   # same draw as inside windows_loss
+    xw, yw, zw, tw, Vw, Nw, idx = sample_windows(POINTS_WINDOWS_PER, "cpu")
+    Vk = Vw.gather(1, idx)
+    vel = ((Vk * torch.tanh(3.0 * tw / TAU_RAMP)) ** 2).mean().item()
+    frac_open = (Vk > 0).float().mean().item()
+    assert abs(L - (vel + frac_open)) < 1e-4, (
+        f"windows_loss {L:.5f} != velocity {vel:.5f} + open share {frac_open:.3f}: CO2 c=0 must apply only at "
+        f"OPEN windows (old behaviour would give {vel + 1:.5f})")
+    Lic = ic_loss(stub, "cpu", 1.0).item()
+    assert abs(Lic - 1.0) < 1e-5, f"ic_loss {Lic:.5f} != 1 (CO2 term only): a pressure term is still in the IC"
+    print(f"  floor/ceiling pile-up {on_bound:.4f}; wall counts area-proportional; IC near-source share {near:.3f}; "
+          f"windows_loss CO2 term on {frac_open:.2f} of window points (open only); ic_loss has no pressure term")
 
 
 @stage("0b. v8 non-dimensionalization -- no input saturation, training CO2 loss actually scaled, checkpoint guard")
@@ -697,6 +758,7 @@ def main():
 
     test_sample_interior(device)
     test_scenario_location_independence(device)
+    test_audit_fixes(device)
     test_nondim(device)
     test_fourier_features(device)
     test_query_encoder(device)

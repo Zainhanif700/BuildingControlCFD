@@ -79,10 +79,22 @@ def scenarios(n_random, seed=0):
         ("all 1m/s", [1.0] * NUM_WINDOWS),
         ("all 3m/s", [3.0] * NUM_WINDOWS),
         ("all 5m/s", [5.0] * NUM_WINDOWS),
+        # low speeds (audit suspicion S2: flow SHAPE at small V may be poorly represented
+        # because of the s(V) = RMS(V)/V_MAX factor; compare win err with the 1-5 m/s rows)
+        ("W1 0.2m/s", only(W1=0.2)),
+        ("all 0.2m/s", [0.2] * NUM_WINDOWS),
     ]
     rng = np.random.default_rng(seed)
-    for i in range(n_random):   # same distribution as training (uniform 0..V_MAX per window)
-        out.append((f"random{i + 1}", np.round(rng.uniform(0.0, V_MAX, NUM_WINDOWS), 2).tolist()))
+    for i in range(n_random):
+        # v16 fix (audit): like the open-window part of the TRAINING mix -- alternately
+        # uniform 0..V_MAX on every window ('u') and a random subset closed ('p'); the
+        # all-closed part of the mix is the 'closed' row already
+        V = rng.uniform(0.0, V_MAX, NUM_WINDOWS)
+        if i % 2 == 1:
+            V = V * (rng.random(NUM_WINDOWS) >= 0.5)
+            if V.max() == 0:
+                V[rng.integers(NUM_WINDOWS)] = rng.uniform(0.5, V_MAX)
+        out.append((f"random{i + 1}{'p' if i % 2 else 'u'}", np.round(V, 2).tolist()))
     return out
 
 
@@ -121,16 +133,24 @@ def build_surfaces():
 
     def wall(P, dA, n, keep):
         S.append(("wall", -1, P[keep], dA[keep], n[keep]))
-    P, dA, n = plane_patch(1, ROOM_Y[1], ROOM_X, ROOM_Z, 0.1, 0.1, (0, 1, 0))       # window wall
-    in_win = np.zeros(len(P), bool)
-    for xlo, xhi, zlo, zhi in WINDOWS:
-        in_win |= (P[:, 0] >= xlo) & (P[:, 0] <= xhi) & (P[:, 2] >= zlo) & (P[:, 2] <= zhi)
-    wall(P, dA, n, ~in_win)
-    P, dA, n = plane_patch(1, ROOM_Y[0], ROOM_X, ROOM_Z, 0.1, 0.1, (0, -1, 0))      # door wall
-    in_door = np.zeros(len(P), bool)
-    for xlo, xhi, zlo, zhi in DOORS:
-        in_door |= (P[:, 0] >= xlo) & (P[:, 0] <= xhi) & (P[:, 2] >= zlo) & (P[:, 2] <= zhi)
-    wall(P, dA, n, ~in_door)
+
+    def wall_with_openings(yval, normal, openings):
+        """v16 fix (audit): wall patches that tile EXACTLY around the openings (x-gaps at
+        full height, plus strips above/below each opening), instead of masking a grid by
+        cell-midpoint membership (which double-counted or dropped ~0.1 m strips)."""
+        ops = sorted(openings)
+        edges = [ROOM_X[0]] + [e for o in ops for e in (o[0], o[1])] + [ROOM_X[1]]
+        for a, b in zip(edges[0::2], edges[1::2]):                  # gaps between openings
+            if b - a > 1e-9:
+                P, dA, n = plane_patch(1, yval, (a, b), ROOM_Z, 0.1, 0.1, normal)
+                wall(P, dA, n, np.ones(len(P), bool))
+        for xlo, xhi, zlo, zhi in ops:                             # above / below an opening
+            for z0, z1 in ((ROOM_Z[0], zlo), (zhi, ROOM_Z[1])):
+                if z1 - z0 > 1e-9:
+                    P, dA, n = plane_patch(1, yval, (xlo, xhi), (z0, z1), 0.05, 0.1, normal)
+                    wall(P, dA, n, np.ones(len(P), bool))
+    wall_with_openings(ROOM_Y[1], (0, 1, 0), WINDOWS)                                # window wall
+    wall_with_openings(ROOM_Y[0], (0, -1, 0), DOORS)                                 # door wall
     for val, sgn in ((ROOM_X[0], -1), (ROOM_X[1], 1)):                               # end walls
         P, dA, n = plane_patch(0, val, ROOM_Y, ROOM_Z, 0.1, 0.1, (sgn, 0, 0))
         wall(P, dA, n, np.ones(len(P), bool))
@@ -248,14 +268,16 @@ def surface_budget(model, dev, surfaces, t, V, n_people):
         dcdn = f["cx"] * nrm[:, 0] + f["cy"] * nrm[:, 1] + f["cz"] * nrm[:, 2]
         flux = np.sum(un * dA)
         closure += flux
-        F[kind] += np.sum((f["c"] * un - DIFFUSIVITY * dcdn) * dA)
-        if kind == "window":
+        # v16 fix (audit): a CLOSED window is a wall -- its flux counts as leakage and its
+        # velocity as wall slip (before, it was hidden inside Q_in)
+        solid = kind in ("wall", "column") or (kind == "window" and V[k] == 0)
+        F["wall" if solid else kind] += np.sum((f["c"] * un - DIFFUSIVITY * dcdn) * dA)
+        if kind == "window" and not solid:
             Q_in -= flux
-            if V[k] > 0:
-                target = -V[k] * ramp
-                e2 = f["u"] ** 2 + (f["v"] - target) ** 2 + f["w"] ** 2
-                win_num += np.sum(e2 * dA) / (V[k] * ramp) ** 2
-                win_den += np.sum(dA)
+            target = -V[k] * ramp
+            e2 = f["u"] ** 2 + (f["v"] - target) ** 2 + f["w"] ** 2
+            win_num += np.sum(e2 * dA) / (V[k] * ramp) ** 2
+            win_den += np.sum(dA)
         elif kind == "door":
             Q_doors += flux
         else:

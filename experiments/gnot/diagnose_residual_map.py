@@ -34,8 +34,8 @@ import torch
 
 from fd_reference_closed_room import solve, interp, breathing_grid, pinn_on, SX, SY
 from gnot_model import GNOTOperator, check_checkpoint_compat
-from point_sampler import (NUM_WINDOWS, BREATHING_HEIGHT, ROOM_X, ROOM_Y, S_REF,
-                           SOURCE_SAMPLE_FRAC, SOURCE_SAMPLE_XY_STD)
+from point_sampler import (NUM_WINDOWS, BREATHING_HEIGHT, ROOM_X, ROOM_Y, ROOM_Z, S_REF,
+                           SOURCE_SAMPLE_FRAC, SOURCE_SAMPLE_XY_STD, SOURCE_SAMPLE_Z_STD)
 from train_gnot import grad, get_velocity_and_derivs, DIFFUSIVITY, EMISSION_PER_PERSON, SIGMA
 from validate_closed_room import room_outline
 
@@ -101,10 +101,17 @@ def main():
     S_plane = S0 * np.exp(-((xg - SX) ** 2 + (yg - SY) ** 2) / SIGMA ** 2)   # z = source height
     near = (S_plane >= NEAR_FRAC * S0) & m
     far = (~near) & m
-    # training sampling density on this plane (xy only): 40% uniform + 60% Gaussian
+    # training sampling density (3D) at the points of this plane: uniform part + Gaussian part.
+    # v16 fix (audit): include the z-marginal. The uniform part is 1/(A*Lz) and the Gaussian
+    # part carries G_z(z) (std SOURCE_SAMPLE_Z_STD); the old 2D formula under-weighted the
+    # Gaussian share by ~1.6x at z = 1.10 m. (Truncation of the Gaussian at the room bounds
+    # and column exclusion are ignored: ~9% of the Gaussian draws are rejected, mostly z < 0,
+    # so the Gaussian density here is ~9% too low -- small next to the 1.6x corrected above.)
     area = (ROOM_X[1] - ROOM_X[0]) * (ROOM_Y[1] - ROOM_Y[0])
+    Lz = ROOM_Z[1] - ROOM_Z[0]
     s2 = SOURCE_SAMPLE_XY_STD ** 2
-    dens = (1 - SOURCE_SAMPLE_FRAC) / area + SOURCE_SAMPLE_FRAC * np.exp(
+    gz = np.exp(-(z - BREATHING_HEIGHT) ** 2 / (2 * SOURCE_SAMPLE_Z_STD ** 2)) / (np.sqrt(2 * np.pi) * SOURCE_SAMPLE_Z_STD)
+    dens = (1 - SOURCE_SAMPLE_FRAC) / (area * Lz) + SOURCE_SAMPLE_FRAC * gz * np.exp(
         -((xg - SX) ** 2 + (yg - SY) ** 2) / (2 * s2)) / (2 * np.pi * s2)
     r_loss = (R / S_REF) ** 2 * dens          # what the training loss 'sees', per point and time
     loss_near = r_loss[:, near].sum()

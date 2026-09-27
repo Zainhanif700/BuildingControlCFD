@@ -37,6 +37,32 @@ PROBES = {"source (7.76,4.58)": (SX, SY), "2.5 m east of source": (SX + 2.5, SY)
           "far corner (1.0,1.0)": (1.0, 1.0)}
 
 
+def _fill_solid(c, fluid, sweeps=30):
+    """Copy of c with the solid (column) cells filled by the mean of already-known
+    neighbours, repeated inwards. v16 fix (audit): interp() uses 8 surrounding cells, and
+    solid cells held 0, which pulled interpolated values down next to the columns (at the
+    default dx=0.1 only ~1 breathing-grid point, 0.002% of the plane L2; up to 27% locally
+    at dx=0.2). Only used for OUTPUT fields; the solver itself is unchanged."""
+    c = c.copy()
+    known = fluid.copy()
+    for _ in range(sweeps):
+        if known.all():
+            break
+        s = np.zeros_like(c)
+        cnt = np.zeros_like(c)
+        for ax in range(3):
+            for sl_dst, sl_src in ((slice(1, None), slice(None, -1)), (slice(None, -1), slice(1, None))):
+                d = [slice(None)] * 3
+                r = [slice(None)] * 3
+                d[ax], r[ax] = sl_dst, sl_src
+                s[tuple(d)] += np.where(known[tuple(r)], c[tuple(r)], 0.0)
+                cnt[tuple(d)] += known[tuple(r)]
+        new = (~known) & (cnt > 0)
+        c[new] = s[new] / cnt[new]
+        known = known | new
+    return c
+
+
 def solve(dx_target, windows, n_people=N_PEOPLE):
     Lx, Ly, Lz = ROOM_X[1] - ROOM_X[0], ROOM_Y[1] - ROOM_Y[0], ROOM_Z[1] - ROOM_Z[0]
     nx, ny, nz = (max(4, round(L / dx_target)) for L in (Lx, Ly, Lz))
@@ -66,7 +92,7 @@ def solve(dx_target, windows, n_people=N_PEOPLE):
     n_sub = math.ceil(10.0 / dt_max)
     dt = 10.0 / n_sub                                     # divides every output time exactly
     c = np.zeros((nx, ny, nz))
-    out, t = {0.0: c.copy()}, 0.0
+    out, t = {0.0: c.copy()}, 0.0   # c = 0 everywhere at t = 0: nothing to fill
     D = DIFFUSIVITY
     while t < TIMES[-1] - 1e-9:
         for _ in range(n_sub):
@@ -81,7 +107,7 @@ def solve(dx_target, windows, n_people=N_PEOPLE):
                 lap[:, -1, :] -= 2.0 * c[:, -1, :] * win_cells / dy ** 2
             c = (c + dt * (D * lap + S)) * fluid
         t = round(t + 10.0, 6)
-        out[t] = c.copy()
+        out[t] = _fill_solid(c, fluid)
     grid = (ROOM_X[0], ROOM_Y[0], ROOM_Z[0], dx, dy, dz, nx, ny, nz)
     return out, grid, (nx, ny, nz, dt)
 

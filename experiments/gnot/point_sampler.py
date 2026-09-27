@@ -15,6 +15,8 @@ does (same room, same 8 independent window velocities V1..V8, same 4
 columns excluded from the interior), just reimplemented here in PyTorch
 for GNOT instead of PhysicsNeMo.
 """
+import math
+
 import torch
 import numpy as np
 
@@ -271,17 +273,21 @@ SOURCE_SAMPLE_Z_STD = min(SOURCE_SAMPLE_XY_STD, (ROOM_Z[1] - ROOM_Z[0]) / 4.0)
 def _sample_near_source(n, device):
     """Points drawn from an isotropic-in-(x,y) Gaussian centered on the CO2
     source (z uses its own smaller spread -- see SOURCE_SAMPLE_Z_STD comment
-    above), clamped to stay inside the room bounds and rejecting any that
-    land inside a column (same rejection rule as the uniform sampler
-    below)."""
+    above), REJECTING any that fall outside the room or inside a column.
+    v16 fix (audit): this used to CLAMP to the room bounds, which put the ~8%
+    of draws with z < 0 exactly ONTO the floor (~5% of all interior points,
+    a spurious pile-up on a no-slip wall). Rejection keeps a truncated
+    Gaussian instead."""
     pts = []
     remaining = n
     while remaining > 0:
         batch = max(remaining * 2, 256)  # oversample since some get rejected
-        x = torch.normal(SOURCE_X, SOURCE_SAMPLE_XY_STD, size=(batch, 1), device=device).clamp(*ROOM_X)
-        y = torch.normal(SOURCE_Y, SOURCE_SAMPLE_XY_STD, size=(batch, 1), device=device).clamp(*ROOM_Y)
-        z = torch.normal(BREATHING_HEIGHT, SOURCE_SAMPLE_Z_STD, size=(batch, 1), device=device).clamp(*ROOM_Z)
-        bad = _in_any_column(x, y)
+        x = torch.normal(SOURCE_X, SOURCE_SAMPLE_XY_STD, size=(batch, 1), device=device)
+        y = torch.normal(SOURCE_Y, SOURCE_SAMPLE_XY_STD, size=(batch, 1), device=device)
+        z = torch.normal(BREATHING_HEIGHT, SOURCE_SAMPLE_Z_STD, size=(batch, 1), device=device)
+        outside = ((x < ROOM_X[0]) | (x > ROOM_X[1]) | (y < ROOM_Y[0]) | (y > ROOM_Y[1])
+                   | (z < ROOM_Z[0]) | (z > ROOM_Z[1]))
+        bad = _in_any_column(x, y) | outside
         keep = ~bad.squeeze(-1)
         x, y, z = x[keep], y[keep], z[keep]
         pts.append(torch.cat([x, y, z], dim=1))
@@ -331,6 +337,24 @@ POOL_REFRESH_EVERY = 100   # refresh cadence, in calls to sample_interior()
 _interior_pools = {}  # keyed by (n, device_str) -> dict of tensors + "calls"
 
 
+def _sample_uniform_xyz(n, device):
+    """(n, 3) points uniform in the room, excluding the columns (rejection sampling)."""
+    if n <= 0:
+        return torch.empty(0, 3, device=device)
+    pts = []
+    remaining = n
+    while remaining > 0:
+        batch = max(remaining * 2, 256)  # oversample since some get rejected
+        x = _rand(batch, *ROOM_X, device)
+        y = _rand(batch, *ROOM_Y, device)
+        z = _rand(batch, *ROOM_Z, device)
+        keep = ~_in_any_column(x, y).squeeze(-1)
+        x, y, z = x[keep], y[keep], z[keep]
+        pts.append(torch.cat([x, y, z], dim=1))
+        remaining -= x.shape[0]
+    return torch.cat(pts, dim=0)[:n]
+
+
 def _generate_interior_batch(n, device):
     """The actual point-generation logic (uniform + source-concentrated
     spatial mixture, fix #2; plus scenario sampling, fix #3) -- factored out
@@ -338,20 +362,7 @@ def _generate_interior_batch(n, device):
     partial refresh below can reuse it identically."""
     n_source = int(round(n * SOURCE_SAMPLE_FRAC))
     n_uniform = n - n_source
-
-    pts = []
-    remaining = n_uniform
-    while remaining > 0:
-        batch = max(remaining * 2, 256)  # oversample since some get rejected
-        x = _rand(batch, *ROOM_X, device)
-        y = _rand(batch, *ROOM_Y, device)
-        z = _rand(batch, *ROOM_Z, device)
-        bad = _in_any_column(x, y)
-        keep = ~bad.squeeze(-1)
-        x, y, z = x[keep], y[keep], z[keep]
-        pts.append(torch.cat([x, y, z], dim=1))
-        remaining -= x.shape[0]
-    xyz_uniform = torch.cat(pts, dim=0)[:n_uniform] if n_uniform > 0 else torch.empty(0, 3, device=device)
+    xyz_uniform = _sample_uniform_xyz(n_uniform, device)
 
     if n_source > 0:
         xs, ys, zs = _sample_near_source(n_source, device)
@@ -385,7 +396,7 @@ def interior_pool_composition(n, device="cpu"):
     hoped against.
 
     Returns None if no pool exists yet for this (n, device) (i.e.
-    sample_interior/sample_ic hasn't been called with these args yet).
+    sample_interior hasn't been called with these args yet).
     """
     key = (n, str(device))
     pool = _interior_pools.get(key)
@@ -424,10 +435,8 @@ def sample_interior(n, device="cpu"):
     so one-shot callers (tests, or training's very first iteration) see the
     same distribution as the pre-Stage-1 code.
 
-    NOTE: sample_ic() below calls this function directly (reusing the same
-    spatial mixture, just overriding t=0), so it automatically gets its own
-    independent persistent pool too, keyed separately since POINTS_IC !=
-    POINTS_INTERIOR in train_gnot.py.
+    NOTE: since v16, sample_ic() no longer uses this function (IC points are
+    uniform, see sample_ic), so it does not share or advance this pool.
     """
     if not USE_PERSISTENT_POOL:
         return _generate_interior_batch(n, device)  # v5 behavior: 100% fresh every call
@@ -468,48 +477,66 @@ def sample_interior(n, device="cpu"):
 
 
 def sample_walls(n, device="cpu"):
-    """No-slip points on the 6 room faces, EXCLUDING door/window cutouts.
-    Splits n roughly evenly across the 6 faces, rejecting any point that
-    falls inside a door or window opening on the y=0 / y=ROOM_Y[1] faces."""
-    n_each = n // 6
-    all_x, all_y, all_z = [], [], []
+    """No-slip points on the 6 planar room faces, EXCLUDING door/window cutouts
+    and the columns' footprints on floor and ceiling.
 
-    def reject_openings(x, y, z, openings):
-        # openings: list of (x_lo,x_hi,z_lo,z_hi) cutouts to reject
+    v16 fix (audit): points are now split in proportion to each face's NET
+    area, so the loss approximates a surface integral with uniform density.
+    Before, every face got n//6 points: the end walls (28.9 m^2) were sampled
+    ~5x denser than floor/ceiling (142 m^2), and floor/ceiling points inside
+    the column footprints (solid) were not rejected."""
+    Lx, Ly, Lz = ROOM_X[1] - ROOM_X[0], ROOM_Y[1] - ROOM_Y[0], ROOM_Z[1] - ROOM_Z[0]
+    col_area = sum(math.pi * r ** 2 for _, _, r, _, _ in COLUMNS)
+
+    def in_openings(x, z, openings):
         bad = torch.zeros_like(x, dtype=torch.bool)
         for xlo, xhi, zlo, zhi in openings:
-            in_open = (x >= xlo) & (x <= xhi) & (z >= zlo) & (z <= zhi)
-            bad = bad | in_open
-        keep = ~bad.squeeze(-1)
-        return x[keep], y[keep], z[keep]
+            bad = bad | ((x >= xlo) & (x <= xhi) & (z >= zlo) & (z <= zhi))
+        return bad
 
-    # y = 0 face (has 2 door cutouts)
-    x = _rand(n_each * 2, *ROOM_X, device)
-    z = _rand(n_each * 2, *ROOM_Z, device)
-    y = torch.full_like(x, ROOM_Y[0])
-    x, y, z = reject_openings(x, y, z, DOORS)
-    all_x.append(x[:n_each]); all_y.append(y[:n_each]); all_z.append(z[:n_each])
+    # (net area, generator of candidate points (x, y, z), rejection mask function)
+    faces = [
+        (Lx * Lz - sum((a1 - a0) * (b1 - b0) for a0, a1, b0, b1 in DOORS),
+         lambda m: (_rand(m, *ROOM_X, device), None, _rand(m, *ROOM_Z, device), ("y", ROOM_Y[0])),
+         lambda x, y, z: in_openings(x, z, DOORS)),
+        (Lx * Lz - sum((a1 - a0) * (b1 - b0) for a0, a1, b0, b1 in WINDOWS),
+         lambda m: (_rand(m, *ROOM_X, device), None, _rand(m, *ROOM_Z, device), ("y", ROOM_Y[1])),
+         lambda x, y, z: in_openings(x, z, WINDOWS)),
+        (Ly * Lz, lambda m: (None, _rand(m, *ROOM_Y, device), _rand(m, *ROOM_Z, device), ("x", ROOM_X[0])),
+         lambda x, y, z: torch.zeros_like(x, dtype=torch.bool)),
+        (Ly * Lz, lambda m: (None, _rand(m, *ROOM_Y, device), _rand(m, *ROOM_Z, device), ("x", ROOM_X[1])),
+         lambda x, y, z: torch.zeros_like(x, dtype=torch.bool)),
+        (Lx * Ly - col_area, lambda m: (_rand(m, *ROOM_X, device), _rand(m, *ROOM_Y, device), None, ("z", ROOM_Z[0])),
+         lambda x, y, z: _in_any_column(x, y)),
+        (Lx * Ly - col_area, lambda m: (_rand(m, *ROOM_X, device), _rand(m, *ROOM_Y, device), None, ("z", ROOM_Z[1])),
+         lambda x, y, z: _in_any_column(x, y)),
+    ]
+    areas = [f[0] for f in faces]
+    total = sum(areas)
+    counts = [int(n * a / total) for a in areas]            # floor, then hand out the remainder
+    order = sorted(range(len(faces)), key=lambda i: n * areas[i] / total - counts[i], reverse=True)
+    for i in order[: n - sum(counts)]:
+        counts[i] += 1
 
-    # y = ROOM_Y[1] face (has 8 window cutouts)
-    x = _rand(n_each * 3, *ROOM_X, device)
-    z = _rand(n_each * 3, *ROOM_Z, device)
-    y = torch.full_like(x, ROOM_Y[1])
-    x, y, z = reject_openings(x, y, z, WINDOWS)
-    all_x.append(x[:n_each]); all_y.append(y[:n_each]); all_z.append(z[:n_each])
-
-    # x = 0 and x = ROOM_X[1] faces (no cutouts)
-    for fixed_val in [ROOM_X[0], ROOM_X[1]]:
-        y = _rand(n_each, *ROOM_Y, device)
-        z = _rand(n_each, *ROOM_Z, device)
-        x = torch.full_like(y, fixed_val)
-        all_x.append(x); all_y.append(y); all_z.append(z)
-
-    # z = 0 (floor) and z = ROOM_Z[1] (ceiling) faces (no cutouts)
-    for fixed_val in [ROOM_Z[0], ROOM_Z[1]]:
-        x = _rand(n_each, *ROOM_X, device)
-        y = _rand(n_each, *ROOM_Y, device)
-        z = torch.full_like(x, fixed_val)
-        all_x.append(x); all_y.append(y); all_z.append(z)
+    all_x, all_y, all_z = [], [], []
+    for (area, gen, reject), cnt in zip(faces, counts):
+        got = []
+        remaining = cnt
+        while remaining > 0:
+            m = max(remaining * 2, 64)
+            x, y, z, (axis, val) = gen(m)
+            ref = x if x is not None else y
+            if axis == "x":
+                x = torch.full_like(ref, val)
+            elif axis == "y":
+                y = torch.full_like(ref, val)
+            else:
+                z = torch.full_like(ref, val)
+            keep = ~reject(x, y, z).squeeze(-1)
+            got.append(torch.cat([x[keep], y[keep], z[keep]], dim=1))
+            remaining -= int(keep.sum())
+        xyz = torch.cat(got, dim=0)[:cnt]
+        all_x.append(xyz[:, 0:1]); all_y.append(xyz[:, 1:2]); all_z.append(xyz[:, 2:3])
 
     x = torch.cat(all_x, dim=0)
     y = torch.cat(all_y, dim=0)
@@ -572,8 +599,13 @@ def sample_windows(n_per_window, device="cpu"):
 
 
 def sample_ic(n, device="cpu"):
-    """t=0, room at rest, everywhere inside the room (excluding columns)."""
-    x, y, z, _, V, N_people = sample_interior(n, device)
+    """t=0, room at rest, everywhere inside the room (excluding columns).
+    v16 fix (audit): UNIFORM points. It used to reuse sample_interior's
+    source-concentrated mixture, so 60% of the IC points clustered around the
+    CO2 source although the initial condition holds in the whole room."""
+    xyz = _sample_uniform_xyz(n, device)
+    _, V, N_people = sample_scenario(n, device)
+    x, y, z = xyz[:, 0:1], xyz[:, 1:2], xyz[:, 2:3]
     t = torch.zeros_like(x)
     return x, y, z, t, V, N_people
 
