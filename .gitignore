@@ -27,5 +27,7 @@ experiments/gnot/checkpoints/
 experiments/gnot/*.log
 # stray git artefact that appeared inside experiments/gnot on the server
 experiments/gnot/FETCH_HEAD
+# OpenFOAM reference cases (meshes + fields, GBs) -- regenerate with openfoam/make_openfoam_case.py
+experiments/gnot/openfoam/cases/
 # leftover local copy of the removed PINTO experiment folder on the server
 experiments/pinto/
