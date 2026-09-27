@@ -7,7 +7,8 @@
 #   4. window-BC cross-check                             -- inflow right for every window setting?
 #   5. level-3 physics consistency, open + closed        -- air balance, leakage, CO2 budget,
 #                                                           PDE residuals over a window sweep
-# (level 2, the CO2 solve with the model's own airflow, will be added as step 6.)
+#   6. level-2 CO2 check                                 -- model CO2 vs an independent FV CO2
+#                                                           solve driven by the model's own flow
 #
 # Usage (from experiments/gnot):
 #   bash post_training_checks.sh checkpoints/v16_fixes/gnot_v16_fixes_final.pth          # on CPU
@@ -43,6 +44,7 @@ FAILED=""
     run "3 residual diagnosis D1 (closed room)" bash -c "python3 diagnose_residual_map.py '$CKPT' 2>&1 | tail -22; exit \${PIPESTATUS[0]}"
     run "4 window-BC cross-check" python3 crosscheck_windows.py "$CKPT"
     run "5 level-3 physics consistency (open + closed)" bash -c "python3 check_physics_consistency.py '$CKPT' --device $DEV 2>&1 | tail -52; exit \${PIPESTATUS[0]}"
+    run "6 level-2 CO2 vs FV solve with the model's own flow" bash -c "python3 check_co2_with_model_flow.py '$CKPT' --device $DEV 2>&1 | tail -26; exit \${PIPESTATUS[0]}"
     echo; echo "=================================================================="
     if [ -z "$FAILED" ]; then echo "ALL CHECK SCRIPTS RAN ($(( ($(date +%s) - START) / 60 )) min). Read the numbers above."
     else echo "SOME CHECK SCRIPTS FAILED: $FAILED"; fi
