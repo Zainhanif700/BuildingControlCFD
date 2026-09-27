@@ -24,11 +24,16 @@ rm -rf 0 && cp -r 0.orig 0
 postProcess -func writeCellCentres -time 0 > log.cellCentres 2>&1
 [ "${3:-}" = "--mesh-only" ] && { say "mesh done (--mesh-only)"; exit 0; }
 
-say "run: pimpleFoam on $NP cores (log.pimpleFoam)"
-decomposePar -force > log.decomposePar 2>&1
-mpirun -np "$NP" pimpleFoam -parallel > log.pimpleFoam 2>&1
-reconstructPar > log.reconstructPar 2>&1
-rm -rf processor*
+if [ "$NP" -le 1 ]; then
+    say "run: pimpleFoam on 1 core (log.pimpleFoam)"
+    pimpleFoam > log.pimpleFoam 2>&1
+else
+    say "run: pimpleFoam on $NP cores (log.pimpleFoam)"
+    decomposePar -force > log.decomposePar 2>&1
+    mpirun -np "$NP" pimpleFoam -parallel > log.pimpleFoam 2>&1
+    reconstructPar > log.reconstructPar 2>&1
+    rm -rf processor*
+fi
 say "done. last time step:"
 grep -E "^Time =" log.pimpleFoam | tail -1
 grep -E "Courant Number" log.pimpleFoam | tail -1
