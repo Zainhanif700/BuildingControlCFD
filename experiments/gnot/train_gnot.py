@@ -505,13 +505,30 @@ def gradnorm_weight_update(grad_ns, grad_co2, prev_weight):
 #                     vs v13's 15.9%; NS residual level; level 2 CO2 consistency. NOTE: level 3
 #                     'winErr' compares with a UNIFORM profile, so the 0.1 m edge taper of B_p shows
 #                     up there by design; the net window flux (Q_in vs Q_target) is the exact one.
+#                     RESULT at iter 5000 (run continued to 20000): air balance EXACT in every
+#                     scenario (inflow = door outflow, leak 0 -- first time); closed room 14.9% (worst
+#                     16.2%, already below v13's FINAL 15.9%), source 4.5%, closed CO2 budget +6.5%.
+#                     BUT: open-window CO2 budget +50..+230% (CO2 carried IN through the open
+#                     windows: soft c = 0 violated), wall slip flat at 12-57% of the window speed
+#                     from iter 1000 to 5000, door split barely moved (0.47/0.50/0.53).
+#   v20_co2window   -- v19 + three exact/physical fixes for exactly those points:
+#                     (a) C x co2_window_factor: c = 0 EXACTLY on open-window cores (gnot_model,
+#                         MODEL_FORMAT 'v20_co2window'); (b) door split alpha = sigmoid(logit(
+#                         alpha_pot) + learned correction), alpha_pot from potential flow
+#                         (compute_door_split.py; W1 -> 0.59 ... W8 -> 0.38 through door 1);
+#                     (c) wall slip (and window tangential terms) measured against
+#                         max(min(U_ref, window speed), U_ref/3) (slip_scale; at most 9x v19's weight).
+#                     c = 0 is exact on open-window cores for V >~ 0.5 m/s (soft term below / edges).
+#                     v19 checkpoints: git tag code-v19-format.
+#                     Check: level-3 CO2 budget within +-5..10% for open windows; level 2; slip falls;
+#                     closed room not worse than v19; air balance stays exact.
 #
 # IMPORTANT: this VERSION variable (and CKPT_DIR below) is what train_gnot.py's own
 # main() uses for a FULL 20k-iteration production run. Bump this to match whichever
 # fix combination is confirmed working via the closed-window diagnostic BEFORE
 # launching the next full run through this file, so production checkpoints aren't
 # mislabeled with stale physics/sampling.
-VERSION = "v19_throughflow"
+VERSION = "v20_co2window"
 
 # v15: optimizer switch. "adam" = v1-v14 behaviour; "soap" = soap.py (official
 # implementation, github.com/nikhilvyas/SOAP, MIT licence, unmodified copy).
@@ -653,6 +670,26 @@ USE_WINDOW_NORMAL_TARGET = False   # v19: the window inflow FLUX is exact by con
 _ALPHA_PROBE_V = torch.tensor([[3.0] + [0.0] * 7, [0.0] * 7 + [3.0], [3.0] * 8])   # logged door splits
 
 
+def slip_scale(V):
+    """v20: speed scale for the no-slip (tangential) wall terms, (B,1):
+    max(min(U_ref, U_win), V_REL_FLOOR), U_win = sum_k V_k A_k / sum_{open k} A_k = mean inflow
+    speed of the open windows. v19 measured slip against the door-jet speed U_ref, which is up to
+    3.4x the window speed when all windows are open -> slip was ~12x under-weighted there and did
+    not improve at all from iter 1000 to 5000 (57% of the window speed). Taking the smaller of the
+    two speeds never weakens the v19 weighting (single windows keep U_ref < U_win)."""
+    areas = torch.tensor(WINDOW_AREAS, device=V.device, dtype=V.dtype).view(1, -1)
+    q = (V * areas).sum(dim=1, keepdim=True)
+    a_open = ((V > 0).to(V.dtype) * areas).sum(dim=1, keepdim=True)
+    u_win = q / a_open.clamp_min(1e-9)
+    u_ref = velocity_scale(V)
+    # cap (independent review): never below U_ref / 3, i.e. at most 9x heavier than in v19 (all 8
+    # windows open would otherwise be ~12x) -- keeps the wall term from swamping the NS residual
+    return torch.maximum(torch.minimum(u_ref, u_win), u_ref / SLIP_MAX_RATIO).clamp_min(V_REL_FLOOR)
+
+
+SLIP_MAX_RATIO = 3.0
+
+
 def velocity_scale(V):
     """v19: U_ref(V) = max(sum_k V_k A_k / A_DOORS, U_NS_FLOOR), (B,1): the mean door jet speed of
     the scenario's steady through-flow -- the characteristic speed used to non-dimensionalise the
@@ -686,7 +723,7 @@ def walls_loss(model, device, flux_weight=1.0):
     x, y, z, t, V, N_people = sample_walls(POINTS_WALLS, device)
     x.requires_grad_(True); y.requires_grad_(True); z.requires_grad_(True)
     u, v, w, c, p = get_velocity_and_derivs(model, x, y, z, t, V, N_people)
-    us2 = velocity_scale(V) ** 2                                   # v19: slip relative to U_ref
+    us2 = slip_scale(V) ** 2                                       # v20: slip relative to min(U_ref, U_win)
     loss = (u ** 2 / us2).mean() + (v ** 2 / us2).mean() + (w ** 2 / us2).mean()
     un = _planar_normal_component(x.detach(), y.detach(), z.detach(), u, v, w)
     un_scaled = [A_SOLID * un / throughflow_scale(V, t)]           # v17: leak as flux ratio
@@ -697,7 +734,7 @@ def walls_loss(model, device, flux_weight=1.0):
     xc, yc, zc, tc, Vc, Nc = sample_columns_surface(POINTS_COLUMNS_PER, device)
     xc.requires_grad_(True); yc.requires_grad_(True); zc.requires_grad_(True)
     uc, vc, wc, cc, pc = get_velocity_and_derivs(model, xc, yc, zc, tc, Vc, Nc)
-    usc2 = velocity_scale(Vc) ** 2
+    usc2 = slip_scale(Vc) ** 2
     loss = loss + (uc ** 2 / usc2).mean() + (vc ** 2 / usc2).mean() + (wc ** 2 / usc2).mean()
     # v17: radial (normal) velocity on the column surfaces, same flux scaling
     centers = torch.tensor([[cx, cy] for cx, cy, _, _, _ in COLUMNS], device=device, dtype=xc.dtype)
@@ -735,8 +772,9 @@ def windows_loss(model, device, co2_weight, rel_weight=1.0):
     # windows, target 0, are measured against the floor) -- see the v17_fluxbc comment above.
     if not USE_WINDOW_NORMAL_TARGET:
         # v19: flux exact by construction; only the tangential components (air enters normal to
-        # the window), relative to the scenario's U_ref, plus clean inflow c = 0 at open windows.
-        us2 = velocity_scale(V) ** 2
+        # the window), plus clean inflow c = 0 at open windows. v20: tangential terms on the same
+        # slip scale as the walls (consistency, review).
+        us2 = slip_scale(V) ** 2
         return ((u ** 2 / us2).mean() + (w ** 2 / us2).mean()
                 + co2_weight * (is_open * (c / C_REF) ** 2).mean())
     scale2 = ((1.0 - rel_weight) + rel_weight * target_v.abs().clamp_min(V_REL_FLOOR)) ** 2

@@ -32,7 +32,7 @@ from point_sampler import (
     NUM_WINDOWS, WINDOWS, DOORS, ROOM_X, ROOM_Y, ROOM_Z, CO2_SOURCE_SIGMA, BREATHING_HEIGHT,
     T_MAX, V_MAX, N_PEOPLE_MAX, C_REF, TAU_RAMP,
 )
-from throughflow import through_flow_potential, solid_distance_phi
+from throughflow import through_flow_potential, solid_distance_phi, alpha_potential, co2_window_factor
 
 D_MODEL = 128
 N_HEADS = 4
@@ -58,7 +58,8 @@ NONDIM_CHECKPOINT_KEY = "nondim"
 # load without error but predict the wrong velocity. Every checkpoint from v9
 # on records MODEL_FORMAT; bump it whenever forward() changes meaning.
 MODEL_FORMAT_KEY = "model_format"
-MODEL_FORMAT = "v19_throughflow"  # v12_linear_n -> v19_throughflow: velocity = curl(B_p + s*phi*A), see throughflow.py
+MODEL_FORMAT = "v20_co2window"    # v19_throughflow -> v20_co2window: C x co2_window_factor, alpha = potential split + correction
+# (v12_linear_n -> v19_throughflow: velocity = curl(B_p + s*phi*A), see throughflow.py)
 # (v10_hardic -> v12_linear_n: C output multiplied by N/N_MAX). Checkpoints v12-v18 carry
 # "v12_linear_n" and must be evaluated with the frozen code in milestones/<version>/.
 
@@ -76,7 +77,8 @@ def check_checkpoint_compat(ckpt, path=""):
         f"Run the frozen scripts inside milestones/<that version>/ instead "
         f"(e.g. milestones/v8_nondim/, milestones/v9_zeroflow_bc/, milestones/v10_hardic/, "
         f"milestones/v13_fullocc/). For any 'v12_linear_n' checkpoint (v12-v18) use the tagged code: "
-        f"git worktree add ../gnot_v12format code-v12-format, then run the scripts from there."
+        f"git worktree add ../gnot_v12format code-v12-format; for 'v19_throughflow' (v19): "
+        f"git worktree add ../gnot_v19format code-v19-format; then run the scripts from there."
     )
 
 
@@ -459,13 +461,20 @@ class GNOTOperator(nn.Module):
         # empty room, and means C_hat no longer has to learn the N-dependence.
         # REVISIT this factor if buoyancy, a non-zero background/inflow CO2, or any
         # other N-independent CO2 source is ever added -- it would no longer be exact.
-        C = C_REF * (t / T_MAX) * (N_people / N_PEOPLE_MAX) * C_hat
+        # v20: x co2_window_factor -> C = 0 EXACTLY on the core of every open window (clean
+        # inflow). v19 at iter 5000 carried CO2 IN through the open windows (level-3 budget
+        # +50..+230%): the soft c = 0 term was badly violated under through-flows up to 77 m^3/s.
+        C = C_REF * (t / T_MAX) * (N_people / N_PEOPLE_MAX) * C_hat * co2_window_factor(x, y, V)
         return A1, A2, A3, C, p
 
     def door_split(self, t, V):
-        """v19: alpha(V, t) in (0,1), (B,1): share of the through-flow leaving by door 1."""
+        """alpha(V, t) in (0,1), (B,1): share of the through-flow leaving by door 1.
+        v20: alpha = sigmoid(logit(alpha_pot(V)) + head(V, t)) -- the potential-flow split
+        (throughflow.alpha_potential, compute_door_split.py) plus a learned correction that starts
+        at 0 (zero-initialised last layer). v19's free alpha barely moved in 5000 iterations."""
         feats = torch.cat([V / V_MAX, t / T_MAX, torch.tanh(3.0 * t / TAU_RAMP)], dim=-1)
-        return torch.sigmoid(self.alpha_head(feats))
+        a0 = alpha_potential(V).clamp(1e-4, 1 - 1e-4)
+        return torch.sigmoid(torch.log(a0 / (1.0 - a0)) + self.alpha_head(feats))
 
     def velocity_from_potential(self, A1, A2, A3, x, y, z):
         """Curl trick: differentiate the vector potential to get a

@@ -351,9 +351,9 @@ def test_flux_scaled_walls(device):
         cols.append(a * (xi - cx) / r + b * (yi - cy) / r)
     unc = torch.tensor(cols).view(-1, 1)
     flux = torch.cat([A_SOLID * un / throughflow_scale(Vw, tw), A_SOLID * unc / throughflow_scale(Vc, tc)])
-    from train_gnot import velocity_scale, USE_WINDOW_NORMAL_TARGET
+    from train_gnot import velocity_scale, slip_scale, USE_WINDOW_NORMAL_TARGET
     s2 = a * a + b * b + c * c
-    slip = (s2 / velocity_scale(Vw) ** 2).mean().item() + (s2 / velocity_scale(Vc) ** 2).mean().item()  # v19: relative
+    slip = (s2 / slip_scale(Vw) ** 2).mean().item() + (s2 / slip_scale(Vc) ** 2).mean().item()  # v20: slip_scale
     expected = slip + (flux ** 2).mean().item()
     assert abs(L - expected) < 1e-4 * max(1.0, expected), f"walls_loss {L:.6f} != expected {expected:.6f}"
     # warm-up factor 0 must remove the leak term entirely (only the no-slip part remains)
@@ -370,11 +370,11 @@ def test_flux_scaled_walls(device):
     if USE_WINDOW_NORMAL_TARGET:   # rel_weight = 0 -> the old absolute error
         tgt = -Vw_.gather(1, idx_) * torch.tanh(3.0 * tw_ / TAU_RAMP)
         expect_w = (a * a) + ((b - tgt) ** 2).mean().item() + (c * c)
-    else:                          # v19: tangential components only, relative to U_ref
-        expect_w = ((a * a + c * c) / velocity_scale(Vw_) ** 2).mean().item()
+    else:                          # v19/v20: tangential components only, relative to the slip scale
+        expect_w = ((a * a + c * c) / slip_scale(Vw_) ** 2).mean().item()
     assert abs(Lw - expect_w) < 1e-4 * max(1.0, expect_w), f"windows_loss {Lw:.6f} != expected {expect_w:.6f}"
     print(f"  A_SOLID={A_SOLID:.1f} m^2; walls_loss for a constant 0.01-0.03 m/s velocity = {L:.3f} "
-          f"(no-slip part only would be {slip:.5f}) -- leak is expensive; window/slip terms relative to U_ref")
+          f"(no-slip part only would be {slip:.5f}) -- leak is expensive; window/slip terms relative to slip_scale")
 
 
 @stage("0f. v19 exact through-flow -- no normal velocity on ANY solid surface, exact window/door fluxes, alpha split")
@@ -391,7 +391,7 @@ def test_throughflow_exact(device):
     torch.manual_seed(3)
     model = GNOTOperator().to(device)
     with torch.no_grad():      # review: at init alpha = 0.5 exactly, which would hide a door-order swap
-        model.alpha_head[2].bias.fill_(1.5)                                          # -> alpha ~ 0.82
+        model.alpha_head[2].bias.fill_(1.5)           # -> alpha clearly != 0.5 (~0.81 for this V under v20)
     Vrow = torch.tensor([[2.5, 0.0, 4.0, 0.0, 1.0, 0.0, 0.0, 5.0]], device=device)   # mixed open/closed
     t60 = 60.0
 
@@ -459,6 +459,60 @@ def test_throughflow_exact(device):
     print(f"  interior speed {scale:.2f} m/s; max normal velocity: " +
           ", ".join(f"{k_} {v_:.1e}" for k_, v_ in worst.items()) +
           f"; inflow {q_in:.3f} = door outflow {sum(fd):.3f} m^3/s, split {fd[0] / sum(fd):.3f} (alpha {alpha:.3f})")
+
+
+@stage("0g. v20 CO2 window factor (c = 0 on open windows), potential-flow door split, slip scale")
+def test_v20(device):
+    from gnot_model import GNOTOperator
+    from throughflow import (co2_window_factor, alpha_potential, DOOR1_SHARE_PER_WINDOW, EPS_WINDOW)
+    from train_gnot import slip_scale, velocity_scale, V_REL_FLOOR
+    from point_sampler import WINDOWS, ROOM_Y, ROOM_Z, NUM_WINDOWS
+    torch.manual_seed(5)
+    model = GNOTOperator().to(device)
+    V = torch.tensor([[3.0, 0.0, 2.0, 0.0, 0.0, 0.0, 0.0, 0.0]], device=device)   # W1, W3 open
+    n = 400
+    # (a) C exactly 0 on the CORE of open windows (inside the edge taper), any z, any t > 0
+    def pts(k, core):
+        a, b = WINDOWS[k][0], WINDOWS[k][1]
+        lo, hi = (a + EPS_WINDOW, b - EPS_WINDOW) if core else (a, b)
+        x = torch.rand(n, 1, device=device) * (hi - lo) + lo
+        return x, torch.full_like(x, ROOM_Y[1]), torch.rand(n, 1, device=device) * ROOM_Z[1]
+
+    def C_at(x, y, z):
+        with torch.no_grad():
+            _, _, _, C, _ = model(x, y, z, torch.full_like(x, 60.0), V.expand(x.shape[0], -1),
+                                  torch.full_like(x, 20.0))
+        return C
+    c_ref = C_at(torch.rand(n, 1, device=device) * 10 + 2, torch.rand(n, 1, device=device) * 5 + 2,
+                 torch.rand(n, 1, device=device) * 2 + 0.5).abs().mean().item()
+    c_open = max(C_at(*pts(0, True)).abs().max().item(), C_at(*pts(2, True)).abs().max().item())
+    assert c_ref > 0 and c_open < 1e-5 * max(c_ref, 1e-12) + 1e-9, (
+        f"|C| on open-window cores {c_open:.2e} (interior mean {c_ref:.2e}): c = 0 not exact")
+    # (b) omega = 1 on closed windows and on the wall between windows
+    xc, yc, zc = pts(1, False)                                         # window 2 is closed
+    om_closed = co2_window_factor(xc, yc, V.expand(n, -1))
+    xw = torch.full((n, 1), 3.4, device=device)                      # wall between W1 and W2
+    om_wall = co2_window_factor(xw, torch.full_like(xw, ROOM_Y[1]), V.expand(n, -1))
+    assert (om_closed - 1).abs().max().item() < 1e-6 and (om_wall - 1).abs().max().item() < 1e-6, \
+        "co2 window factor must be 1 on closed windows and walls"
+    # (c) door split starts at the potential-flow value; closed -> 0.5
+    probe = torch.zeros(NUM_WINDOWS + 1, NUM_WINDOWS, device=device)
+    for k in range(NUM_WINDOWS):
+        probe[k, k] = 3.0
+    a = model.door_split(torch.full((NUM_WINDOWS + 1, 1), 60.0, device=device), probe).squeeze(1).tolist()
+    for k in range(NUM_WINDOWS):
+        assert abs(a[k] - DOOR1_SHARE_PER_WINDOW[k]) < 1e-4, f"alpha(W{k + 1} only) {a[k]:.4f} != {DOOR1_SHARE_PER_WINDOW[k]}"
+    assert abs(a[-1] - 0.5) < 1e-6, f"alpha(all closed) {a[-1]} != 0.5"
+    # (d) slip scale: all 3 m/s -> max(window speed 3, U_ref/3 = 3.44) (cap); W1 3 m/s -> door speed U_ref
+    #     (< window speed); closed -> floor
+    from train_gnot import SLIP_MAX_RATIO
+    Vs = torch.tensor([[3.0] * 8, [3.0] + [0.0] * 7, [0.0] * 8], device=device)
+    s = slip_scale(Vs).squeeze(1).tolist()
+    u = velocity_scale(Vs).squeeze(1).tolist()
+    assert abs(s[0] - max(3.0, u[0] / SLIP_MAX_RATIO)) < 1e-4 and abs(s[1] - u[1]) < 1e-4 \
+        and abs(s[2] - V_REL_FLOOR) < 1e-6, f"slip_scale {s} (U_ref {u})"
+    print(f"  |C| on open-window cores {c_open:.1e} (interior {c_ref:.1e}); omega = 1 on closed windows/walls; "
+          f"alpha(W1..W8) = {', '.join(f'{v:.3f}' for v in a[:-1])}; slip scale {s[0]:.2f}/{s[1]:.2f}/{s[2]:.2f} m/s")
 
 
 @stage("0b. v8 non-dimensionalization -- no input saturation, training CO2 loss actually scaled, checkpoint guard")
@@ -585,14 +639,15 @@ def test_nondim(device):
     for old in ({"version": "v5_closed_window_fix"}, {"version": "v8_nondim", "nondim": True},
                 {"version": "v9_zeroflow_bc", "nondim": True, "model_format": "v9_zeroflow"},
                 {"version": "v10_hardic", "nondim": True, "model_format": "v10_hardic"},
-                {"version": "v13_fullocc", "nondim": True, "model_format": "v12_linear_n"}):
+                {"version": "v13_fullocc", "nondim": True, "model_format": "v12_linear_n"},
+                {"version": "v19_throughflow", "nondim": True, "model_format": "v19_throughflow"}):
         try:
             check_checkpoint_compat(old, "fake_old.pth")
             raise AssertionError(f"check_checkpoint_compat accepted an old checkpoint: {old}")
         except RuntimeError:
             pass
     check_checkpoint_compat({"version": "v9", "nondim": True, MODEL_FORMAT_KEY: MODEL_FORMAT}, "fake_new.pth")
-    print(f"  checkpoint guard: rejects v5, v8, v9, v10 and v12-v18, accepts {MODEL_FORMAT} -- OK")
+    print(f"  checkpoint guard: rejects v5, v8, v9, v10, v12-v18 and v19, accepts {MODEL_FORMAT} -- OK")
 
     # (e) v9 HARD ZERO-FLOW: with all windows closed the velocity must be
     # EXACTLY zero by construction (the loophole v8 exploited: a spurious slow
@@ -914,6 +969,7 @@ def main():
     test_audit_fixes(device)
     test_flux_scaled_walls(device)
     test_throughflow_exact(device)
+    test_v20(device)
     test_nondim(device)
     test_fourier_features(device)
     test_query_encoder(device)

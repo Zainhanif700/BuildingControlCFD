@@ -188,6 +188,45 @@ def solid_distance_phi(x, y, z, V):
     return phi
 
 
+# v20: potential-flow share of each window's air that leaves through door 1, from
+# compute_door_split.py (lap(theta) = 0, unit inflow at window k, no flux elsewhere, theta = 0 at
+# both doors). dx = 0.12 m values: at this spacing both doors (and all windows) are resolved with
+# equal cell counts (at dx = 0.1 door 2 came out 10% larger than door 1, biasing r_k by ~0.004).
+# Across dx = 0.075-0.2 the shares scatter by about +-0.006 (independent review) -- small, and the
+# model adds a learned correction on top (gnot_model.door_split).
+DOOR1_SHARE_PER_WINDOW = [0.5935, 0.5654, 0.5526, 0.4914, 0.4491, 0.4355, 0.3989, 0.3857]
+L_CO2_WINDOW = 0.3        # m, depth over which the CO2 window factor recovers from 0 to 1
+
+
+def alpha_potential(V):
+    """v20: potential-flow door-1 share of the scenario's through-flow, (B,1):
+    sum_k V_k A_k r_k / sum_k V_k A_k (0.5 when all windows are closed -- then there is no flow)."""
+    wa, wb, _, _ = _consts(V)
+    r = torch.tensor(DOOR1_SHARE_PER_WINDOW, device=V.device, dtype=V.dtype).view(1, -1)
+    q = V * (wb - wa)
+    tot = q.sum(dim=1, keepdim=True)
+    return torch.where(tot > 0, (q * r).sum(dim=1, keepdim=True) / tot.clamp_min(1e-12),
+                       torch.full_like(tot, 0.5))
+
+
+def co2_window_factor(x, y, V):
+    """v20: omega(x, y; V) in [0, 1] with omega = 0 on the core of every OPEN window (exact clean
+    inflow, c = 0) and omega = 1 on closed windows, walls and away from the window wall:
+        omega = 1 - hole(x, V) * (1 - tanh((LY - y) / L_CO2_WINDOW)),
+        hole  = sum_k tanh(V_k / V_OPEN) * plateau_k(x)      (same opening profile as the inflow).
+    At y = LY, omega = 1 - hole: 0 where the window is fully open (hole -> 1 for V_k >> V_OPEN),
+    partial only in the 0.1 m edge taper, where the inflow velocity also tapers to 0. Multiplies
+    the CO2 output -- it keeps C = 0 at t = 0 and C proportional to N exactly.
+    Exactness on the window core: the remainder is (1 - tanh(V_k/0.1)) C -- 0.5% at V = 0.3 m/s,
+    1e-4 at 0.5 m/s, exactly 0 in float32 for V >= 1 m/s. So: 'exact for V >~ 0.5 m/s'; slower
+    windows (and the edge tapers) are still covered by the soft c = 0 term in windows_loss.
+    omega = 1 exactly (and d omega/dn = 0) on walls, mullions and closed windows, so the CO2
+    no-flux conditions and the closed-room case are unchanged (independent review)."""
+    wa, wb, _, _ = _consts(x)
+    hole = (torch.tanh(V / V_OPEN) * _plateau(x, wa, wb, EPS_WINDOW)).sum(dim=1, keepdim=True)
+    return 1.0 - hole * (1.0 - torch.tanh((ROOM_Y[1] - y) / L_CO2_WINDOW))
+
+
 def target_window_flux(V, t):
     """Prescribed outward flux of each window (negative = inflow), (B, 8)."""
     areas = torch.tensor([(b - a) * (d - c) for a, b, c, d in WINDOWS], device=V.device, dtype=V.dtype)
