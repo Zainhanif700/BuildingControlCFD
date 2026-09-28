@@ -169,15 +169,60 @@ def _G(z):
 PSI_BLEND = "linear"
 PSI_TURN_DEPTH = 2.0      # m (same order as DOOR_STRIP, where chi turns the flow into the doors)
 
+# v22_smoothjet: SMOOTH window-jet profile inside the room.
+# Found in v21 (diagnose_ns_residual.py, W1 1 m/s): 99.4% of the momentum loss came from 1% of the
+# points, ALL at x = 2.10-2.68 m (= window 1) and at every depth y and height z; their residual was
+# 100% the viscous term of B_p ITSELF. Cause: the linear psi blend carries the window's sharp inflow
+# profile (0.1 m C3 edges, EPS_WINDOW) as a sheet through the whole room depth -> nu*lap(v) ~ nu*V/eps^2
+# along two 0.1 m-thin shear layers, far finer than the network can represent (Fourier features down
+# to ~0.6 m) -> an irreducible, spiky loss (v21 NS loss 25-1700 between iterations) that swamps the
+# gradient; the same points give ~8 at nu = 0.01, the whole measured NS loss of that case (v19 too).
+# Fix: away from the window wall, psi uses the SAME window fluxes with a smooth tanh-edged profile
+# (length JET_EDGE_W); the sharp profile is kept at the window wall and blended out over JET_SPREAD_L:
+#     F_top_in(x, y) = F_top(x) + beta(y) (F_top_smooth(x) - F_top(x)),  beta = S((LY - y)/JET_SPREAD_L).
+# Exactness is unchanged: beta = beta' = 0 at y = LY (psi and dpsi/dy at the window wall as before);
+# F_top_smooth(0) = 0 and F_top_smooth(LX) = q exactly (normalised), so the end walls stay exact; the
+# door wall (y = 0) and chi are untouched; column constants are unchanged (their rings meet the walls,
+# where psi is unchanged). Only the free interior shape of the through-flow changes (a spread jet).
+JET_SMOOTH = True
+JET_EDGE_W = 0.5          # m, tanh edge length of the smooth jet profile
+JET_SPREAD_L = 1.0        # m, depth from the window wall over which the sharp profile blends out
 
-def through_flow_potential(x, y, z, t, V, alpha, blend=None, turn_depth=None):
+
+def _lncosh(u):
+    return torch.log(torch.cosh(u))   # |u| <= LX / JET_EDGE_W ~ 31 here: no overflow in float32
+
+
+def _F_top_smooth(x, V, rt, w):
+    """Cumulative inflow per unit height with smooth tanh edges of length w, (B,1): window k
+    contributes V_k (b_k - a_k) (C_k(x) - C_k(0)) / (C_k(LX) - C_k(0)), C_k = integral of
+    (tanh((x-a)/w) - tanh((x-b)/w)) / 2 -> exactly 0 at x = ROOM_X[0], exactly q/rt at ROOM_X[1]."""
+    wa, wb, _, _ = _consts(x)
+    x0 = torch.full_like(x, ROOM_X[0])
+    x1 = torch.full_like(x, ROOM_X[1])
+
+    def C(xx):
+        return 0.5 * w * (_lncosh((xx - wa) / w) - _lncosh((xx - wb) / w))
+    frac = (C(x) - C(x0)) / (C(x1) - C(x0))
+    return rt * (V * (wb - wa) * frac).sum(dim=1, keepdim=True)
+
+
+def through_flow_potential(x, y, z, t, V, alpha, blend=None, turn_depth=None,
+                           smooth=None, edge_w=None, spread_l=None):
     """(chi, psi), each (B,1): B_p = (chi, 0, psi). Inputs physical units; alpha in (0,1), (B,1).
-    blend / turn_depth default to PSI_BLEND / PSI_TURN_DEPTH (see above)."""
+    blend / turn_depth default to PSI_BLEND / PSI_TURN_DEPTH (see above); smooth / edge_w /
+    spread_l to JET_SMOOTH / JET_EDGE_W / JET_SPREAD_L (v22)."""
     blend = PSI_BLEND if blend is None else blend
     turn_depth = PSI_TURN_DEPTH if turn_depth is None else turn_depth
+    smooth = JET_SMOOTH if smooth is None else smooth
+    edge_w = JET_EDGE_W if edge_w is None else edge_w
+    spread_l = JET_SPREAD_L if spread_l is None else spread_l
     rt = ramp(t)
     q = _q(V, rt)
     F_top = _F_top(x, V, rt)
+    if smooth:   # v22: the interior sees a smooth jet profile; exact sharp profile at the window wall
+        beta = _S((ROOM_Y[1] - y) / spread_l)
+        F_top = F_top + beta * (_F_top_smooth(x, V, rt, edge_w) - F_top)
     F_bot = _F_bot(x, q, alpha)
     if blend == "linear":
         eta = (y - ROOM_Y[0]) / LY

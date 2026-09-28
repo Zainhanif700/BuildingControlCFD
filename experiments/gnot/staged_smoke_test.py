@@ -574,6 +574,45 @@ def test_v21(device):
           f"{L[0]:.4g} / {L[1]:.4g} / {L[2]:.4g} / {L[3]:.4g} (exact quadratic in nu, default = NU)")
 
 
+@stage("0i. v22 smooth jet -- psi unchanged on the window wall, exact end values, much smaller B_p curvature inside")
+def test_v22(device):
+    import throughflow as tfl
+    from point_sampler import ROOM_X, ROOM_Y, ROOM_Z
+    assert tfl.JET_SMOOTH, "v22 expects throughflow.JET_SMOOTH = True"
+    n = 2000
+    dt = torch.float64
+    V = torch.tensor([[1.0, 0.0, 2.0, 0.0, 0.0, 0.0, 3.0, 0.0]], device=device, dtype=dt).expand(n, -1)
+    t = torch.full((n, 1), 60.0, device=device, dtype=dt)
+    al = torch.full((n, 1), 0.55, device=device, dtype=dt)
+    x = torch.rand(n, 1, device=device, dtype=dt) * (ROOM_X[1] - ROOM_X[0]) + ROOM_X[0]
+    z = torch.rand(n, 1, device=device, dtype=dt) * ROOM_Z[1]
+    # (a) at the window wall (y = LY) psi equals the sharp (v19-v21) psi exactly, and so does dpsi/dy
+    yw = torch.full((n, 1), ROOM_Y[1], device=device, dtype=dt, requires_grad=True)
+    _, ps_ = tfl.through_flow_potential(x, yw, z, t, V, al, smooth=True)
+    _, pl_ = tfl.through_flow_potential(x, yw, z, t, V, al, smooth=False)
+    d0 = (ps_ - pl_).abs().max().item()
+    d1 = (torch.autograd.grad(ps_.sum(), yw)[0] - torch.autograd.grad(pl_.sum(), yw)[0]).abs().max().item()
+    assert d0 < 1e-12 and d1 < 1e-9, f"psi / dpsi/dy at the window wall changed: {d0:.1e} / {d1:.1e}"
+    # (b) smooth cumulative profile: exactly 0 at x = 0 and exactly the total inflow at x = LX
+    rt = tfl.ramp(t[:2])
+    xe = torch.tensor([[ROOM_X[0]], [ROOM_X[1]]], device=device, dtype=dt)
+    Fs = tfl._F_top_smooth(xe, V[:2], rt, tfl.JET_EDGE_W).squeeze(1).tolist()
+    Fl = tfl._F_top(xe, V[:2], rt).squeeze(1).tolist()
+    assert abs(Fs[0]) < 1e-12 and abs(Fs[1] - Fl[1]) < 1e-12, f"smooth F_top ends {Fs} vs sharp {Fl}"
+    # (c) mid-room (y = LY/2): lap of v = -dpsi/dx (dominant term) far smaller than with the sharp sheet
+    xm = x.clone().requires_grad_(True)
+    ym = torch.full((n, 1), ROOM_Y[1] / 2, device=device, dtype=dt)
+    lap = {}
+    for sm in (False, True):
+        _, p_ = tfl.through_flow_potential(xm, ym, z, t, V, al, smooth=sm)
+        v_ = -torch.autograd.grad(p_.sum(), xm, create_graph=True)[0]
+        d2 = torch.autograd.grad(torch.autograd.grad(v_.sum(), xm, create_graph=True)[0].sum(), xm)[0]
+        lap[sm] = d2.abs().max().item()
+    assert lap[True] < 0.05 * lap[False], f"smooth jet curvature {lap[True]:.3g} not << sharp {lap[False]:.3g}"
+    print(f"  window wall: psi / dpsi/dy unchanged ({d0:.1e} / {d1:.1e}); smooth profile ends exact; "
+          f"max |d2v/dx2| mid-room: sharp {lap[False]:.3g} -> smooth {lap[True]:.3g} 1/(m s)")
+
+
 @stage("0b. v8 non-dimensionalization -- no input saturation, training CO2 loss actually scaled, checkpoint guard")
 def test_nondim(device):
     from gnot_model import GNOTOperator, check_checkpoint_compat
@@ -704,14 +743,15 @@ def test_nondim(device):
                 {"version": "v10_hardic", "nondim": True, "model_format": "v10_hardic"},
                 {"version": "v13_fullocc", "nondim": True, "model_format": "v12_linear_n"},
                 {"version": "v19_throughflow", "nondim": True, "model_format": "v19_throughflow"},
-                {"version": "v20_co2window", "nondim": True, "model_format": "v20_co2window"}):
+                {"version": "v20_co2window", "nondim": True, "model_format": "v20_co2window"},
+                {"version": "v21_single", "nondim": True, "model_format": "v21_single"}):
         try:
             check_checkpoint_compat(old, "fake_old.pth")
             raise AssertionError(f"check_checkpoint_compat accepted an old checkpoint: {old}")
         except RuntimeError:
             pass
     check_checkpoint_compat({"version": "v9", "nondim": True, MODEL_FORMAT_KEY: MODEL_FORMAT}, "fake_new.pth")
-    print(f"  checkpoint guard: rejects v5, v8, v9, v10, v12-v18, v19 and v20, accepts {MODEL_FORMAT} -- OK")
+    print(f"  checkpoint guard: rejects v5, v8, v9, v10, v12-v18, v19, v20 and v21, accepts {MODEL_FORMAT} -- OK")
 
     # (e) v9 HARD ZERO-FLOW: with all windows closed the velocity must be
     # EXACTLY zero by construction (the loophole v8 exploited: a spurious slow
@@ -1045,6 +1085,7 @@ def main():
     test_throughflow_exact(device)
     test_v20(device)
     test_v21(device)
+    test_v22(device)
     test_nondim(device)
     test_fourier_features(device)
     test_query_encoder(device)

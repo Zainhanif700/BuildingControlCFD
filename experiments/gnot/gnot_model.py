@@ -58,7 +58,8 @@ NONDIM_CHECKPOINT_KEY = "nondim"
 # load without error but predict the wrong velocity. Every checkpoint from v9
 # on records MODEL_FORMAT; bump it whenever forward() changes meaning.
 MODEL_FORMAT_KEY = "model_format"
-MODEL_FORMAT = "v21_single"       # v20_co2window -> v21_single: CO2 window factor OFF again (USE_CO2_WINDOW_FACTOR)
+MODEL_FORMAT = "v22_smoothjet"    # v21_single -> v22_smoothjet: B_p with a smooth jet profile inside the room (throughflow.JET_SMOOTH)
+# (v20_co2window -> v21_single: CO2 window factor OFF again (USE_CO2_WINDOW_FACTOR))
 # (v19_throughflow -> v20_co2window: C x co2_window_factor, alpha = potential split + correction)
 # v21: the CO2 window factor of v20 is switched OFF. v20 at iter 5000 collapsed to a near-trivial CO2
 # field (closed-room plane error 95%, source -98%): u.grad(omega)*C_hat is huge next to the open

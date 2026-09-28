@@ -576,13 +576,25 @@ def gradnorm_weight_update(grad_ns, grad_co2, prev_weight):
 #                     0.03, final: 0.01). Success = velocity error clearly below B_p's 71% and
 #                     alignment clearly above 0.14. Closed-room checks are NOT meaningful for v21
 #                     (never trained closed).
+#                     RESULT at iter 3000 (NEGATIVE, stopped): vs OpenFOAM nu = 0.1 velocity error 136%
+#                     (volume) / 109% (plane) at 30/60/120 s, CO2 mass 4.8-5.5x; the network correction
+#                     0.011 m/s vs 0.128 needed, alignment 0.01 -> the model is B_p. NS loss 25-1700,
+#                     guide_w 1e2-7e3. diagnose_ns_residual.py: 99.4% of the NS loss from 1% of the
+#                     points, all at window 1's x-range across the whole room, 100% B_p's OWN viscous
+#                     term (sharp 0.1 m edges carried through the room; unrepresentable for the network).
+#   v22_smoothjet   -- v21 setup + ONE change in B_p (throughflow.JET_SMOOTH, MODEL_FORMAT
+#                     v22_smoothjet): inside the room psi uses a smooth tanh-edged jet profile
+#                     (JET_EDGE_W), the exact sharp profile only at the window wall (blended over
+#                     JET_SPREAD_L). All fluxes/walls stay exact. Before training (no GPU hours):
+#                     openfoam/compare_bp_with_openfoam.py -- B_p alone vs OpenFOAM and B_p's viscous
+#                     residual (top-1% share) for the sharp vs smooth variants.
 #
 # IMPORTANT: this VERSION variable (and CKPT_DIR below) is what train_gnot.py's own
 # main() uses for a FULL 20k-iteration production run. Bump this to match whichever
 # fix combination is confirmed working via the closed-window diagnostic BEFORE
 # launching the next full run through this file, so production checkpoints aren't
 # mislabeled with stale physics/sampling.
-VERSION = "v21_single"
+VERSION = "v22_smoothjet"
 SINGLE_SCENARIO_V = [1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]   # v21: W1 1 m/s (= openfoam case W1_1ms); None = mix
 
 # v15: optimizer switch. "adam" = v1-v14 behaviour; "soap" = soap.py (official
