@@ -660,6 +660,12 @@ def test_v22_weight(device):
     err = ((fd - lap).abs().max() / lap.abs().max().clamp_min(1e-12)).item()
     assert err < 1e-3, f"lap(curl B_p) differs from finite differences by {err:.1e} (relative)"
     assert not lap.requires_grad, "bp_velocity_laplacian must be detached"
+    # float32 over the WHOLE room length (the log(cosh) version overflowed to NaN near the end walls)
+    xs = torch.linspace(0.0, 15.53, 400, device=device).view(-1, 1)
+    o = torch.ones_like(xs)
+    lap32 = tfl.bp_velocity_laplacian(xs, 4.0 * o, 1.0 * o, 60.0 * o,
+                                      torch.tensor([[1.0] + [0.0] * 7], device=device).expand(400, -1), 0.55 * o)
+    assert torch.isfinite(lap32).all(), "lap(curl B_p) not finite in float32 somewhere along x"
     # (b) the weighted training loss equals a manual weighted mean on the SAME points, weights in (0, 1]
     torch.manual_seed(12)
     model = GNOTOperator().to(device)
