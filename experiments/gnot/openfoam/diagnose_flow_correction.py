@@ -57,8 +57,9 @@ def main():
     model = GNOTOperator().to(dev)
     model.load_state_dict(ckpt["model_state"])
     model.eval()
-    s = float(np.sqrt(np.mean((np.array(V) / V_MAX) ** 2)))
-    print(f"{ck} (version={ckpt.get('version')}); scenario {meta['name']} V={V}; s(V) = RMS(V)/V_MAX = {s:.3f}")
+    from gnot_model import door_jet_speed          # v23: correction scale = door jet speed
+    s = float(door_jet_speed(torch.tensor([V])).item())
+    print(f"{ck} (version={ckpt.get('version')}); scenario {meta['name']} V={V}; correction scale s(V) = {s:.3f} m/s")
 
     g = L2.Grid(dx, V)
     C = read_internal(os.path.join(case, "0", "C"), 3)

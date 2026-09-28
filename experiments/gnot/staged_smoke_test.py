@@ -559,15 +559,15 @@ def test_v21(device):
     torch.manual_seed(11)
     model = GNOTOperator().to(device)
     L = []
-    w_flag = tg.USE_BP_RESIDUAL_WEIGHT
-    tg.USE_BP_RESIDUAL_WEIGHT = False
+    w_flag, h_flag = tg.USE_BP_RESIDUAL_WEIGHT, tg.NS_PSEUDO_HUBER
+    tg.USE_BP_RESIDUAL_WEIGHT = tg.NS_PSEUDO_HUBER = False   # plain squared residual (quadratic in nu)
     try:
         for nu in (0.0, 0.05, 0.1, 0.01, None):
             torch.manual_seed(3)          # same points every call
             L.append(physics_loss(model, device, nu=nu)[0].item() if nu is not None
                      else physics_loss(model, device)[0].item())
     finally:
-        tg.USE_BP_RESIDUAL_WEIGHT = w_flag
+        tg.USE_BP_RESIDUAL_WEIGHT, tg.NS_PSEUDO_HUBER = w_flag, h_flag
     L_default = L.pop()
     # quadratic through (0, L0), (0.05, L1), (0.1, L2) evaluated at 0.01
     h = 0.05
@@ -628,13 +628,13 @@ def test_v22(device):
           f"max |d2v/dx2| mid-room: sharp {lap[False]:.3g} -> smooth {lap[True]:.3g} 1/(m s)")
 
 
-@stage("0j. v22 B_p residual weighting -- lap(curl B_p) vs finite differences, weights in (0,1], weighted loss = manual")
+@stage("0j. v22/v23 lap(curl B_p) vs finite differences; v23 Pseudo-Huber NS loss consistent with the plain loss")
 def test_v22_weight(device):
     import throughflow as tfl
     import train_gnot as tg
     import point_sampler as ps
     from gnot_model import GNOTOperator
-    assert tg.USE_BP_RESIDUAL_WEIGHT, "v22 expects USE_BP_RESIDUAL_WEIGHT = True"
+    assert tg.NS_PSEUDO_HUBER and not tg.USE_BP_RESIDUAL_WEIGHT, "v23 expects Pseudo-Huber ON, B_p weighting OFF"
     dt = torch.float64
     # (a) bp_velocity_laplacian against central finite differences of the B_p velocity (float64)
     torch.manual_seed(4)
@@ -666,25 +666,63 @@ def test_v22_weight(device):
     lap32 = tfl.bp_velocity_laplacian(xs, 4.0 * o, 1.0 * o, 60.0 * o,
                                       torch.tensor([[1.0] + [0.0] * 7], device=device).expand(400, -1), 0.55 * o)
     assert torch.isfinite(lap32).all(), "lap(curl B_p) not finite in float32 somewhere along x"
-    # (b) the weighted training loss equals a manual weighted mean on the SAME points, weights in (0, 1]
+    # (b) v23 Pseudo-Huber: on the SAME points the logged raw loss equals the plain squared loss, and
+    #     2 (sqrt(1 + r2) - 1) <= r2 pointwise -> Huber loss <= plain loss, > 0
     torch.manual_seed(12)
     model = GNOTOperator().to(device)
     ps.FIXED_V = [1.0] + [0.0] * 7
     try:
         torch.manual_seed(5)
-        L_w = tg.physics_loss(model, device)[0].item()
-        diag = dict(tg._NS_DIAG)
-        tg.USE_BP_RESIDUAL_WEIGHT = False
+        L_h = tg.physics_loss(model, device)[0].item()
+        raw = tg._NS_DIAG["raw"]
+        tg.NS_PSEUDO_HUBER = False
         torch.manual_seed(5)
-        L_raw = tg.physics_loss(model, device)[0].item()
+        L_plain = tg.physics_loss(model, device)[0].item()
     finally:
-        tg.USE_BP_RESIDUAL_WEIGHT = True
+        tg.NS_PSEUDO_HUBER = True
         ps.FIXED_V = None
-    assert abs(diag["raw"] - L_raw) <= 1e-4 * abs(L_raw), f"logged NSraw {diag['raw']} != unweighted loss {L_raw}"
-    assert 0 < diag["w_mean"] <= 1 and 0 <= diag["w_low"] <= 1, f"weights out of range: {diag}"
-    assert L_w <= L_raw / diag["w_mean"] + 1e-9, "weighted mean exceeds its bound mean(r2)/mean(w)"
-    print(f"  lap(curl B_p) vs finite differences: rel. error {err:.1e}; W1 1 m/s random model: NS weighted "
-          f"{L_w:.4g} vs unweighted {L_raw:.4g}, mean weight {diag['w_mean']:.3f}, {diag['w_low']:.1%} of points w < 0.5")
+    assert abs(raw - L_plain) <= 1e-4 * abs(L_plain), f"logged NSraw {raw} != plain loss {L_plain}"
+    assert 0 < L_h <= L_plain + 1e-9, f"Pseudo-Huber {L_h} not in (0, plain {L_plain}]"
+    print(f"  lap(curl B_p) vs finite differences: rel. error {err:.1e}; W1 1 m/s random model: NS Pseudo-Huber "
+          f"{L_h:.4g} vs plain {L_plain:.4g} (logged raw {raw:.4g})")
+
+
+@stage("0k. v23 output scales -- s = door jet speed (0 closed), p = U_ref^2 p_raw without ramp, doors loss scaled")
+def test_v23(device):
+    import gnot_model as gm
+    import train_gnot as tg
+    assert gm.P_SCALE_FLOOR == tg.U_NS_FLOOR, "gnot_model.P_SCALE_FLOOR must equal train_gnot.U_NS_FLOOR"
+    Vs = torch.tensor([[1.0] + [0.0] * 7, [0.0] * 8, [3.0] * 8], device=device)
+    s = gm.door_jet_speed(Vs).squeeze(1).tolist()
+    u = tg.velocity_scale(Vs).squeeze(1).tolist()
+    assert s[1] == 0.0, "correction scale must be exactly 0 with all windows closed"
+    assert abs(max(s[0], 0.5) - u[0]) < 1e-6 and abs(s[2] - u[2]) < 1e-5, f"s {s} vs velocity_scale {u}"
+    # p = U_ref^2 * p_raw: force p_raw = 1 (zero last-layer row, bias 1) -> p = U_ref^2 at ANY t, incl. t = 0
+    torch.manual_seed(0)
+    model = gm.GNOTOperator().to(device)
+    with torch.no_grad():
+        model.out_head[-1].weight[4].zero_()
+        model.out_head[-1].bias[4].fill_(1.0)
+    n = 32
+    x = torch.rand(n, 1, device=device) * 10 + 2
+    y = torch.rand(n, 1, device=device) * 6 + 1
+    z = torch.rand(n, 1, device=device) * 2 + 0.5
+    for Vrow, ur in ((Vs[0:1], u[0]), (Vs[2:3], u[2])):
+        for tv in (0.0, 60.0):
+            with torch.no_grad():
+                _, _, _, _, p = model(x, y, z, torch.full((n, 1), tv, device=device), Vrow.expand(n, -1),
+                                      torch.full((n, 1), 20.0, device=device))
+            assert (p - ur ** 2).abs().max().item() < 1e-5 * ur ** 2, f"p {p[0].item()} != U_ref^2 {ur ** 2} at t={tv}"
+    # doors loss is (p / U_ref^2)^2 -> exactly 1 for p_raw = 1
+    import point_sampler as ps
+    ps.FIXED_V = [3.0] * 8
+    try:
+        Ld = tg.doors_loss(model, device).item()
+    finally:
+        ps.FIXED_V = None
+    assert abs(Ld - 1.0) < 1e-5, f"doors loss {Ld} != 1 for p_raw = 1 (p not measured on the U_ref^2 scale)"
+    print(f"  s(W1 1 m/s) = {s[0]:.3f} m/s (v9-v22: 0.071), s(closed) = 0, s(all 3 m/s) = {s[2]:.2f}; "
+          f"p = U_ref^2 p_raw at t = 0 and 60 s; doors loss scaled")
 
 
 @stage("0b. v8 non-dimensionalization -- no input saturation, training CO2 loss actually scaled, checkpoint guard")
@@ -818,14 +856,15 @@ def test_nondim(device):
                 {"version": "v13_fullocc", "nondim": True, "model_format": "v12_linear_n"},
                 {"version": "v19_throughflow", "nondim": True, "model_format": "v19_throughflow"},
                 {"version": "v20_co2window", "nondim": True, "model_format": "v20_co2window"},
-                {"version": "v21_single", "nondim": True, "model_format": "v21_single"}):
+                {"version": "v21_single", "nondim": True, "model_format": "v21_single"},
+                {"version": "v22_smoothjet", "nondim": True, "model_format": "v22_smoothjet"}):
         try:
             check_checkpoint_compat(old, "fake_old.pth")
             raise AssertionError(f"check_checkpoint_compat accepted an old checkpoint: {old}")
         except RuntimeError:
             pass
     check_checkpoint_compat({"version": "v9", "nondim": True, MODEL_FORMAT_KEY: MODEL_FORMAT}, "fake_new.pth")
-    print(f"  checkpoint guard: rejects v5, v8, v9, v10, v12-v18, v19, v20 and v21, accepts {MODEL_FORMAT} -- OK")
+    print(f"  checkpoint guard: rejects v5, v8, v9, v10, v12-v18 and v19-v22, accepts {MODEL_FORMAT} -- OK")
 
     # (e) v9 HARD ZERO-FLOW: with all windows closed the velocity must be
     # EXACTLY zero by construction (the loophole v8 exploited: a spurious slow
@@ -1039,10 +1078,12 @@ def _training_step(model, params, optimizer, device):
             continue
         p.grad = total_grad.clone() if p.grad is None else p.grad + total_grad
 
-    walls_loss(model, device).backward()
+    from train_gnot import WALLS_WEIGHT, SKIP_IC_LOSS
+    (WALLS_WEIGHT * walls_loss(model, device)).backward()      # v23: weighted as in main()
     windows_loss(model, device, co2_weight).backward()
     doors_loss(model, device).backward()
-    ic_loss(model, device, co2_weight).backward()
+    if not SKIP_IC_LOSS:                                         # v23: skipped in main() (identically 0)
+        ic_loss(model, device, co2_weight).backward()
     from train_gnot import co2_boundary_loss
     co2_boundary_loss(model, device, co2_weight).backward()  # v9: mirrors train_gnot.main()
 
@@ -1161,6 +1202,7 @@ def main():
     test_v21(device)
     test_v22(device)
     test_v22_weight(device)
+    test_v23(device)
     test_nondim(device)
     test_fourier_features(device)
     test_query_encoder(device)

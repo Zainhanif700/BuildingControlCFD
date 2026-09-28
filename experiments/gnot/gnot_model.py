@@ -35,6 +35,20 @@ from point_sampler import (
 from throughflow import through_flow_potential, solid_distance_phi, alpha_potential, co2_window_factor
 
 D_MODEL = 128
+
+# v23: output scales (see GNOTOperator.forward).
+_WINDOW_AREAS = [(x1 - x0) * (z1 - z0) for x0, x1, z0, z1 in WINDOWS]
+_A_DOORS = sum((x1 - x0) * (z1 - z0) for x0, x1, z0, z1 in DOORS)
+P_SCALE_FLOOR = 0.5   # m/s; MUST equal train_gnot.U_NS_FLOOR (checked in smoke stage 0k)
+
+
+def door_jet_speed(V):
+    """v23: sum_k V_k A_k / A_doors, (B,1) -- the mean door jet speed WITHOUT a floor: exactly 0 when
+    all windows are closed (hard zero flow, as since v9), 0.43 m/s for window 1 at 1 m/s (v9-v22:
+    RMS(V)/V_MAX = 0.071), and the same speed that non-dimensionalises the NS residual
+    (train_gnot.velocity_scale = max(this, U_NS_FLOOR))."""
+    areas = torch.tensor(_WINDOW_AREAS, device=V.device, dtype=V.dtype).view(1, -1)
+    return (V * areas).sum(dim=1, keepdim=True) / _A_DOORS
 N_HEADS = 4
 N_LAYERS = 2
 
@@ -58,7 +72,8 @@ NONDIM_CHECKPOINT_KEY = "nondim"
 # load without error but predict the wrong velocity. Every checkpoint from v9
 # on records MODEL_FORMAT; bump it whenever forward() changes meaning.
 MODEL_FORMAT_KEY = "model_format"
-MODEL_FORMAT = "v22_smoothjet"    # v21_single -> v22_smoothjet: B_p with a smooth jet profile inside the room (throughflow.JET_SMOOTH)
+MODEL_FORMAT = "v23_scale_huber"  # v22_smoothjet -> v23_scale_huber: correction scale s = door jet speed, p = U_ref^2 p_raw
+# (v21_single -> v22_smoothjet: B_p with a smooth jet profile inside the room (throughflow.JET_SMOOTH))
 # (v20_co2window -> v21_single: CO2 window factor OFF again (USE_CO2_WINDOW_FACTOR))
 # (v19_throughflow -> v20_co2window: C x co2_window_factor, alpha = potential split + correction)
 # v21: the CO2 window factor of v20 is switched OFF. v20 at iter 5000 collapsed to a near-trivial CO2
@@ -428,7 +443,10 @@ class GNOTOperator(nn.Module):
         # curl(s*A) = s*curl(A): still exactly divergence-free. Hard
         # constraints by construction: Lagaris et al. 1998; Sukumar &
         # Srivastava 2021 (arXiv:2104.08426).
-        s = torch.sqrt(((V / V_MAX) ** 2).mean(dim=1, keepdim=True))  # (B,1), in [0,1]
+        # v23: s = mean door jet speed (m/s) instead of RMS(V)/V_MAX. v22 test (W1 1 m/s, iter 2000):
+        # correction 0.005 m/s vs 0.115 needed with s = 0.071 -- the network's raw output had to be
+        # ~14x larger than O(1). Still exactly 0 when all windows are closed.
+        s = door_jet_speed(V)  # (B,1), m/s
         # v19_throughflow: velocity = curl(B_p + s*phi*A). phi = 0 on every solid surface
         # (incl. closed windows) -> the network's part can never leak or change any
         # opening's net flux; B_p = (chi, 0, psi) carries exactly the prescribed air from
@@ -438,6 +456,10 @@ class GNOTOperator(nn.Module):
         phi = solid_distance_phi(x, y, z, V) * torch.tanh(3.0 * t / TAU_RAMP)
         chi, psi = through_flow_potential(x, y, z, t, V, self.door_split(t, V))
         A1, A2, A3 = chi + s * phi * A1, s * phi * A2, psi + s * phi * A3
+        # v23: kinematic pressure on its natural scale U_ref^2 (U_ref = max(door jet speed, 0.5 m/s),
+        # the same scale that non-dimensionalises the momentum residual) -- p_raw stays O(1).
+        # NO time ramp: at t = 0 the windows accelerate the air, which needs grad p != 0 (v16 fix b).
+        p = torch.clamp(s, min=P_SCALE_FLOOR) ** 2 * p
         # v8_nondim: the network predicts a dimensionless CO2 value C_hat of
         # order 1; the physical concentration is C_REF * C_hat (C_REF = 0.69,
         # the closed-room accumulation bound -- see point_sampler.py). The

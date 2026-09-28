@@ -600,13 +600,29 @@ def gradnorm_weight_update(grad_ns, grad_co2, prev_weight):
 #                     squares with the known irreducible lifting error -- own design choice, not literature).
 #                     First a 2000-iteration test (--iters 2000 --tag test): success = alignment clearly > 0.14
 #                     and a correction of relevant size (v21: 0.011 vs 0.128 m/s needed).
+#                     RESULT of the 2000-iteration test (NEGATIVE): velocity error 62.7% (= B_p alone),
+#                     correction 0.005 m/s vs 0.111 needed, alignment 0.02. NS fell 37.8 -> 0.036 within
+#                     500 iterations while the flow did not change: B_p is irrotational outside the
+#                     opening sheets, its NS residual is a pure gradient that the free pressure absorbs
+#                     (p ~ -|u|^2/2). The information for the recirculation must come from no-slip and the
+#                     inlet shear layers -- exactly what the B_p weighting had shrunk.
+#   v23_scale_huber -- v22 + (external review, Gemini, checked against the code):
+#                     (a) correction scale s = door jet speed sum V_k A_k / A_doors (0.43 for W1 vs 0.071),
+#                         exactly 0 closed (gnot_model.door_jet_speed);
+#                     (b) p = U_ref^2 p_raw, NO time ramp (grad p != 0 at t = 0, v16 fix b); doors loss
+#                         measured as (p / U_ref^2)^2;
+#                     (c) B_p weighting OFF, NS loss Pseudo-Huber 2 (sqrt(1 + r^2) - 1);
+#                     (d) no-slip walls x WALLS_WEIGHT = 10, gradient-norm ratio g_ns/g_walls logged;
+#                     (e) ic_loss skipped (identically 0 by construction).
+#                     Not changed (to isolate scaling + loss): Fourier features, shared output head.
+#                     Test: 2000 iterations; success = alignment clearly > 0.14, correction of relevant size.
 #
 # IMPORTANT: this VERSION variable (and CKPT_DIR below) is what train_gnot.py's own
 # main() uses for a FULL 20k-iteration production run. Bump this to match whichever
 # fix combination is confirmed working via the closed-window diagnostic BEFORE
 # launching the next full run through this file, so production checkpoints aren't
 # mislabeled with stale physics/sampling.
-VERSION = "v22_smoothjet"
+VERSION = "v23_scale_huber"
 SINGLE_SCENARIO_V = [1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]   # v21: W1 1 m/s (= openfoam case W1_1ms); None = mix
 
 # v15: optimizer switch. "adam" = v1-v14 behaviour; "soap" = soap.py (official
@@ -648,7 +664,16 @@ def get_velocity_and_derivs(model, x, y, z, t, V, N_people):
     return u, v, w, C, p
 
 
-USE_BP_RESIDUAL_WEIGHT = True   # v22, see physics_loss
+USE_BP_RESIDUAL_WEIGHT = False  # v22 (True): see physics_loss. v23: OFF, replaced by NS_PSEUDO_HUBER
+NS_PSEUDO_HUBER = True          # v23: NS loss 2 (sqrt(1 + r^2) - 1) per point: ~r^2 for small residuals,
+# gradient bounded (<= 1 per point) for the large entry-zone spikes, but NOT zeroed there (v22's weights
+# shrank exactly the rotational shear-layer points, which the pressure cannot absorb)
+WALLS_WEIGHT = 10.0             # v23: no-slip is where the recirculation information comes from (B_p is
+# irrotational in the interior -> its NS residual is a pure gradient that p absorbs: v22 log NS 37.8 ->
+# 0.036 in 500 iterations while the correction stayed at 0.005 m/s). Test value; the logged gradient-norm
+# ratio g_ns/g_walls shows the actual balance.
+SKIP_IC_LOSS = True             # v23: u(t=0) = 0 and C(t=0) = 0 are exact by construction since v19/v10
+# (IC = 0.00000 in every log) -- its backward pass only cost time
 BP_WEIGHT_TAU = 1.0             # r_Bp^2 at which a point's weight is 1/2 (natural momentum scale)
 _NS_DIAG = {}                   # last weighting statistics, for the log line
 
@@ -714,6 +739,9 @@ def physics_loss(model, device, nu=NU):
         ns_loss = (wgt * r2).mean() / wgt.mean()   # = unweighted sum of the 3 component means when w = 1
         _NS_DIAG.update(raw=r2.mean().item(), w_mean=wgt.mean().item(),
                         w_low=(wgt < 0.5).float().mean().item())
+    elif NS_PSEUDO_HUBER:
+        ns_loss = (2.0 * (torch.sqrt(1.0 + r2) - 1.0)).mean()
+        _NS_DIAG.update(raw=r2.mean().item(), w_mean=1.0, w_low=0.0)
     else:
         ns_loss = ((res_u / ns_scale) ** 2).mean() + ((res_v / ns_scale) ** 2).mean() + ((res_w / ns_scale) ** 2).mean()
     # v8_nondim: divide by S_REF so the CO2 residual is O(1) instead of
@@ -888,7 +916,9 @@ def windows_loss(model, device, co2_weight, rel_weight=1.0):
 def doors_loss(model, device):
     x, y, z, t, V, N_people = sample_doors(POINTS_DOORS, device)
     _, _, _, _, p = model(x, y, z, t, V, N_people)
-    return (p ** 2).mean()
+    # v23: p is output on the scale U_ref^2 -> measure the door gauge p = 0 in the same units
+    # (unscaled, (p^2) would weaken the term by U_ref^4, e.g. 16x for W1 at 1 m/s; review)
+    return ((p / velocity_scale(V) ** 2) ** 2).mean()
 
 
 # v9_co2_bc: length scale used to make the CO2 normal-gradient dimensionless.
@@ -1090,6 +1120,7 @@ def main():
     else:
         print(f"LR schedule: {LR:g} constant until iter {LR_DECAY_START}, cosine to {LR_MIN:g} at iter {MAX_ITERS}")
     guide_w = float("nan")  # diagnostic only: Expert's Guide norm-balancing weight
+    walls_ratio = float("nan")  # v23 diagnostic: ||grad L_ns|| / ||grad (WALLS_WEIGHT L_walls)||
 
     # Best-loss checkpointing (added in v7): a safety net that keeps whichever
     # checkpoint had the LOWEST equal-weight total loss seen so far, so a late
@@ -1143,7 +1174,12 @@ def main():
         # v17: blend in the flux-scaled leak term and the relative inflow error over the
         # first BC_SCALING_WARMUP iterations (see BC_SCALING_WARMUP comment)
         bc_lam = min(1.0, it / BC_SCALING_WARMUP)
-        L_walls = walls_loss(model, device, flux_weight=bc_lam)
+        L_walls_raw = walls_loss(model, device, flux_weight=bc_lam)
+        L_walls = WALLS_WEIGHT * L_walls_raw                     # v23
+        if it % CO2_WEIGHT_UPDATE_EVERY == 0:   # v23: gradient-norm ratio ||grad L_ns|| / ||grad (w L_walls)||
+            g_walls = compute_param_grads(L_walls, params, retain_graph=True)
+            walls_ratio = guide_norm_ratio(grad_ns, g_walls)
+            del g_walls
         L_walls.backward()
 
         L_windows = windows_loss(model, device, co2_weight,
@@ -1153,8 +1189,11 @@ def main():
         L_doors = doors_loss(model, device)
         L_doors.backward()
 
-        L_ic = ic_loss(model, device, co2_weight)
-        L_ic.backward()
+        if SKIP_IC_LOSS:                        # v23: identically 0 by construction
+            L_ic = torch.zeros((), device=device)
+        else:
+            L_ic = ic_loss(model, device, co2_weight)
+            L_ic.backward()
 
         # v9_co2_bc: CO2 no-flux (walls/floor/ceiling/columns) + zero-gradient
         # outflow (doors) -- see co2_boundary_loss() docstring.
@@ -1188,7 +1227,7 @@ def main():
         # contain co2_weight internally; with co2_weight fixed at 1.0 in v8 this
         # is exactly the equal-weight sum. If adaptive weighting is re-enabled,
         # revisit this.
-        unweighted_total = (L_ns.item() + L_co2.item() + L_walls.item()
+        unweighted_total = (L_ns.item() + L_co2.item() + L_walls_raw.item()
                             + L_windows.item() + L_doors.item() + L_ic.item() + L_co2bc.item())
 
         if it % LOG_EVERY == 0:
@@ -1198,10 +1237,12 @@ def main():
                 a_probe = model.door_split(torch.full((3, 1), 60.0, device=device), _ALPHA_PROBE_V.to(device))
             print(f"[Iter {it:05d}/{MAX_ITERS}] Total={total_val:.5f} | "
                   f"NS={L_ns.item():.5f} CO2(scaled)={L_co2.item():.5f} CO2_weight={co2_weight:.2f} guide_w={guide_w:.3g} "
-                  f"Walls={L_walls.item():.5f} Windows={L_windows.item():.5f} Doors={L_doors.item():.5f} "
+                  f"Walls={L_walls_raw.item():.5f}(x{WALLS_WEIGHT:g}) g_ns/g_walls={walls_ratio:.3g} "
+                  f"Windows={L_windows.item():.5f} Doors={L_doors.item():.5f} "
                   f"IC={L_ic.item():.5f} CO2_BC={L_co2bc.item():.5f} LR={cur_lr:.2e} nu={cur_nu:g} "
                   + (f"NSraw={_NS_DIAG.get('raw', float('nan')):.4g} w_mean={_NS_DIAG.get('w_mean', float('nan')):.3f} "
-                     f"w<0.5={_NS_DIAG.get('w_low', float('nan')):.1%} " if USE_BP_RESIDUAL_WEIGHT else "") +
+                     f"w<0.5={_NS_DIAG.get('w_low', float('nan')):.1%} " if USE_BP_RESIDUAL_WEIGHT
+                     else f"NSraw={_NS_DIAG.get('raw', float('nan')):.4g} " if NS_PSEUDO_HUBER else "") +
                   f"alpha(W1/W8/all)={a_probe[0].item():.2f}/{a_probe[1].item():.2f}/{a_probe[2].item():.2f} | {speed:.2f} it/s")
 
         # v7_higher_co2_weight: save a new best-loss checkpoint any time
