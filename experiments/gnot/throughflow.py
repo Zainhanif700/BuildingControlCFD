@@ -207,6 +207,21 @@ def _F_top_smooth(x, V, rt, w):
     return rt * (V * (wb - wa) * frac).sum(dim=1, keepdim=True)
 
 
+def _F_bot_smooth(x, q, alpha, w):
+    """Door-side counterpart of _F_top_smooth: cumulative outflow q [alpha, 1-alpha] with tanh edges
+    of length w, exactly 0 at ROOM_X[0] and q at ROOM_X[1]. (v22, check 1: with only the window side
+    smoothed, B_p's viscous term fell 7.5x but was the SAME for every edge length -- the door sheet,
+    carried with weight (1 - y/LY) through the room with its 0.2 m edges, and the window-wall zone.)"""
+    _, _, da, db = _consts(x)
+    x0 = torch.full_like(x, ROOM_X[0])
+    x1 = torch.full_like(x, ROOM_X[1])
+
+    def C(xx):
+        return 0.5 * w * (_lncosh((xx - da) / w) - _lncosh((xx - db) / w))
+    frac = (C(x) - C(x0)) / (C(x1) - C(x0))
+    return q * (_door_weights(alpha) * frac).sum(dim=1, keepdim=True)
+
+
 def through_flow_potential(x, y, z, t, V, alpha, blend=None, turn_depth=None,
                            smooth=None, edge_w=None, spread_l=None):
     """(chi, psi), each (B,1): B_p = (chi, 0, psi). Inputs physical units; alpha in (0,1), (B,1).
@@ -224,6 +239,11 @@ def through_flow_potential(x, y, z, t, V, alpha, blend=None, turn_depth=None,
         beta = _S((ROOM_Y[1] - y) / spread_l)
         F_top = F_top + beta * (_F_top_smooth(x, V, rt, edge_w) - F_top)
     F_bot = _F_bot(x, q, alpha)
+    if smooth:   # v22: same for the door sheet, but only BEYOND the door-turn strip (y > DOOR_STRIP),
+        # where chi = 0: inside the strip chi's sharp door profile must meet the sharp psi (exact
+        # door outflow at y = 0 needs psi(x, 0) = F_bot(x)); beta_d = 0 for y <= DOOR_STRIP.
+        beta_d = _S((y - ROOM_Y[0] - DOOR_STRIP) / spread_l)
+        F_bot = F_bot + beta_d * (_F_bot_smooth(x, q, alpha, edge_w) - F_bot)
     if blend == "linear":
         eta = (y - ROOM_Y[0]) / LY
     elif blend == "jet":

@@ -599,7 +599,9 @@ def test_v22(device):
     Fs = tfl._F_top_smooth(xe, V[:2], rt, tfl.JET_EDGE_W).squeeze(1).tolist()
     Fl = tfl._F_top(xe, V[:2], rt).squeeze(1).tolist()
     assert abs(Fs[0]) < 1e-12 and abs(Fs[1] - Fl[1]) < 1e-12, f"smooth F_top ends {Fs} vs sharp {Fl}"
-    # (c) mid-room (y = LY/2): lap of v = -dpsi/dx (dominant term) far smaller than with the sharp sheet
+    # (c) mid-room (y = LY/2, beyond both blend zones): d2v/dx2 of v = -dpsi/dx far smaller than with the
+    #     sharp window AND door sheets (first run: window side alone gave only 1350 -> 220, the rest was
+    #     the door sheet -- hence the door-side smoothing)
     xm = x.clone().requires_grad_(True)
     ym = torch.full((n, 1), ROOM_Y[1] / 2, device=device, dtype=dt)
     lap = {}
