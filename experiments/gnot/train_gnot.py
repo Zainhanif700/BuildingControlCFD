@@ -62,7 +62,7 @@ POINTS_COLUMNS_PER = 40   # x 4 columns = 160 -- no-slip on the columns' curved 
 POINTS_WINDOWS_PER = 40   # x 8 windows = 320
 POINTS_DOORS = 200
 POINTS_IC = 400
-MAX_ITERS = 50000  # v21: 10k (nu 0.1) + 10k (nu 0.03) + 30k (nu 0.01); v10-v20 used 20000
+MAX_ITERS = 20000  # v24: 20k (~7 h); v21 had 50000 (curriculum), v10-v20 20000
 LOG_EVERY = 10
 CKPT_EVERY = 1000
 LR = 1e-3
@@ -616,13 +616,20 @@ def gradnorm_weight_update(grad_ns, grad_co2, prev_weight):
 #                     (e) ic_loss skipped (identically 0 by construction).
 #                     Not changed (to isolate scaling + loss): Fourier features, shared output head.
 #                     Test: 2000 iterations; success = alignment clearly > 0.14, correction of relevant size.
+#                     RESULT (2000 it, POSITIVE): correction alignment 0.35 (v19 0.14, v22 0.02), size 0.31,
+#                     achieved 0.11 (whole room); breathing plane 0.22 / 0.10 / 0.02 (correction starts at
+#                     the walls). Velocity error 57.5% vs OpenFOAM. CO2 on the OpenFOAM flow 35-78%, mass
+#                     1.2-1.35 (v21: 195-263%, 5x). g_ns/g_walls 0.5-0.97 (walls x10 balanced). BUT the
+#                     learned door split alpha(W1) drifted 0.59 -> 0.82 (OpenFOAM 0.62), in step with Walls.
+#   v24_fixedalpha  -- v23 + door split fixed to the potential-flow value (gnot_model.LEARN_ALPHA = False);
+#                     20000 iterations. Checks at 5000 / 10000 / 20000 (check_v21_stage.sh).
 #
 # IMPORTANT: this VERSION variable (and CKPT_DIR below) is what train_gnot.py's own
 # main() uses for a FULL 20k-iteration production run. Bump this to match whichever
 # fix combination is confirmed working via the closed-window diagnostic BEFORE
 # launching the next full run through this file, so production checkpoints aren't
 # mislabeled with stale physics/sampling.
-VERSION = "v23_scale_huber"
+VERSION = "v24_fixedalpha"
 SINGLE_SCENARIO_V = [1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]   # v21: W1 1 m/s (= openfoam case W1_1ms); None = mix
 
 # v15: optimizer switch. "adam" = v1-v14 behaviour; "soap" = soap.py (official

@@ -72,7 +72,11 @@ NONDIM_CHECKPOINT_KEY = "nondim"
 # load without error but predict the wrong velocity. Every checkpoint from v9
 # on records MODEL_FORMAT; bump it whenever forward() changes meaning.
 MODEL_FORMAT_KEY = "model_format"
-MODEL_FORMAT = "v23_scale_huber"  # v22_smoothjet -> v23_scale_huber: correction scale s = door jet speed, p = U_ref^2 p_raw
+MODEL_FORMAT = "v24_fixedalpha"   # v23_scale_huber -> v24_fixedalpha: door split = potential-flow value (LEARN_ALPHA = False)
+# (v22_smoothjet -> v23_scale_huber: correction scale s = door jet speed, p = U_ref^2 p_raw)
+LEARN_ALPHA = False   # v24: v23 (2000 it) drove alpha(W1) 0.59 -> 0.82 while OpenFOAM gives 0.62 (a door split that
+# shortens B_p's path lowers Walls/NS without learning the flow); the potential-flow split comes from a
+# Laplace solve (physics, compute_door_split.py), not from reference data
 # (v21_single -> v22_smoothjet: B_p with a smooth jet profile inside the room (throughflow.JET_SMOOTH))
 # (v20_co2window -> v21_single: CO2 window factor OFF again (USE_CO2_WINDOW_FACTOR))
 # (v19_throughflow -> v20_co2window: C x co2_window_factor, alpha = potential split + correction)
@@ -507,6 +511,8 @@ class GNOTOperator(nn.Module):
         at 0 (zero-initialised last layer). v19's free alpha barely moved in 5000 iterations."""
         feats = torch.cat([V / V_MAX, t / T_MAX, torch.tanh(3.0 * t / TAU_RAMP)], dim=-1)
         a0 = alpha_potential(V).clamp(1e-4, 1 - 1e-4)
+        if not LEARN_ALPHA:   # v24: fixed potential-flow split (alpha_head kept, unused)
+            return a0
         return torch.sigmoid(torch.log(a0 / (1.0 - a0)) + self.alpha_head(feats))
 
     def velocity_from_potential(self, A1, A2, A3, x, y, z):

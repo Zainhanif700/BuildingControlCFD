@@ -687,7 +687,7 @@ def test_v22_weight(device):
           f"{L_h:.4g} vs plain {L_plain:.4g} (logged raw {raw:.4g})")
 
 
-@stage("0k. v23 output scales -- s = door jet speed (0 closed), p = U_ref^2 p_raw without ramp, doors loss scaled")
+@stage("0k. v23/v24 output scales -- s = door jet speed (0 closed), p = U_ref^2 p_raw without ramp, doors loss scaled, alpha fixed")
 def test_v23(device):
     import gnot_model as gm
     import train_gnot as tg
@@ -721,8 +721,16 @@ def test_v23(device):
     finally:
         ps.FIXED_V = None
     assert abs(Ld - 1.0) < 1e-5, f"doors loss {Ld} != 1 for p_raw = 1 (p not measured on the U_ref^2 scale)"
+    # v24: door split fixed -- alpha = potential-flow value even with a non-zero alpha_head
+    from throughflow import alpha_potential
+    assert not gm.LEARN_ALPHA, "v24 expects LEARN_ALPHA = False"
+    with torch.no_grad():
+        model.alpha_head[2].bias.fill_(1.5)
+        a_m = model.door_split(torch.full((3, 1), 60.0, device=device), Vs)
+    a_p = alpha_potential(Vs).clamp(1e-4, 1 - 1e-4)
+    assert (a_m - a_p).abs().max().item() < 1e-7, f"alpha {a_m.squeeze(1).tolist()} != potential {a_p.squeeze(1).tolist()}"
     print(f"  s(W1 1 m/s) = {s[0]:.3f} m/s (v9-v22: 0.071), s(closed) = 0, s(all 3 m/s) = {s[2]:.2f}; "
-          f"p = U_ref^2 p_raw at t = 0 and 60 s; doors loss scaled")
+          f"p = U_ref^2 p_raw at t = 0 and 60 s; doors loss scaled; alpha fixed = potential ({a_m[0].item():.3f} for W1)")
 
 
 @stage("0b. v8 non-dimensionalization -- no input saturation, training CO2 loss actually scaled, checkpoint guard")
@@ -857,14 +865,15 @@ def test_nondim(device):
                 {"version": "v19_throughflow", "nondim": True, "model_format": "v19_throughflow"},
                 {"version": "v20_co2window", "nondim": True, "model_format": "v20_co2window"},
                 {"version": "v21_single", "nondim": True, "model_format": "v21_single"},
-                {"version": "v22_smoothjet", "nondim": True, "model_format": "v22_smoothjet"}):
+                {"version": "v22_smoothjet", "nondim": True, "model_format": "v22_smoothjet"},
+                {"version": "v23_scale_huber", "nondim": True, "model_format": "v23_scale_huber"}):
         try:
             check_checkpoint_compat(old, "fake_old.pth")
             raise AssertionError(f"check_checkpoint_compat accepted an old checkpoint: {old}")
         except RuntimeError:
             pass
     check_checkpoint_compat({"version": "v9", "nondim": True, MODEL_FORMAT_KEY: MODEL_FORMAT}, "fake_new.pth")
-    print(f"  checkpoint guard: rejects v5, v8, v9, v10, v12-v18 and v19-v22, accepts {MODEL_FORMAT} -- OK")
+    print(f"  checkpoint guard: rejects v5, v8, v9, v10, v12-v18 and v19-v23, accepts {MODEL_FORMAT} -- OK")
 
     # (e) v9 HARD ZERO-FLOW: with all windows closed the velocity must be
     # EXACTLY zero by construction (the loophole v8 exploited: a spurious slow
