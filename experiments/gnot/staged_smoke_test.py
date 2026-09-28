@@ -553,13 +553,22 @@ def test_v21(device):
         ps.FIXED_V = None
     V_mix = ps.sample_interior(500, device)[4]
     assert (V_mix == 0).all(dim=1).any() and (V_mix > 0).all(dim=1).any(), "mix not restored after FIXED_V = None"
-    # (c) nu enters the momentum residual linearly: L(nu) is an exact quadratic in nu
+    # (c) nu enters the momentum residual linearly: L(nu) is an exact quadratic in nu (tested with the
+    #     v22 B_p weighting OFF -- the weights depend on nu themselves; stage 0j tests the weighting)
+    import train_gnot as tg
     torch.manual_seed(11)
     model = GNOTOperator().to(device)
     L = []
-    for nu in (0.0, 0.05, 0.1, 0.01):
-        torch.manual_seed(3)          # same points every call
-        L.append(physics_loss(model, device, nu=nu)[0].item())
+    w_flag = tg.USE_BP_RESIDUAL_WEIGHT
+    tg.USE_BP_RESIDUAL_WEIGHT = False
+    try:
+        for nu in (0.0, 0.05, 0.1, 0.01, None):
+            torch.manual_seed(3)          # same points every call
+            L.append(physics_loss(model, device, nu=nu)[0].item() if nu is not None
+                     else physics_loss(model, device)[0].item())
+    finally:
+        tg.USE_BP_RESIDUAL_WEIGHT = w_flag
+    L_default = L.pop()
     # quadratic through (0, L0), (0.05, L1), (0.1, L2) evaluated at 0.01
     h = 0.05
     a, b = L[0], (4 * L[1] - L[2] - 3 * L[0]) / (2 * h)
@@ -567,8 +576,6 @@ def test_v21(device):
     pred = a + b * 0.01 + c * 0.01 ** 2
     assert abs(pred - L[3]) < 1e-4 * max(abs(L[3]), 1e-12), f"L(nu) not quadratic: predicted {pred}, got {L[3]}"
     assert L[2] != L[0], "physics_loss ignores its nu argument"
-    torch.manual_seed(3)
-    L_default = physics_loss(model, device)[0].item()
     assert abs(L_default - L[3]) < 1e-5 * max(abs(L[3]), 1e-12), "physics_loss default nu is not NU = 0.01"
     print(f"  nu schedule {NU_SCHEDULE} OK; NS loss at nu 0 / 0.05 / 0.1 / 0.01 = "
           f"{L[0]:.4g} / {L[1]:.4g} / {L[2]:.4g} / {L[3]:.4g} (exact quadratic in nu, default = NU)")
@@ -619,6 +626,59 @@ def test_v22(device):
     assert lap[True] < 0.05 * lap[False], f"smooth jet curvature {lap[True]:.3g} not << sharp {lap[False]:.3g}"
     print(f"  window + door wall: psi / normal velocity unchanged ({d0:.1e} / {d1:.1e}); smooth profile ends exact; "
           f"max |d2v/dx2| mid-room: sharp {lap[False]:.3g} -> smooth {lap[True]:.3g} 1/(m s)")
+
+
+@stage("0j. v22 B_p residual weighting -- lap(curl B_p) vs finite differences, weights in (0,1], weighted loss = manual")
+def test_v22_weight(device):
+    import throughflow as tfl
+    import train_gnot as tg
+    import point_sampler as ps
+    from gnot_model import GNOTOperator
+    assert tg.USE_BP_RESIDUAL_WEIGHT, "v22 expects USE_BP_RESIDUAL_WEIGHT = True"
+    dt = torch.float64
+    # (a) bp_velocity_laplacian against central finite differences of the B_p velocity (float64)
+    torch.manual_seed(4)
+    n = 16
+    x = torch.rand(n, 1, dtype=dt, device=device) * 12 + 2
+    y = torch.rand(n, 1, dtype=dt, device=device) * 7 + 1
+    z = torch.rand(n, 1, dtype=dt, device=device) * 2.5 + 0.3
+    t = torch.full((n, 1), 60.0, dtype=dt, device=device)
+    V = torch.tensor([[1.0, 0, 0, 0, 0, 0, 2.0, 0]], dtype=dt, device=device).expand(n, -1)
+    al = torch.full((n, 1), 0.55, dtype=dt, device=device)
+    lap = tfl.bp_velocity_laplacian(x, y, z, t, V, al)
+
+    def vel(xx, yy, zz):
+        xx, yy, zz = (q.clone().requires_grad_(True) for q in (xx, yy, zz))
+        chi, psi = tfl.through_flow_potential(xx, yy, zz, t, V, al)
+        gp = torch.autograd.grad(psi.sum(), (xx, yy))
+        gc = torch.autograd.grad(chi.sum(), (yy, zz))
+        return torch.cat([gp[1], gc[1] - gp[0], -gc[0]], 1).detach()
+    h = 1e-3
+    u0 = vel(x, y, z)
+    fd = sum(vel(*(q + h * (i == k) for i, q in enumerate((x, y, z)))) + vel(*(q - h * (i == k) for i, q in enumerate((x, y, z))))
+             - 2 * u0 for k in range(3)) / h ** 2
+    err = ((fd - lap).abs().max() / lap.abs().max().clamp_min(1e-12)).item()
+    assert err < 1e-3, f"lap(curl B_p) differs from finite differences by {err:.1e} (relative)"
+    assert not lap.requires_grad, "bp_velocity_laplacian must be detached"
+    # (b) the weighted training loss equals a manual weighted mean on the SAME points, weights in (0, 1]
+    torch.manual_seed(12)
+    model = GNOTOperator().to(device)
+    ps.FIXED_V = [1.0] + [0.0] * 7
+    try:
+        torch.manual_seed(5)
+        L_w = tg.physics_loss(model, device)[0].item()
+        diag = dict(tg._NS_DIAG)
+        tg.USE_BP_RESIDUAL_WEIGHT = False
+        torch.manual_seed(5)
+        L_raw = tg.physics_loss(model, device)[0].item()
+    finally:
+        tg.USE_BP_RESIDUAL_WEIGHT = True
+        ps.FIXED_V = None
+    assert abs(diag["raw"] - L_raw) <= 1e-4 * abs(L_raw), f"logged NSraw {diag['raw']} != unweighted loss {L_raw}"
+    assert 0 < diag["w_mean"] <= 1 and 0 <= diag["w_low"] <= 1, f"weights out of range: {diag}"
+    assert L_w <= L_raw / diag["w_mean"] + 1e-9, "weighted mean exceeds its bound mean(r2)/mean(w)"
+    print(f"  lap(curl B_p) vs finite differences: rel. error {err:.1e}; W1 1 m/s random model: NS weighted "
+          f"{L_w:.4g} vs unweighted {L_raw:.4g}, mean weight {diag['w_mean']:.3f}, {diag['w_low']:.1%} of points w < 0.5")
 
 
 @stage("0b. v8 non-dimensionalization -- no input saturation, training CO2 loss actually scaled, checkpoint guard")
@@ -1094,6 +1154,7 @@ def main():
     test_v20(device)
     test_v21(device)
     test_v22(device)
+    test_v22_weight(device)
     test_nondim(device)
     test_fourier_features(device)
     test_query_encoder(device)

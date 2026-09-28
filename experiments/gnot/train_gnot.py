@@ -18,6 +18,7 @@ import time
 import torch
 
 from gnot_model import GNOTOperator, NONDIM_CHECKPOINT_KEY, MODEL_FORMAT_KEY, MODEL_FORMAT
+from throughflow import bp_velocity_laplacian
 from point_sampler import (
     sample_interior, sample_walls, sample_doors, sample_windows, sample_ic,
     sample_columns_surface, _generate_interior_batch,
@@ -107,7 +108,9 @@ LR_MIN = 1e-5
 # lowered by raising nu (identical meaning). Stage boundaries are INCLUSIVE: nu_at(10000) = 0.1,
 # so the iter-10000 checkpoint belongs to the nu = 0.1 stage and can be checked against the
 # OpenFOAM case with nu = 0.1.
-NU_SCHEDULE = [(10000, 0.1), (20000, 0.03), (None, NU)]   # (last iteration of the stage, nu)
+NU_SCHEDULE = [(None, NU)]   # v22: NO curriculum (v21: [(10000, 0.1), (20000, 0.03), (None, NU)]) -- B_p's own
+# viscous error scales with nu^2, so the nu = 0.1 stage was 100x worse (v22 check 1: 634 vs 6.3 mean)
+# (last iteration of the stage, nu)
 LR_EXP_DECAY = (0.9, 2000)   # (rate, steps): lr = LR * rate**(it/steps); None -> lr_at's v11 logic
 
 
@@ -588,6 +591,15 @@ def gradnorm_weight_update(grad_ns, grad_co2, prev_weight):
 #                     JET_SPREAD_L). All fluxes/walls stay exact. Before training (no GPU hours):
 #                     openfoam/compare_bp_with_openfoam.py -- B_p alone vs OpenFOAM and B_p's viscous
 #                     residual (top-1% share) for the sharp vs smooth variants.
+#                     CHECKS (no training): smooth jet (edge 0.3 m, window + door sheet beyond the door strip)
+#                     B_p alone vs OpenFOAM 71% -> 62% (nu 0.01), 135% -> 97% (nu 0.1); B_p viscous term 6.3
+#                     -> 0.76, now 99.6% in the entry zones of window/doors (sharp shear layers of the real
+#                     inflow; wider opening edges lower it but worsen B_p vs OpenFOAM -> kept 0.1/0.2 m).
+#                     B_p's viscous error scales with nu^2 -> the curriculum is dropped (nu = 0.01 from the
+#                     start). NS points weighted by 1/(1 + r_Bp^2) (USE_BP_RESIDUAL_WEIGHT; weighted least
+#                     squares with the known irreducible lifting error -- own design choice, not literature).
+#                     First a 2000-iteration test (--iters 2000 --tag test): success = alignment clearly > 0.14
+#                     and a correction of relevant size (v21: 0.011 vs 0.128 m/s needed).
 #
 # IMPORTANT: this VERSION variable (and CKPT_DIR below) is what train_gnot.py's own
 # main() uses for a FULL 20k-iteration production run. Bump this to match whichever
@@ -636,6 +648,11 @@ def get_velocity_and_derivs(model, x, y, z, t, V, N_people):
     return u, v, w, C, p
 
 
+USE_BP_RESIDUAL_WEIGHT = True   # v22, see physics_loss
+BP_WEIGHT_TAU = 1.0             # r_Bp^2 at which a point's weight is 1/2 (natural momentum scale)
+_NS_DIAG = {}                   # last weighting statistics, for the log line
+
+
 def physics_loss(model, device, nu=NU):
     """Returns (ns_loss, co2_loss) SEPARATELY -- see the module-level comment
     above (CO2_WEIGHT_* constants) for why these are no longer combined into
@@ -680,7 +697,25 @@ def physics_loss(model, device, nu=NU):
     # the raw residual ~U^2: unnormalised, B_p's own residual (training-mix mean ~1e2) would swamp
     # every other term and make the fast scenarios dominate (independent review of v19).
     ns_scale = velocity_scale(V) ** 2 / L_NS
-    ns_loss = ((res_u / ns_scale) ** 2).mean() + ((res_v / ns_scale) ** 2).mean() + ((res_w / ns_scale) ** 2).mean()
+    r2 = (res_u / ns_scale) ** 2 + (res_v / ns_scale) ** 2 + (res_w / ns_scale) ** 2   # (B,1)
+    if USE_BP_RESIDUAL_WEIGHT:
+        # v22: weighted least squares with the KNOWN irreducible error of the lifting. B_p's own viscous
+        # term nu*lap(curl B_p) is concentrated in the entry zones of the openings (v22 check 3: 99.6%
+        # within ~1.3 m of window/doors), where the real jet has sharp shear layers the network cannot
+        # represent; unweighted, ~1% of the points carried 99% of the loss (v21). Weight
+        # w = 1 / (1 + r_Bp^2 / BP_WEIGHT_TAU), r_Bp^2 = |nu lap(u_Bp)|^2 / (U_ref^2/L)^2 (detached):
+        # ~1 wherever B_p is smooth (the rest of the room), small only where B_p's own viscous error exceeds
+        # the natural momentum scale. Weighted MEAN (divided by mean(w)) keeps the loss scale comparable.
+        with torch.no_grad():
+            alpha = model.door_split(t.detach(), V)
+            lap_bp = bp_velocity_laplacian(x, y, z, t, V, alpha)
+            r_bp2 = ((nu * lap_bp / ns_scale) ** 2).sum(dim=1, keepdim=True)
+            wgt = 1.0 / (1.0 + r_bp2 / BP_WEIGHT_TAU)
+        ns_loss = (wgt * r2).mean() / wgt.mean()   # = unweighted sum of the 3 component means when w = 1
+        _NS_DIAG.update(raw=r2.mean().item(), w_mean=wgt.mean().item(),
+                        w_low=(wgt < 0.5).float().mean().item())
+    else:
+        ns_loss = ((res_u / ns_scale) ** 2).mean() + ((res_v / ns_scale) ** 2).mean() + ((res_w / ns_scale) ** 2).mean()
     # v8_nondim: divide by S_REF so the CO2 residual is O(1) instead of
     # O(6e-3) -- every term in res_c (dc/dt, conv_c, D*lap(c), S) has units
     # of concentration/second, so this is a pure rescaling of the same
@@ -1165,6 +1200,8 @@ def main():
                   f"NS={L_ns.item():.5f} CO2(scaled)={L_co2.item():.5f} CO2_weight={co2_weight:.2f} guide_w={guide_w:.3g} "
                   f"Walls={L_walls.item():.5f} Windows={L_windows.item():.5f} Doors={L_doors.item():.5f} "
                   f"IC={L_ic.item():.5f} CO2_BC={L_co2bc.item():.5f} LR={cur_lr:.2e} nu={cur_nu:g} "
+                  + (f"NSraw={_NS_DIAG.get('raw', float('nan')):.4g} w_mean={_NS_DIAG.get('w_mean', float('nan')):.3f} "
+                     f"w<0.5={_NS_DIAG.get('w_low', float('nan')):.1%} " if USE_BP_RESIDUAL_WEIGHT else "") +
                   f"alpha(W1/W8/all)={a_probe[0].item():.2f}/{a_probe[1].item():.2f}/{a_probe[2].item():.2f} | {speed:.2f} it/s")
 
         # v7_higher_co2_weight: save a new best-loss checkpoint any time

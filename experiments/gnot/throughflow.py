@@ -185,7 +185,7 @@ PSI_TURN_DEPTH = 2.0      # m (same order as DOOR_STRIP, where chi turns the flo
 # door wall (y = 0) and chi are untouched; column constants are unchanged (their rings meet the walls,
 # where psi is unchanged). Only the free interior shape of the through-flow changes (a spread jet).
 JET_SMOOTH = True
-JET_EDGE_W = 0.5          # m, tanh edge length of the smooth jet profile
+JET_EDGE_W = 0.3          # m, tanh edge length of the smooth jet profile (v22 check 2: best vs OpenFOAM at nu 0.01)
 JET_SPREAD_L = 1.0        # m, depth from the window wall over which the sharp profile blends out
 
 
@@ -322,3 +322,21 @@ def target_window_flux(V, t):
     """Prescribed outward flux of each window (negative = inflow), (B, 8)."""
     areas = torch.tensor([(b - a) * (d - c) for a, b, c, d in WINDOWS], device=V.device, dtype=V.dtype)
     return -ramp(t) * V * areas.view(1, -1)
+
+
+def bp_velocity_laplacian(x, y, z, t, V, alpha):
+    """v22: lap(curl B_p), (B,3), DETACHED (own leaf copies of the inputs, no graph to the network):
+    the viscous term of the analytic through-flow alone. Used to down-weight the momentum residual
+    where B_p itself carries an irreducible viscous error (train_gnot.physics_loss)."""
+    x, y, z, t = (q.detach().clone().requires_grad_(True) for q in (x, y, z, t))
+    with torch.enable_grad():
+        chi, psi = through_flow_potential(x, y, z, t, V.detach(), alpha.detach())
+
+        def g(f, v):
+            if not f.requires_grad:
+                return torch.zeros_like(v)
+            r = torch.autograd.grad(f, v, grad_outputs=torch.ones_like(f), create_graph=True, allow_unused=True)[0]
+            return torch.zeros_like(v) if r is None else r
+        ub = (g(psi, y), g(chi, z) - g(psi, x), -g(chi, y))
+        lap = torch.cat([g(g(c, x), x) + g(g(c, y), y) + g(g(c, z), z) for c in ub], 1)
+    return lap.detach()
