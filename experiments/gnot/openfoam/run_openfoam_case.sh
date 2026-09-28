@@ -40,6 +40,12 @@ else
     reconstructPar > log.reconstructPar 2>&1
     rm -rf processor*
 fi
+# disk: keep the velocity at every saved time (the CO2 transport in compare_with_openfoam.py needs
+# them) but pressure and fluxes only at the comparison times 30/60/120 s (the server disk filled up)
+for d in [0-9]*; do
+    case "$d" in 0|0.orig|30|60|120) ;; *) rm -f "$d"/p "$d"/p.gz "$d"/phi "$d"/phi.gz ;; esac
+done
+say "disk use of this case: $(du -sh . | cut -f1)"
 say "done. last time step:"
 grep -E "^Time =" log.pimpleFoam | tail -1
 grep -E "Courant Number" log.pimpleFoam | tail -1

@@ -221,7 +221,7 @@ writeInterval   {args.write_interval};
 purgeWrite      0;
 writeFormat     ascii;
 writePrecision  8;
-writeCompression off;
+writeCompression on;       // gzip: ~3-4x smaller (the server disk filled up with ascii output)
 timeFormat      general;
 timePrecision   6;
 runTimeModifiable true;

@@ -39,16 +39,33 @@ def _read_list_block(text, key, ncomp):
         return None
     n = int(m.group(1))
     body = text[m.end():]
-    end = body.index("\n)")
+    end = body.find("\n)")                     # long lists: one entry per line, closing ')' on its own line
+    if end < 0 or n <= 10:                     # short lists are written inline: N(a b c) / N((a b c) (d e f))
+        depth, end = 1, None
+        for i, ch in enumerate(body):
+            depth += (ch == "(") - (ch == ")")
+            if depth == 0:
+                end = i
+                break
     arr = np.array(body[:end].replace("(", " ").replace(")", " ").split(), dtype=float)
     assert arr.size == n * ncomp, f"{key}: expected {n}x{ncomp} values, got {arr.size}"
     return arr.reshape(n, ncomp)
 
 
+def _open_field(path):
+    """Open an OpenFOAM field file, plain or gzip-compressed (writeCompression on -> <name>.gz)."""
+    import gzip
+    if os.path.isfile(path):
+        return open(path)
+    if os.path.isfile(path + ".gz"):
+        return gzip.open(path + ".gz", "rt")
+    raise FileNotFoundError(path + "[.gz]")
+
+
 def read_internal(path, ncomp, n_cells=None):
     """internalField as (N, ncomp); a 'uniform' field (e.g. the initial state at rest in 0/)
     is expanded to n_cells rows."""
-    with open(path) as f:
+    with _open_field(path) as f:
         text = f.read()
     arr = _read_list_block(text, "internalField", ncomp)
     if arr is not None:
@@ -62,7 +79,7 @@ def read_internal(path, ncomp, n_cells=None):
 
 def read_patch_sum(path, patch):
     """Sum of a surface field (phi) over one boundary patch."""
-    with open(path) as f:
+    with _open_field(path) as f:
         text = f.read()
     m = re.search(r"\n\s*" + re.escape(patch) + r"\s*\n\s*\{", text)
     if m is None:
@@ -82,7 +99,7 @@ def time_dirs(case):
             t = float(d)
         except ValueError:
             continue
-        if d != "0.orig" and os.path.isfile(os.path.join(case, d, "U")):
+        if d != "0.orig" and (os.path.isfile(os.path.join(case, d, "U")) or os.path.isfile(os.path.join(case, d, "U.gz"))):
             out.append((t, d))
     return sorted(out)
 
@@ -178,8 +195,9 @@ def main():
         s_of = np.nanmean(np.linalg.norm(U_of[fl], axis=1))
         s_m = np.nanmean(np.linalg.norm(U_m[fl], axis=1))
         phi_path = os.path.join(case, match[0], "phi")
-        d1 = read_patch_sum(phi_path, "door1") if os.path.isfile(phi_path) else float("nan")
-        d2 = read_patch_sum(phi_path, "door2") if os.path.isfile(phi_path) else float("nan")
+        has_phi = os.path.isfile(phi_path) or os.path.isfile(phi_path + ".gz")
+        d1 = read_patch_sum(phi_path, "door1") if has_phi else float("nan")
+        d2 = read_patch_sum(phi_path, "door2") if has_phi else float("nan")
         with torch.no_grad():
             alpha = model.door_split(torch.full((1, 1), t, device=dev),
                                      torch.tensor([V], dtype=torch.float32, device=dev)).item()
