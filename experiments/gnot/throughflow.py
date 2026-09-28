@@ -190,11 +190,11 @@ JET_SPREAD_L = 1.0        # m, depth from the window wall over which the sharp p
 
 
 def _lncosh(u):
-    """ln cosh(u), overflow-free incl. its autograd derivatives. (First version log(cosh(u)): with
-    JET_EDGE_W = 0.3 m, |u| reaches ~45 and the 2nd derivative contains cosh(u)^2 ~ 1e39 > float32 max
-    -> inf/inf = NaN; caught by smoke stage 0h.) logaddexp(u, -u) = ln(e^u + e^-u); its backward only
-    uses exp(+-u - out) <= 1."""
-    return torch.logaddexp(u, -u) - math.log(2.0)
+    """ln cosh(u) = u + softplus(-2u) - ln 2 (exact identity), overflow-free incl. 2nd/3rd autograd
+    derivatives: softplus' = sigmoid, softplus'' = sigmoid (1 - sigmoid), all bounded.
+    History: log(cosh(u)) -> cosh^2 ~ 1e39 in the 2nd derivative (float32 inf -> NaN, smoke 0h);
+    logaddexp(u, -u) -> its double backward forms 0 * exp(90) = NaN as well (smoke 0h again)."""
+    return u + torch.nn.functional.softplus(-2.0 * u) - math.log(2.0)
 
 
 def _F_top_smooth(x, V, rt, w):
