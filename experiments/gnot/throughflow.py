@@ -152,13 +152,39 @@ def _G(z):
     return z - (LZ / _DOOR_HN) * (z - EPS_DOOR * _R((z - DOOR_HEIGHT + EPS_DOOR) / EPS_DOOR))
 
 
-def through_flow_potential(x, y, z, t, V, alpha):
-    """(chi, psi), each (B,1): B_p = (chi, 0, psi). Inputs physical units; alpha in (0,1), (B,1)."""
+# How psi blends from the door wall (F_bot) to the window wall (F_top) across the room depth:
+#   "linear" (v19, v20): psi = (1 - y/LY) F_bot + (y/LY) F_top -- the part of the inflow that must
+#       reach the OTHER door drifts slowly across the whole room and then runs down a straight band
+#       to that door (x ~ 12.5-13.4 m for door 2). OpenFOAM (W1 at 1 m/s) shows instead a straight
+#       jet from the window and a turn ALONG THE DOOR WALL; the network correction did not remove
+#       the band (a straight band barely violates the equations -> almost no loss signal).
+#   "jet" (candidate for v21): psi = F_bot + (F_top - F_bot) * S(y / PSI_TURN_DEPTH): above the
+#       turning layer psi = F_top(x) (straight jets from the windows across the room, v = -F_top'),
+#       and the redistribution towards the doors happens in a layer of depth PSI_TURN_DEPTH next to
+#       the door wall (u = (F_top - F_bot) S'). Generic jet behaviour (a jet crosses the room and
+#       spreads along the wall it hits), not a fit to one OpenFOAM case. Same exactness: psi = F_bot
+#       at y = 0, F_top at y = LY, 0 / q on the end walls, columns blended to the adjacent wall value.
+# The DEFAULT stays "linear": v20 checkpoints must be evaluated with the field they were trained
+# with. A version that switches must bump gnot_model.MODEL_FORMAT.
+PSI_BLEND = "linear"
+PSI_TURN_DEPTH = 2.0      # m (same order as DOOR_STRIP, where chi turns the flow into the doors)
+
+
+def through_flow_potential(x, y, z, t, V, alpha, blend=None, turn_depth=None):
+    """(chi, psi), each (B,1): B_p = (chi, 0, psi). Inputs physical units; alpha in (0,1), (B,1).
+    blend / turn_depth default to PSI_BLEND / PSI_TURN_DEPTH (see above)."""
+    blend = PSI_BLEND if blend is None else blend
+    turn_depth = PSI_TURN_DEPTH if turn_depth is None else turn_depth
     rt = ramp(t)
     q = _q(V, rt)
     F_top = _F_top(x, V, rt)
     F_bot = _F_bot(x, q, alpha)
-    eta = (y - ROOM_Y[0]) / LY
+    if blend == "linear":
+        eta = (y - ROOM_Y[0]) / LY
+    elif blend == "jet":
+        eta = _S((y - ROOM_Y[0]) / turn_depth)
+    else:
+        raise ValueError(f"unknown blend {blend!r} (use 'linear' or 'jet')")
     psi = (1.0 - eta) * F_bot + eta * F_top
     for (cx, cy, r, _, _), rb in zip(COLUMNS, COLUMN_BLEND):
         xc = torch.full_like(x, cx)
