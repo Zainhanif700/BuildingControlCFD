@@ -194,7 +194,8 @@ def _lncosh(u):
     derivatives: softplus' = sigmoid, softplus'' = sigmoid (1 - sigmoid), all bounded.
     History: log(cosh(u)) -> cosh^2 ~ 1e39 in the 2nd derivative (float32 inf -> NaN, smoke 0h);
     logaddexp(u, -u) -> its double backward forms 0 * exp(90) = NaN as well (smoke 0h again)."""
-    return u + torch.nn.functional.softplus(-2.0 * u) - math.log(2.0)
+    # threshold 50 (default 20): the linear branch starts where the neglected term is e^-50 ~ 2e-22
+    return u + torch.nn.functional.softplus(-2.0 * u, beta=1.0, threshold=50.0) - math.log(2.0)
 
 
 def _F_top_smooth(x, V, rt, w):
