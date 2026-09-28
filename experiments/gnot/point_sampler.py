@@ -186,8 +186,17 @@ def sample_scenario(n, device):
     # so the closed-room far field was never trained (where D1 found 91% of the
     # closed-room error). Present since fix #3 (v4); affects v4-v15.
     V = V[torch.randperm(n, device=device)]
+    # v21: single-scenario mode -- every point gets the same window setting FIXED_V (t and
+    # N_people stay random). Default None = the scenario mix above. Set only by
+    # train_gnot.main() (from train_gnot.SINGLE_SCENARIO_V), so tests and checks that import this
+    # module keep the mix unless they set it themselves.
+    if FIXED_V is not None:
+        V = torch.tensor(FIXED_V, device=device, dtype=V.dtype).view(1, -1).expand(n, -1).clone()
 
     return t, V, N_people
+
+
+FIXED_V = None   # v21: list of NUM_WINDOWS speeds [m/s] -> single-scenario training (see sample_scenario)
 
 
 # Source location (room center at breathing height) -- used below for

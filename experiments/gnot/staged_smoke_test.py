@@ -461,7 +461,7 @@ def test_throughflow_exact(device):
           f"; inflow {q_in:.3f} = door outflow {sum(fd):.3f} m^3/s, split {fd[0] / sum(fd):.3f} (alpha {alpha:.3f})")
 
 
-@stage("0g. v20 CO2 window factor (c = 0 on open windows), potential-flow door split, slip scale")
+@stage("0g. v20/v21 CO2 window factor (ON: c = 0 on open windows / OFF in v21), potential-flow door split, slip scale")
 def test_v20(device):
     from gnot_model import GNOTOperator
     from throughflow import (co2_window_factor, alpha_potential, DOOR1_SHARE_PER_WINDOW, EPS_WINDOW)
@@ -471,7 +471,7 @@ def test_v20(device):
     model = GNOTOperator().to(device)
     V = torch.tensor([[3.0, 0.0, 2.0, 0.0, 0.0, 0.0, 0.0, 0.0]], device=device)   # W1, W3 open
     n = 400
-    # (a) C exactly 0 on the CORE of open windows (inside the edge taper), any z, any t > 0
+    from gnot_model import USE_CO2_WINDOW_FACTOR
     def pts(k, core):
         a, b = WINDOWS[k][0], WINDOWS[k][1]
         lo, hi = (a + EPS_WINDOW, b - EPS_WINDOW) if core else (a, b)
@@ -486,9 +486,15 @@ def test_v20(device):
     c_ref = C_at(torch.rand(n, 1, device=device) * 10 + 2, torch.rand(n, 1, device=device) * 5 + 2,
                  torch.rand(n, 1, device=device) * 2 + 0.5).abs().mean().item()
     c_open = max(C_at(*pts(0, True)).abs().max().item(), C_at(*pts(2, True)).abs().max().item())
-    assert c_ref > 0 and c_open < 1e-5 * max(c_ref, 1e-12) + 1e-9, (
-        f"|C| on open-window cores {c_open:.2e} (interior mean {c_ref:.2e}): c = 0 not exact")
-    # (b) omega = 1 on closed windows and on the wall between windows
+    if USE_CO2_WINDOW_FACTOR:
+        # (a) v20: C exactly 0 on the CORE of open windows (inside the edge taper), any z, any t > 0
+        assert c_ref > 0 and c_open < 1e-5 * max(c_ref, 1e-12) + 1e-9, (
+            f"|C| on open-window cores {c_open:.2e} (interior mean {c_ref:.2e}): c = 0 not exact")
+    else:
+        # (a) v21: factor OFF -> C on open windows is NOT forced to 0 (v19 behaviour)
+        assert c_ref > 0 and c_open > 1e-3 * c_ref, (
+            f"|C| on open-window cores {c_open:.2e} ~ 0 although USE_CO2_WINDOW_FACTOR is False")
+    # (b) omega = 1 on closed windows and on the wall between windows (the function itself)
     xc, yc, zc = pts(1, False)                                         # window 2 is closed
     om_closed = co2_window_factor(xc, yc, V.expand(n, -1))
     xw = torch.full((n, 1), 3.4, device=device)                      # wall between W1 and W2
@@ -512,8 +518,60 @@ def test_v20(device):
     # closed: min(U_ref, U_win) = 0 -> the cap U_ref/3 = 0.5/3 applies (irrelevant there: u = 0 exactly)
     assert abs(s[0] - max(3.0, u[0] / SLIP_MAX_RATIO)) < 1e-4 and abs(s[1] - u[1]) < 1e-4 \
         and abs(s[2] - max(V_REL_FLOOR, u[2] / SLIP_MAX_RATIO)) < 1e-6, f"slip_scale {s} (U_ref {u})"
-    print(f"  |C| on open-window cores {c_open:.1e} (interior {c_ref:.1e}); omega = 1 on closed windows/walls; "
+    print(f"  CO2 window factor {'ON' if USE_CO2_WINDOW_FACTOR else 'OFF (v21)'}: |C| on open-window cores {c_open:.1e} "
+          f"(interior {c_ref:.1e}); omega = 1 on closed windows/walls; "
           f"alpha(W1..W8) = {', '.join(f'{v:.3f}' for v in a[:-1])}; slip scale {s[0]:.2f}/{s[1]:.2f}/{s[2]:.2f} m/s")
+
+
+@stage("0h. v21 single scenario + viscosity curriculum -- every sampler uses FIXED_V, nu schedule, nu enters linearly")
+def test_v21(device):
+    import point_sampler as ps
+    from train_gnot import (SINGLE_SCENARIO_V, NU_SCHEDULE, nu_at, NU, MAX_ITERS, physics_loss)
+    from gnot_model import GNOTOperator
+    # (a) nu schedule: inclusive stage ends, ends at the physical NU, never increases
+    for last, nu in NU_SCHEDULE:
+        if last is not None:
+            assert nu_at(last) == nu, f"nu_at({last}) = {nu_at(last)} != {nu} (stage end must be inclusive)"
+    assert nu_at(MAX_ITERS) == NU and NU_SCHEDULE[-1][0] is None, "curriculum must end at the physical NU"
+    nus = [nu_at(i) for i in range(0, MAX_ITERS + 1, 100)]
+    assert all(a >= b for a, b in zip(nus, nus[1:])), "viscosity must not increase during training"
+    # (b) FIXED_V: every sampler returns exactly that V for every point; t, N stay random
+    assert ps.FIXED_V is None, "point_sampler.FIXED_V must default to None (only main() sets it)"
+    ps.FIXED_V = SINGLE_SCENARIO_V
+    try:
+        target = torch.tensor(SINGLE_SCENARIO_V, device=device) if SINGLE_SCENARIO_V else None
+        outs = {"interior": ps.sample_interior(500, device), "walls": ps.sample_walls(300, device),
+                "columns": ps.sample_columns_surface(20, device), "doors": ps.sample_doors(100, device),
+                "windows": ps.sample_windows(20, device), "ic": ps.sample_ic(200, device)}
+        for name, o in outs.items():
+            V_ = o[4]
+            if target is not None:
+                assert (V_ == target).all(), f"{name}: V differs from FIXED_V"
+            assert o[3].std().item() > 0 or name == "ic", f"{name}: t is not random any more"
+        print(f"  FIXED_V = {SINGLE_SCENARIO_V}: all 6 samplers return it for every point; t random")
+    finally:
+        ps.FIXED_V = None
+    V_mix = ps.sample_interior(500, device)[4]
+    assert (V_mix == 0).all(dim=1).any() and (V_mix > 0).all(dim=1).any(), "mix not restored after FIXED_V = None"
+    # (c) nu enters the momentum residual linearly: L(nu) is an exact quadratic in nu
+    torch.manual_seed(11)
+    model = GNOTOperator().to(device)
+    L = []
+    for nu in (0.0, 0.05, 0.1, 0.01):
+        torch.manual_seed(3)          # same points every call
+        L.append(physics_loss(model, device, nu=nu)[0].item())
+    # quadratic through (0, L0), (0.05, L1), (0.1, L2) evaluated at 0.01
+    h = 0.05
+    a, b = L[0], (4 * L[1] - L[2] - 3 * L[0]) / (2 * h)
+    c = (L[2] - 2 * L[1] + L[0]) / (2 * h * h)
+    pred = a + b * 0.01 + c * 0.01 ** 2
+    assert abs(pred - L[3]) < 1e-4 * max(abs(L[3]), 1e-12), f"L(nu) not quadratic: predicted {pred}, got {L[3]}"
+    assert L[2] != L[0], "physics_loss ignores its nu argument"
+    torch.manual_seed(3)
+    L_default = physics_loss(model, device)[0].item()
+    assert abs(L_default - L[3]) < 1e-5 * max(abs(L[3]), 1e-12), "physics_loss default nu is not NU = 0.01"
+    print(f"  nu schedule {NU_SCHEDULE} OK; NS loss at nu 0 / 0.05 / 0.1 / 0.01 = "
+          f"{L[0]:.4g} / {L[1]:.4g} / {L[2]:.4g} / {L[3]:.4g} (exact quadratic in nu, default = NU)")
 
 
 @stage("0b. v8 non-dimensionalization -- no input saturation, training CO2 loss actually scaled, checkpoint guard")
@@ -610,7 +668,8 @@ def test_nondim(device):
     c_expected = C_REF * 60.0 / T_MAX * (N_people[0, 0].item() / N_PEOPLE_MAX)  # plain float (printed with :.4f below)
     # v20: C also carries the CO2 window factor omega (= 1 away from open windows, -> 0 on them)
     from throughflow import co2_window_factor
-    omega = co2_window_factor(x.detach(), y.detach(), V)
+    from gnot_model import USE_CO2_WINDOW_FACTOR
+    omega = co2_window_factor(x.detach(), y.detach(), V) if USE_CO2_WINDOW_FACTOR else 1.0   # v21: OFF
     max_dev = (C_one - c_expected * omega).abs().max().item()
     print(f"  output scaling: C_hat=1, t=60s -> C={C_one.mean().item():.4f} (expected C_REF*60/T_MAX={c_expected:.4f})")
     assert max_dev < 1e-5, f"C deviates from C_REF*t/T_MAX*omega by {max_dev:.2e} -- output scaling wrong"
@@ -644,14 +703,15 @@ def test_nondim(device):
                 {"version": "v9_zeroflow_bc", "nondim": True, "model_format": "v9_zeroflow"},
                 {"version": "v10_hardic", "nondim": True, "model_format": "v10_hardic"},
                 {"version": "v13_fullocc", "nondim": True, "model_format": "v12_linear_n"},
-                {"version": "v19_throughflow", "nondim": True, "model_format": "v19_throughflow"}):
+                {"version": "v19_throughflow", "nondim": True, "model_format": "v19_throughflow"},
+                {"version": "v20_co2window", "nondim": True, "model_format": "v20_co2window"}):
         try:
             check_checkpoint_compat(old, "fake_old.pth")
             raise AssertionError(f"check_checkpoint_compat accepted an old checkpoint: {old}")
         except RuntimeError:
             pass
     check_checkpoint_compat({"version": "v9", "nondim": True, MODEL_FORMAT_KEY: MODEL_FORMAT}, "fake_new.pth")
-    print(f"  checkpoint guard: rejects v5, v8, v9, v10, v12-v18 and v19, accepts {MODEL_FORMAT} -- OK")
+    print(f"  checkpoint guard: rejects v5, v8, v9, v10, v12-v18, v19 and v20, accepts {MODEL_FORMAT} -- OK")
 
     # (e) v9 HARD ZERO-FLOW: with all windows closed the velocity must be
     # EXACTLY zero by construction (the loophole v8 exploited: a spurious slow
@@ -932,9 +992,19 @@ def _check_decay_schedule(lr_at, LR, LR_MIN, LR_DECAY_START, MAX_ITERS):
 @stage("7. LR schedule + resume -- schedule as configured; resume checkpoint (if any) loads cleanly")
 def test_lr_schedule_and_resume(device):
     import os
-    from train_gnot import lr_at, LR, LR_MIN, LR_DECAY_START, MAX_ITERS, RESUME_FROM, HERE
+    from train_gnot import lr_at, LR, LR_MIN, LR_DECAY_START, MAX_ITERS, RESUME_FROM, HERE, LR_EXP_DECAY
     from gnot_model import GNOTOperator, check_checkpoint_compat
-    if LR_DECAY_START is None:  # constant-LR configuration (the default)
+    if LR_EXP_DECAY is not None:  # v21: exponential decay (Expert's Guide)
+        rate, steps = LR_EXP_DECAY
+        assert lr_at(0) == LR, f"lr_at(0) = {lr_at(0)} != LR"
+        assert abs(lr_at(steps) - LR * rate) < 1e-15 and abs(lr_at(10 * steps) - LR * rate ** 10) < 1e-15, \
+            "exponential decay: lr_at(k*steps) must equal LR*rate**k"
+        vals = [lr_at(i) for i in range(0, MAX_ITERS + 1, 100)]
+        assert all(a > b for a, b in zip(vals, vals[1:])), "LR must decrease strictly"
+        assert lr_at(MAX_ITERS) > 1e-6, f"final LR {lr_at(MAX_ITERS):.1e} is below 1e-6 (training would freeze)"
+        print(f"  LR: {LR:g} * {rate}**(it/{steps}): {lr_at(10000):.2e} at 10k, {lr_at(20000):.2e} at 20k, "
+              f"{lr_at(MAX_ITERS):.2e} at {MAX_ITERS}")
+    elif LR_DECAY_START is None:  # constant-LR configuration
         assert all(lr_at(i) == LR for i in range(0, MAX_ITERS + 1, 500)), "LR should be constant"
         print(f"  LR: constant {LR:g} for all {MAX_ITERS} iterations (LR_DECAY_START=None)")
     else:
@@ -974,6 +1044,7 @@ def main():
     test_flux_scaled_walls(device)
     test_throughflow_exact(device)
     test_v20(device)
+    test_v21(device)
     test_nondim(device)
     test_fourier_features(device)
     test_query_encoder(device)

@@ -58,7 +58,14 @@ NONDIM_CHECKPOINT_KEY = "nondim"
 # load without error but predict the wrong velocity. Every checkpoint from v9
 # on records MODEL_FORMAT; bump it whenever forward() changes meaning.
 MODEL_FORMAT_KEY = "model_format"
-MODEL_FORMAT = "v20_co2window"    # v19_throughflow -> v20_co2window: C x co2_window_factor, alpha = potential split + correction
+MODEL_FORMAT = "v21_single"       # v20_co2window -> v21_single: CO2 window factor OFF again (USE_CO2_WINDOW_FACTOR)
+# (v19_throughflow -> v20_co2window: C x co2_window_factor, alpha = potential split + correction)
+# v21: the CO2 window factor of v20 is switched OFF. v20 at iter 5000 collapsed to a near-trivial CO2
+# field (closed-room plane error 95%, source -98%): u.grad(omega)*C_hat is huge next to the open
+# windows under through-flows up to 77 m^3/s, so the cheapest way to lower the CO2 residual was
+# C_hat ~ 0. Kept as an option for the record; the potential-flow door split prior of v20 is KEPT
+# (W1: 0.59 vs OpenFOAM 0.62).
+USE_CO2_WINDOW_FACTOR = False
 # (v12_linear_n -> v19_throughflow: velocity = curl(B_p + s*phi*A), see throughflow.py)
 # (v10_hardic -> v12_linear_n: C output multiplied by N/N_MAX). Checkpoints v12-v18 carry
 # "v12_linear_n" and must be evaluated with the frozen code in milestones/<version>/.
@@ -464,7 +471,10 @@ class GNOTOperator(nn.Module):
         # v20: x co2_window_factor -> C = 0 EXACTLY on the core of every open window (clean
         # inflow). v19 at iter 5000 carried CO2 IN through the open windows (level-3 budget
         # +50..+230%): the soft c = 0 term was badly violated under through-flows up to 77 m^3/s.
-        C = C_REF * (t / T_MAX) * (N_people / N_PEOPLE_MAX) * C_hat * co2_window_factor(x, y, V)
+        # v21: OFF (USE_CO2_WINDOW_FACTOR, see MODEL_FORMAT) -> C as in v19.
+        C = C_REF * (t / T_MAX) * (N_people / N_PEOPLE_MAX) * C_hat
+        if USE_CO2_WINDOW_FACTOR:
+            C = C * co2_window_factor(x, y, V)
         return A1, A2, A3, C, p
 
     def door_split(self, t, V):

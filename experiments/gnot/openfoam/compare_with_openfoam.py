@@ -138,7 +138,14 @@ def main():
     model.load_state_dict(ckpt["model_state"])
     model.eval()
     version = ckpt.get("version", "unknown")
-    out_dir = os.path.join(HERE, "results", f"{os.path.basename(case)}__{version}")
+    # v21: the viscosity of the checkpoint (curriculum stage) must match the OpenFOAM case
+    nu_case = float(meta.get("nu", "0.01"))
+    nu_ckpt = float(ckpt.get("nu", 0.01))          # pre-v21 checkpoints: always nu = 0.01
+    if abs(nu_case - nu_ckpt) > 1e-12:
+        raise SystemExit(f"viscosity mismatch: checkpoint trained at nu = {nu_ckpt:g}, OpenFOAM case has "
+                         f"nu = {nu_case:g} -- use the case made with --nu {nu_ckpt:g}")
+    # iteration in the folder name (v21 compares several checkpoints of one version)
+    out_dir = os.path.join(HERE, "results", f"{os.path.basename(case)}__{version}_iter{ckpt.get('iter', 'x')}")
     os.makedirs(out_dir, exist_ok=True)
     log = open(os.path.join(out_dir, "comparison.log"), "w")
 

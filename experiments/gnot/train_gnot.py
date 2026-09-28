@@ -61,7 +61,7 @@ POINTS_COLUMNS_PER = 40   # x 4 columns = 160 -- no-slip on the columns' curved 
 POINTS_WINDOWS_PER = 40   # x 8 windows = 320
 POINTS_DOORS = 200
 POINTS_IC = 400
-MAX_ITERS = 20000  # v10's validated setup (v11 used 30000 via resume -- see history)
+MAX_ITERS = 50000  # v21: 10k (nu 0.1) + 10k (nu 0.03) + 30k (nu 0.01); v10-v20 used 20000
 LOG_EVERY = 10
 CKPT_EVERY = 1000
 LR = 1e-3
@@ -93,9 +93,40 @@ LR_DECAY_START = None    # None = constant LR throughout; an iteration number = 
 LR_MIN = 1e-5
 
 
+# --- v21_single: single scenario + viscosity curriculum + exponential LR decay ---------------
+# Literature (deep review before v21; details in the VERSION history below):
+#  * Wang, Sankaran, Wang & Perdikaris 2023 (Expert's Guide, arXiv:2308.08468, sec. 7.5): trained
+#    directly at high Re, PINNs are unstable / converge to wrong solutions; a Reynolds-number
+#    curriculum (cavity Re 100 -> 400 -> 1000 -> 3200, each stage initialised from the previous one,
+#    most iterations in the last stage) reaches 15.8% at Re 3200. PirateNets (arXiv:2402.00326): same
+#    idea, 4.2%. Krishnapriyan et al. 2021 (NeurIPS): curriculum ~2 orders of magnitude lower error.
+#  * Expert's Guide: LR 1e-3 with EXPONENTIAL decay (rate 0.9 every 2000 steps), no weight decay.
+#  * Every successful high-Re cavity result is ONE scenario; data-free physics-informed operators at
+#    Re ~ 500 fail (PINO Kolmogorov Re 500, 0 data: 74% error, arXiv:2111.03794 Table 7).
+# Viscosity instead of Re: our geometry and inflow are fixed by the scenario, so Re = U L / nu is
+# lowered by raising nu (identical meaning). Stage boundaries are INCLUSIVE: nu_at(10000) = 0.1,
+# so the iter-10000 checkpoint belongs to the nu = 0.1 stage and can be checked against the
+# OpenFOAM case with nu = 0.1.
+NU_SCHEDULE = [(10000, 0.1), (20000, 0.03), (None, NU)]   # (last iteration of the stage, nu)
+LR_EXP_DECAY = (0.9, 2000)   # (rate, steps): lr = LR * rate**(it/steps); None -> lr_at's v11 logic
+
+
+def nu_at(it):
+    """Kinematic viscosity used in the momentum residual at iteration `it` (v21 curriculum).
+    Ends at NU (the physical value that all checks and OpenFOAM use)."""
+    for last, nu in NU_SCHEDULE:
+        if last is None or it <= last:
+            return nu
+    return NU
+
+
 def lr_at(it):
-    """LR for iteration `it`: LR until LR_DECAY_START, then cosine from LR down
+    """LR for iteration `it`. v21: LR_EXP_DECAY set -> LR * rate**(it/steps) (Expert's Guide).
+    Otherwise v11 logic: LR until LR_DECAY_START, then cosine from LR down
     to exactly LR_MIN at MAX_ITERS. LR_DECAY_START=None -> constant LR."""
+    if LR_EXP_DECAY is not None:
+        rate, steps = LR_EXP_DECAY
+        return LR * rate ** (it / steps)
     if LR_DECAY_START is None or it <= LR_DECAY_START:
         return LR
     frac = min(1.0, (it - LR_DECAY_START) / (MAX_ITERS - LR_DECAY_START))
@@ -522,13 +553,37 @@ def gradnorm_weight_update(grad_ns, grad_co2, prev_weight):
 #                     v19 checkpoints: git tag code-v19-format.
 #                     Check: level-3 CO2 budget within +-5..10% for open windows; level 2; slip falls;
 #                     closed room not worse than v19; air balance stays exact.
+#                     RESULT at iter 5000 (NEGATIVE, stopped): CO2 collapsed to almost nothing --
+#                     closed-room plane error 95.4%, source -97.6%, closed CO2 budget -83%, rel_CO2
+#                     ~0.96, guide_w ~1e-3. Cause: u.grad(omega)*C_hat next to the open windows makes
+#                     the CO2 residual huge there; C_hat ~ 0 is the cheapest answer. v19 stays best.
+#                     Also found (OpenFOAM, W1 1 m/s, openfoam/): v19's velocity error 74% vs B_p
+#                     alone 71% -- the network adds nothing to the flow (correction alignment 0.14,
+#                     rel_NS ~ 1): the momentum equation is not learned (diagnose_flow_correction.py).
+#   v21_single      -- DIAGNOSTIC STEP after a literature review of that failure (documented regime:
+#                     data-free PINNs / PI-operators at Re ~ 300-1000 converge to smooth wrong
+#                     solutions; every high-Re success is single-scenario, uses a Re curriculum,
+#                     1e5+ iterations and a decaying LR). v19 losses and model, plus:
+#                     (a) ONE scenario only: SINGLE_SCENARIO_V = window 1 at 1 m/s (the OpenFOAM
+#                         case), point_sampler.FIXED_V; t and N stay random;
+#                     (b) viscosity curriculum nu 0.1 -> 0.03 -> 0.01 (NU_SCHEDULE, nu_at);
+#                     (c) exponential LR decay 1e-3 * 0.9**(it/2000) (LR_EXP_DECAY), 50k iterations;
+#                     (d) v20's CO2 window factor OFF (gnot_model.USE_CO2_WINDOW_FACTOR); v20's
+#                         potential-flow door split prior kept.
+#                     Question answered: CAN this network learn the jet + recirculation at all?
+#                     Check: compare_with_openfoam.py + diagnose_flow_correction.py against the
+#                     OpenFOAM case with the SAME nu at each stage end (iter 10000: nu 0.1, 20000:
+#                     0.03, final: 0.01). Success = velocity error clearly below B_p's 71% and
+#                     alignment clearly above 0.14. Closed-room checks are NOT meaningful for v21
+#                     (never trained closed).
 #
 # IMPORTANT: this VERSION variable (and CKPT_DIR below) is what train_gnot.py's own
 # main() uses for a FULL 20k-iteration production run. Bump this to match whichever
 # fix combination is confirmed working via the closed-window diagnostic BEFORE
 # launching the next full run through this file, so production checkpoints aren't
 # mislabeled with stale physics/sampling.
-VERSION = "v20_co2window"
+VERSION = "v21_single"
+SINGLE_SCENARIO_V = [1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]   # v21: W1 1 m/s (= openfoam case W1_1ms); None = mix
 
 # v15: optimizer switch. "adam" = v1-v14 behaviour; "soap" = soap.py (official
 # implementation, github.com/nikhilvyas/SOAP, MIT licence, unmodified copy).
@@ -569,10 +624,11 @@ def get_velocity_and_derivs(model, x, y, z, t, V, N_people):
     return u, v, w, C, p
 
 
-def physics_loss(model, device):
+def physics_loss(model, device, nu=NU):
     """Returns (ns_loss, co2_loss) SEPARATELY -- see the module-level comment
     above (CO2_WEIGHT_* constants) for why these are no longer combined into
-    one number."""
+    one number. nu: viscosity of the momentum residual (v21 curriculum, nu_at(it));
+    default = the physical NU."""
     x, y, z, t, V, N_people = sample_interior(POINTS_INTERIOR, device)
     N_people = _co2_occupancy(N_people)  # v13
     x.requires_grad_(True); y.requires_grad_(True); z.requires_grad_(True); t.requires_grad_(True)
@@ -597,9 +653,9 @@ def physics_loss(model, device):
     conv_w = u * dw_dx + v * dw_dy + w * dw_dz
     conv_c = u * dc_dx + v * dc_dy + w * dc_dz
 
-    res_u = du_dt + conv_u + (1.0 / RHO) * dp_dx - NU * d2u
-    res_v = dv_dt + conv_v + (1.0 / RHO) * dp_dy - NU * d2v
-    res_w = dw_dt + conv_w + (1.0 / RHO) * dp_dz - NU * d2w
+    res_u = du_dt + conv_u + (1.0 / RHO) * dp_dx - nu * d2u
+    res_v = dv_dt + conv_v + (1.0 / RHO) * dp_dy - nu * d2v
+    res_w = dw_dt + conv_w + (1.0 / RHO) * dp_dz - nu * d2w
 
     # CO2 source: Gaussian around room center at breathing height, scaled by occupancy
     dist2 = (x - SOURCE_X) ** 2 + (y - SOURCE_Y) ** 2 + (z - BREATHING_HEIGHT) ** 2
@@ -928,6 +984,12 @@ def main():
                          f"VERSION in train_gnot.py before training, so existing results are not overwritten.")
     device = "cuda" if torch.cuda.is_available() else "cpu"
     print(f"Using device: {device}")
+    # v21: single-scenario mode (must be set before ANY sampling, incl. trivial_co2_floor)
+    import point_sampler
+    point_sampler.FIXED_V = SINGLE_SCENARIO_V
+    print(f"[v21] scenarios: {'FIXED V = ' + str(SINGLE_SCENARIO_V) if SINGLE_SCENARIO_V else 'training mix'}; "
+          f"nu curriculum: {', '.join(f'{nu:g} (to iter {last})' if last else f'{nu:g} (to the end)' for last, nu in NU_SCHEDULE)}; "
+          f"CO2 window factor: {'ON' if __import__('gnot_model').USE_CO2_WINDOW_FACTOR else 'OFF'}")
 
     model = GNOTOperator().to(device)
     n_params = sum(p.numel() for p in model.parameters())
@@ -973,7 +1035,10 @@ def main():
         start_iter = ckpt["iter"] + 1
         print(f"[v11] resumed from {resume_path} (iter={ckpt['iter']}, version={ckpt.get('version')}); "
               f"continuing at iter {start_iter}")
-    if LR_DECAY_START is None:
+    if LR_EXP_DECAY is not None:
+        print(f"LR schedule: exponential {LR:g} * {LR_EXP_DECAY[0]}**(it/{LR_EXP_DECAY[1]}) "
+              f"-> {lr_at(MAX_ITERS):.2e} at iter {MAX_ITERS}")
+    elif LR_DECAY_START is None:
         print(f"LR schedule: constant {LR:g}")
     else:
         print(f"LR schedule: {LR:g} constant until iter {LR_DECAY_START}, cosine to {LR_MIN:g} at iter {MAX_ITERS}")
@@ -1013,7 +1078,8 @@ def main():
         # retain_graph=True on the first call keeps the shared graph alive for
         # the second; the second call (default retain_graph=False) frees it
         # afterward, same peak-memory behavior as separate backward() calls.
-        L_ns, L_co2 = physics_loss(model, device)
+        cur_nu = nu_at(it)                      # v21: viscosity curriculum
+        L_ns, L_co2 = physics_loss(model, device, nu=cur_nu)
         grad_ns = compute_param_grads(L_ns, params, retain_graph=True)
         grad_co2 = compute_param_grads(L_co2, params, retain_graph=False)
         for p, g_ns, g_co2 in zip(params, grad_ns, grad_co2):
@@ -1086,7 +1152,7 @@ def main():
             print(f"[Iter {it:05d}/{MAX_ITERS}] Total={total_val:.5f} | "
                   f"NS={L_ns.item():.5f} CO2(scaled)={L_co2.item():.5f} CO2_weight={co2_weight:.2f} guide_w={guide_w:.3g} "
                   f"Walls={L_walls.item():.5f} Windows={L_windows.item():.5f} Doors={L_doors.item():.5f} "
-                  f"IC={L_ic.item():.5f} CO2_BC={L_co2bc.item():.5f} LR={cur_lr:.2e} "
+                  f"IC={L_ic.item():.5f} CO2_BC={L_co2bc.item():.5f} LR={cur_lr:.2e} nu={cur_nu:g} "
                   f"alpha(W1/W8/all)={a_probe[0].item():.2f}/{a_probe[1].item():.2f}/{a_probe[2].item():.2f} | {speed:.2f} it/s")
 
         # v7_higher_co2_weight: save a new best-loss checkpoint any time
@@ -1098,17 +1164,23 @@ def main():
         # torch.save (GPU->CPU copy + disk I/O) very often during the fast
         # early-loss-drop phase, a real throughput hit for a safety net that
         # doesn't need iteration-exact precision.
+        # v21 (review): losses at different nu are not comparable -> the best-loss pointer restarts
+        # at every curriculum stage, so _best.pth always comes from the latest (finally: nu = NU) stage
+        if it > start_iter and cur_nu != nu_at(it - 1):
+            best_total_val = float("inf")
         if it % LOG_EVERY == 0 and unweighted_total < best_total_val:
             best_total_val = unweighted_total
             best_path = os.path.join(CKPT_DIR, f"gnot_{VERSION}_best.pth")
             torch.save({"iter": it, "version": VERSION, "co2_weight": co2_weight,
                         "unweighted_total": best_total_val, NONDIM_CHECKPOINT_KEY: True, MODEL_FORMAT_KEY: MODEL_FORMAT, "lr": cur_lr,
+                        "nu": cur_nu, "scenario_V": SINGLE_SCENARIO_V,
                         "model_state": model.state_dict()}, best_path)
 
         if it % CKPT_EVERY == 0 and it > 0:
             ckpt_path = os.path.join(CKPT_DIR, f"gnot_{VERSION}_iter{it}.pth")
             torch.save({"iter": it, "version": VERSION, "co2_weight": co2_weight,
                         NONDIM_CHECKPOINT_KEY: True, MODEL_FORMAT_KEY: MODEL_FORMAT, "lr": cur_lr,
+                        "nu": cur_nu, "scenario_V": SINGLE_SCENARIO_V,
                         "optimizer": OPTIMIZER, "model_state": model.state_dict(),
                         "optimizer_state": optimizer.state_dict()}, ckpt_path)
             print(f"  -> saved checkpoint: {ckpt_path}")
@@ -1116,6 +1188,7 @@ def main():
     final_path = os.path.join(CKPT_DIR, f"gnot_{VERSION}_final.pth")
     torch.save({"iter": MAX_ITERS, "version": VERSION, "co2_weight": co2_weight,
                 NONDIM_CHECKPOINT_KEY: True, MODEL_FORMAT_KEY: MODEL_FORMAT, "lr": cur_lr,
+                "nu": cur_nu, "scenario_V": SINGLE_SCENARIO_V,
                 "model_state": model.state_dict()}, final_path)
     print(f"Training complete. Final checkpoint: {final_path}")
     print(f"Best checkpoint (lowest unweighted_total={best_total_val:.5f}): "

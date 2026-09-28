@@ -93,6 +93,8 @@ def main():
     ap.add_argument("--write-interval", type=float, default=2.0, help="s between saved fields")
     ap.add_argument("--procs", type=int, default=4)
     ap.add_argument("--out", default=os.path.join(HERE, "cases"))
+    ap.add_argument("--nu", type=float, default=NU,
+                    help="viscosity [m^2/s]; != NU only for the v21 curriculum checkpoints (case name gets _nu<value>)")
     args = ap.parse_args()
     if args.V:
         V = [float(v) for v in args.V.split(",")]
@@ -102,7 +104,7 @@ def main():
         name = (args.scenario or "W1 1m/s")
     assert len(V) == len(WINDOWS)
     tag = name.replace(" ", "_").replace("/", "").replace("+", "p").replace(".", "p")
-    case = os.path.join(args.out, f"{tag}_dx{args.dx:g}")
+    case = os.path.join(args.out, f"{tag}_dx{args.dx:g}" + ("" if args.nu == NU else f"_nu{args.nu:g}"))
 
     L = [ROOM_X[1] - ROOM_X[0], ROOM_Y[1] - ROOM_Y[0], ROOM_Z[1] - ROOM_Z[0]]
     n = [max(4, round(l / args.dx)) for l in L]      # identical to check_co2_with_model_flow.Grid
@@ -201,7 +203,7 @@ actions
 
     # ---------------- constant/
     write(os.path.join(case, "constant/transportProperties"), "dictionary", "transportProperties",
-          f"\ntransportModel  Newtonian;\nnu              {NU};\n")
+          f"\ntransportModel  Newtonian;\nnu              {args.nu:g};\n")
     write(os.path.join(case, "constant/turbulenceProperties"), "dictionary", "turbulenceProperties",
           "\nsimulationType  laminar;\n")
 
@@ -259,7 +261,7 @@ PIMPLE
           f"\nnumberOfSubdomains {args.procs};\nmethod scotch;\n")
     with open(os.path.join(case, "scenario.txt"), "w") as f:
         f.write(f"name {name}\nV {' '.join(f'{v:g}' for v in V)}\ndx {args.dx}\nn {n[0]} {n[1]} {n[2]}\n"
-                f"nu {NU}\nt_end {args.t_end}\n")
+                f"nu {args.nu:g}\nt_end {args.t_end}\n")
     # consistency with the training code
     try:
         import re

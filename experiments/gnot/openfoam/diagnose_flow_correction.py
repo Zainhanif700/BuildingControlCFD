@@ -51,6 +51,9 @@ def main():
     ck = os.path.abspath(os.path.expanduser(args.checkpoint))
     ckpt = torch.load(ck, map_location=dev)
     check_checkpoint_compat(ckpt, ck)
+    nu_case, nu_ckpt = float(meta.get("nu", "0.01")), float(ckpt.get("nu", 0.01))   # v21 curriculum
+    if abs(nu_case - nu_ckpt) > 1e-12:
+        raise SystemExit(f"viscosity mismatch: checkpoint nu = {nu_ckpt:g}, OpenFOAM case nu = {nu_case:g}")
     model = GNOTOperator().to(dev)
     model.load_state_dict(ckpt["model_state"])
     model.eval()
