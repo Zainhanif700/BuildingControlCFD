@@ -608,9 +608,12 @@ def test_nondim(device):
     # v10: C = C_REF * (t/T_MAX) * C_hat, so at t=60 s and C_hat=1 expect C_REF*60/T_MAX
     # v12: ... * (N/N_MAX) as well; this call uses N = N_PEOPLE_MAX, so that factor is 1
     c_expected = C_REF * 60.0 / T_MAX * (N_people[0, 0].item() / N_PEOPLE_MAX)  # plain float (printed with :.4f below)
-    max_dev = (C_one - c_expected).abs().max().item()
+    # v20: C also carries the CO2 window factor omega (= 1 away from open windows, -> 0 on them)
+    from throughflow import co2_window_factor
+    omega = co2_window_factor(x.detach(), y.detach(), V)
+    max_dev = (C_one - c_expected * omega).abs().max().item()
     print(f"  output scaling: C_hat=1, t=60s -> C={C_one.mean().item():.4f} (expected C_REF*60/T_MAX={c_expected:.4f})")
-    assert max_dev < 1e-5, f"C deviates from C_REF*t/T_MAX by {max_dev:.2e} -- output scaling wrong"
+    assert max_dev < 1e-5, f"C deviates from C_REF*t/T_MAX*omega by {max_dev:.2e} -- output scaling wrong"
 
     # (b3) v9 CO2 BOUNDARY CONDITIONS. A spatially CONSTANT CO2 field (still
     # zero_c, now C = C_REF everywhere) has dc/dn = 0 on every boundary, so the
