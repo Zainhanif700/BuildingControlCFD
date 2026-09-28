@@ -1048,11 +1048,16 @@ def main():
     # v19: optional short dry run (--iters N --tag dry) into checkpoints/<VERSION>_<tag>/, to check
     # loss balance, door split and speed before committing the GPU to a full run.
     import argparse
-    global VERSION, CKPT_DIR, MAX_ITERS
+    global VERSION, CKPT_DIR, MAX_ITERS, RESUME_FROM
     ap = argparse.ArgumentParser()
     ap.add_argument("--iters", type=int, default=None, help="override MAX_ITERS (dry run)")
     ap.add_argument("--tag", default=None, help="suffix for VERSION / checkpoint folder (dry run)")
+    ap.add_argument("--resume", default=None,
+                    help="continue from an iter-numbered checkpoint (model + optimizer state), path relative to "
+                         "this file; use with --tag so the continuation gets its own folder")
     args = ap.parse_args()
+    if args.resume:
+        RESUME_FROM = args.resume
     if args.tag:
         VERSION = f"{VERSION}_{args.tag}"
         CKPT_DIR = os.path.join(HERE, "checkpoints", VERSION)
