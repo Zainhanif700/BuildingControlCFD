@@ -33,7 +33,9 @@ def main():
     ap.add_argument("--case", required=True)
     ap.add_argument("--times", type=float, nargs="*", default=[60.0, 120.0])
     ap.add_argument("--depths", type=float, nargs="*", default=[], help="jet_<d> variants (v21 test; worse)")
-    ap.add_argument("--edges", type=float, nargs="*", default=[0.3, 0.5, 1.0],
+    ap.add_argument("--eps-sets", nargs="*", default=["0.1,0.2", "0.2,0.3", "0.3,0.4"],
+                    help="v22 check 3: opening edge widths 'EPS_WINDOW,EPS_DOOR' [m] tried with the smooth jet")
+    ap.add_argument("--edges", type=float, nargs="*", default=[0.3],
                     help="v22 smooth-jet variants: tanh edge length JET_EDGE_W [m] (spread depth JET_SPREAD_L fixed)")
     ap.add_argument("--device", default="cuda" if __import__("torch").cuda.is_available() else "cpu")
     ap.add_argument("--nu", type=float, default=None, help="nu for the viscous check (default: the case's nu)")
@@ -95,9 +97,17 @@ def main():
     say(f"case {case}: V = {V}, dx = {dx}; potential-flow alpha = {a_pot:.3f}")
     say("reference: trained v19 (W1 1 m/s, nu 0.01, t=60/120 s): velocity error 74% volume / 67% plane; "
         "trained v21 iter 3000 (nu 0.1): 136% / 109%\n")
-    variants = ([("sharp", "linear", None, False, None)]
-                + [(f"smooth_{e:g}m", "linear", None, True, e) for e in args.edges]
-                + [(f"jet_{d:g}m", "jet", d, False, None) for d in args.depths])
+    e0 = (tfl.EPS_WINDOW, tfl.EPS_DOOR)
+    eps_sets = [tuple(float(v) for v in es.split(",")) for es in args.eps_sets]
+    variants = ([("sharp", "linear", None, False, None, e0)]
+                + [(f"sm{e:g}_ew{ew:g}_ed{ed:g}", "linear", None, True, e, (ew, ed))
+                   for e in args.edges for ew, ed in eps_sets]
+                + [(f"jet_{d:g}m", "jet", d, False, None, e0) for d in args.depths])
+
+    def use_eps(ew, ed):   # opening edge widths are module globals of throughflow (read at call time)
+        assert ew <= 0.3 and ed <= 0.5, "edge wider than half the opening"
+        tfl.EPS_WINDOW, tfl.EPS_DOOR = ew, ed
+        tfl._DOOR_HN = tfl.DOOR_HEIGHT - ed / 2
     # ---- (1) B_p's own VISCOUS momentum term on the training distribution (what dominated v21's loss)
     import point_sampler as ps
     import train_gnot as tg
@@ -114,9 +124,11 @@ def main():
         return torch.zeros_like(v) if r is None else r
     say(f"(1) viscous term of B_p ALONE, |nu lap(u)|^2 / (U_ref^2/L)^2 on 10000 training points, nu = {nu:g}"
         f"\n    (v21, sharp: this term was 99% of the NS loss; the network cannot cancel it)")
-    say(f"{'variant':>11s} | {'mean':>10s} {'median':>10s} {'top-1% share':>12s}")
-    for name, blend, depth, smooth, edge in variants:
-        vals = []
+    say(f"{'variant':>20s} | {'mean':>9s} {'top-1%':>7s} | share of the total from: window zone (y > LY-1.3 m) / "
+        f"door zone (y < DOOR_STRIP+1.3 m) / rest")
+    for name, blend, depth, smooth, edge, (ew, ed) in variants:
+        use_eps(ew, ed)
+        vals, ys = [], []
         for (x0, y0, z0, t0, V0, _) in pts:
             x, y, z, t = (q.double().clone().requires_grad_(True) for q in (x0, y0, z0, t0))
             Vd = V0.double()
@@ -127,13 +139,18 @@ def main():
             lap = torch.cat([gz(gz(c, x), x) + gz(gz(c, y), y) + gz(gz(c, z), z) for c in ub], 1)
             sc = tg.velocity_scale(Vd) ** 2 / tg.L_NS
             vals.append(((nu * lap / sc) ** 2).sum(1).detach().cpu())
-        e = torch.cat(vals)
+            ys.append(y0.squeeze(1).detach().cpu())
+        e, yy = torch.cat(vals), torch.cat(ys)
         k = max(1, e.numel() // 100)
-        say(f"{name:>11s} | {e.mean().item():10.4g} {e.median().item():10.4g} "
-            f"{e.sort(descending=True).values[:k].sum().item() / e.sum().item():12.1%}")
+        wz = yy > ROOM_Y[1] - 1.3
+        dz = (yy < ROOM_Y[0] + tfl.DOOR_STRIP + 1.3) & ~wz
+        tot = e.sum().item()
+        say(f"{name:>20s} | {e.mean().item():9.4g} {e.sort(descending=True).values[:k].sum().item() / tot:7.1%} | "
+            f"{e[wz].sum().item() / tot:6.1%} / {e[dz].sum().item() / tot:6.1%} / {e[~wz & ~dz].sum().item() / tot:6.1%}")
+    use_eps(*e0)
     say("")
     say("(2) velocity of B_p ALONE vs OpenFOAM (relative L2)")
-    say(f"{'t':>5s} {'variant':>9s} {'alpha':>11s} | {'volume':>7s} {'plane':>7s} | {'|u| B_p':>8s} {'|u| OF':>7s}")
+    say(f"{'t':>5s} {'variant':>20s} {'alpha':>11s} | {'volume':>7s} {'plane':>7s} | {'|u| B_p':>8s} {'|u| OF':>7s}")
     best = None
     maps = {}
     for t in args.times:
@@ -146,13 +163,14 @@ def main():
         d1 = read_patch_sum(os.path.join(case, d, "phi"), "door1")
         d2 = read_patch_sum(os.path.join(case, d, "phi"), "door2")
         a_of = d1 / (d1 + d2)
-        for name, blend, depth, smooth, edge in variants:
-            for a_lab, alpha in (("pot", a_pot), ("OpenFOAM", a_of)):
+        for name, blend, depth, smooth, edge, (ew, ed) in variants:
+            use_eps(ew, ed)
+            for a_lab, alpha in (("pot", a_pot),):     # v22: OpenFOAM-split rows dropped (alpha is learned)
                 U = bp_velocity(t, alpha, blend, depth, smooth, edge)
                 e_v = np.sqrt(np.nansum((U[fl] - U_of[fl]) ** 2) / np.nansum(U_of[fl] ** 2))
                 pl = fl[:, :, kz]
                 e_p = np.sqrt(np.nansum((U[:, :, kz][pl] - U_of[:, :, kz][pl]) ** 2) / np.nansum(U_of[:, :, kz][pl] ** 2))
-                say(f"{t:5.0f} {name:>9s} {a_lab + f'={alpha:.2f}':>11s} | {100 * e_v:6.1f}% {100 * e_p:6.1f}% | "
+                say(f"{t:5.0f} {name:>20s} {a_lab + f'={alpha:.2f}':>11s} | {100 * e_v:6.1f}% {100 * e_p:6.1f}% | "
                     f"{np.nanmean(np.linalg.norm(U[fl], axis=1)):8.3f} {np.nanmean(np.linalg.norm(U_of[fl], axis=1)):7.3f}")
                 if t == max(args.times) and a_lab == "pot":
                     maps[name] = np.linalg.norm(U[:, :, kz], axis=-1)
