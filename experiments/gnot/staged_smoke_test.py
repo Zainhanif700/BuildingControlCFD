@@ -509,8 +509,9 @@ def test_v20(device):
     Vs = torch.tensor([[3.0] * 8, [3.0] + [0.0] * 7, [0.0] * 8], device=device)
     s = slip_scale(Vs).squeeze(1).tolist()
     u = velocity_scale(Vs).squeeze(1).tolist()
+    # closed: min(U_ref, U_win) = 0 -> the cap U_ref/3 = 0.5/3 applies (irrelevant there: u = 0 exactly)
     assert abs(s[0] - max(3.0, u[0] / SLIP_MAX_RATIO)) < 1e-4 and abs(s[1] - u[1]) < 1e-4 \
-        and abs(s[2] - V_REL_FLOOR) < 1e-6, f"slip_scale {s} (U_ref {u})"
+        and abs(s[2] - max(V_REL_FLOOR, u[2] / SLIP_MAX_RATIO)) < 1e-6, f"slip_scale {s} (U_ref {u})"
     print(f"  |C| on open-window cores {c_open:.1e} (interior {c_ref:.1e}); omega = 1 on closed windows/walls; "
           f"alpha(W1..W8) = {', '.join(f'{v:.3f}' for v in a[:-1])}; slip scale {s[0]:.2f}/{s[1]:.2f}/{s[2]:.2f} m/s")
 
