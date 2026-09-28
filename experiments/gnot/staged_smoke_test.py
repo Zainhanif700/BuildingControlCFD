@@ -574,7 +574,7 @@ def test_v21(device):
           f"{L[0]:.4g} / {L[1]:.4g} / {L[2]:.4g} / {L[3]:.4g} (exact quadratic in nu, default = NU)")
 
 
-@stage("0i. v22 smooth jet -- psi unchanged on the window wall, exact end values, much smaller B_p curvature inside")
+@stage("0i. v22 smooth jet -- psi unchanged on window + door wall, exact end values, much smaller B_p curvature inside")
 def test_v22(device):
     import throughflow as tfl
     from point_sampler import ROOM_X, ROOM_Y, ROOM_Z
@@ -586,13 +586,19 @@ def test_v22(device):
     al = torch.full((n, 1), 0.55, device=device, dtype=dt)
     x = torch.rand(n, 1, device=device, dtype=dt) * (ROOM_X[1] - ROOM_X[0]) + ROOM_X[0]
     z = torch.rand(n, 1, device=device, dtype=dt) * ROOM_Z[1]
-    # (a) at the window wall (y = LY) psi equals the sharp (v19-v21) psi exactly, and so does dpsi/dy
-    yw = torch.full((n, 1), ROOM_Y[1], device=device, dtype=dt, requires_grad=True)
-    _, ps_ = tfl.through_flow_potential(x, yw, z, t, V, al, smooth=True)
-    _, pl_ = tfl.through_flow_potential(x, yw, z, t, V, al, smooth=False)
-    d0 = (ps_ - pl_).abs().max().item()
-    d1 = (torch.autograd.grad(ps_.sum(), yw)[0] - torch.autograd.grad(pl_.sum(), yw)[0]).abs().max().item()
-    assert d0 < 1e-12 and d1 < 1e-9, f"psi / dpsi/dy at the window wall changed: {d0:.1e} / {d1:.1e}"
+    # (a) on the window wall (y = LY) and the door wall (y = 0) psi equals the sharp (v19-v21) psi, so the
+    #     NORMAL velocity v = -dpsi/dx there is unchanged (inflow / door outflow exact). The TANGENTIAL
+    #     u = dpsi/dy at the walls may change (door sheet smoothed inside the room) -- it was never exact
+    #     (soft no-slip / window tangential terms), so it is not tested here.
+    d0 = d1 = 0.0
+    for yv in (ROOM_Y[1], ROOM_Y[0]):
+        xw = x.clone().requires_grad_(True)
+        yw = torch.full((n, 1), yv, device=device, dtype=dt)
+        _, ps_ = tfl.through_flow_potential(xw, yw, z, t, V, al, smooth=True)
+        _, pl_ = tfl.through_flow_potential(xw, yw, z, t, V, al, smooth=False)
+        d0 = max(d0, (ps_ - pl_).abs().max().item())
+        d1 = max(d1, (torch.autograd.grad(ps_.sum(), xw)[0] - torch.autograd.grad(pl_.sum(), xw)[0]).abs().max().item())
+    assert d0 < 1e-12 and d1 < 1e-9, f"psi / normal velocity on the window or door wall changed: {d0:.1e} / {d1:.1e}"
     # (b) smooth cumulative profile: exactly 0 at x = 0 and exactly the total inflow at x = LX
     rt = tfl.ramp(t[:2])
     xe = torch.tensor([[ROOM_X[0]], [ROOM_X[1]]], device=device, dtype=dt)
@@ -611,7 +617,7 @@ def test_v22(device):
         d2 = torch.autograd.grad(torch.autograd.grad(v_.sum(), xm, create_graph=True)[0].sum(), xm)[0]
         lap[sm] = d2.abs().max().item()
     assert lap[True] < 0.05 * lap[False], f"smooth jet curvature {lap[True]:.3g} not << sharp {lap[False]:.3g}"
-    print(f"  window wall: psi / dpsi/dy unchanged ({d0:.1e} / {d1:.1e}); smooth profile ends exact; "
+    print(f"  window + door wall: psi / normal velocity unchanged ({d0:.1e} / {d1:.1e}); smooth profile ends exact; "
           f"max |d2v/dx2| mid-room: sharp {lap[False]:.3g} -> smooth {lap[True]:.3g} 1/(m s)")
 
 
