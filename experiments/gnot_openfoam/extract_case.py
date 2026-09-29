@@ -1,14 +1,20 @@
 """
 Extract one OpenFOAM case into a compact training dataset (npz):
-  * velocity U from OpenFOAM at the dataset times T_DATA (fluid cells of the shared FV grid);
-  * CO2 C at the same times, transported through the OpenFOAM flow by the verified FV solver of
-    experiments/gnot/check_co2_with_model_flow.py (the SAME call as compare_with_openfoam.py, so the
-    data equal the CO2 reference used in all Track-1 checks), at N_REF people. C is exactly linear in N.
+  * velocity U from OpenFOAM at every saved time that is a multiple of 10 s (t_u), fluid cells of the
+    shared FV grid; after the last OpenFOAM time the flow is taken as FROZEN (steady);
+  * CO2 C at t_c (every 10 s to 120 s, then every 30 s to --t-co2), transported through the OpenFOAM
+    flow by the verified FV scheme of experiments/gnot/check_co2_with_model_flow.py, at N_REF people
+    (C is exactly linear in N). --fv torch runs the same scheme on the GPU (fv_torch.py, checked
+    against numpy with --verify-fv); --fv numpy is the original code (slow for 30 min).
+  * steadiness: relative change of U between the last two OpenFOAM saves 30 s apart (stored, printed)
+    -- the frozen-flow CO2 beyond the OpenFOAM horizon is only valid if this is small.
 Grid / cell mapping / readers are those of compare_with_openfoam.py (imported, not copied).
 
 Usage (training env, from experiments/gnot_openfoam):
-  python3 extract_case.py --case ../gnot/openfoam/cases/W1_1ms_dx0.1
-Output: data/<case name>.npz  (~50-100 MB for dx = 0.1)
+  python3 extract_case.py --case ../gnot/openfoam/cases/W1_1ms_dx0.1                 # Phase 1 (120 s)
+  python3 extract_case.py --case cases/S07_dx0.1 --t-co2 1800 --fv torch --name S07   # Phase 2
+  python3 extract_case.py --closed --name S00 --t-co2 1800 --fv torch                 # all windows closed
+  python3 extract_case.py --case ../gnot/openfoam/cases/W1_1ms_dx0.1 --verify-fv      # torch vs numpy
 """
 import argparse
 import os
@@ -17,78 +23,116 @@ import time
 import numpy as np
 
 import common
-from common import DATA_DIR, N_REF, T_DATA
+from common import DATA_DIR, N_REF
 
 
-def extract(case, out_dir=DATA_DIR, times=T_DATA):
+def co2_times(t_co2):
+    base = [float(t) for t in range(0, 121, 10)]
+    return base + [float(t) for t in range(150, int(t_co2) + 1, 30)] if t_co2 > 120 else \
+        [t for t in base if t <= t_co2]
+
+
+def extract(case=None, out_dir=DATA_DIR, t_co2=120.0, fv="numpy", name=None, closed_dx=0.1, verify=False,
+            device="cuda"):
     import check_co2_with_model_flow as L2
     from compare_with_openfoam import read_internal, time_dirs
-    from point_sampler import ROOM_X, ROOM_Y, BREATHING_HEIGHT
+    from point_sampler import ROOM_X, ROOM_Y, BREATHING_HEIGHT, NUM_WINDOWS
     assert abs(L2.N_PEOPLE - N_REF) < 1e-12, "FV solver occupancy must equal common.N_REF"
 
-    case = os.path.abspath(os.path.expanduser(case))
-    meta = dict(line.split(None, 1) for line in open(os.path.join(case, "scenario.txt")).read().splitlines())
-    V = [float(v) for v in meta["V"].split()]
-    dx = float(meta["dx"])
-    nu = float(meta.get("nu", "0.01"))
-    g = L2.Grid(dx, V)
-    Cc = read_internal(os.path.join(case, "0", "C"), 3)
-    idx = [np.clip(np.floor((Cc[:, a] - (ROOM_X[0], ROOM_Y[0], 0.0)[a]) / g.h[a]).astype(int), 0, g.n[a] - 1)
-           for a in range(3)]
-    occupied = np.zeros(g.X.shape, bool)
-    occupied[idx[0], idx[1], idx[2]] = True
-    mism = int(np.sum(occupied != g.fluid))
-    assert mism < 0.01 * g.fluid.sum(), f"cell layouts do not match ({mism} cells) -- case made with another dx?"
+    if case is None:                                         # all windows closed: u = 0, no OpenFOAM run
+        V, dx, nu = [0.0] * NUM_WINDOWS, closed_dx, 0.01
+        g = L2.Grid(dx, V)
+        zero = [np.zeros(g.X.shape)] * 3
+        snaps, stimes = [zero, zero], [0.0, 10.0]
+        steady = 0.0
+        src = "closed room (no flow)"
+    else:
+        case = os.path.abspath(os.path.expanduser(case))
+        meta = dict(line.split(None, 1) for line in open(os.path.join(case, "scenario.txt")).read().splitlines())
+        V = [float(v) for v in meta["V"].split()]
+        dx = float(meta["dx"])
+        nu = float(meta.get("nu", "0.01"))
+        g = L2.Grid(dx, V)
+        Cc = read_internal(os.path.join(case, "0", "C"), 3)
+        idx = [np.clip(np.floor((Cc[:, a] - (ROOM_X[0], ROOM_Y[0], 0.0)[a]) / g.h[a]).astype(int), 0, g.n[a] - 1)
+               for a in range(3)]
+        occupied = np.zeros(g.X.shape, bool)
+        occupied[idx[0], idx[1], idx[2]] = True
+        mism = int(np.sum(occupied != g.fluid))
+        assert mism < 0.01 * g.fluid.sum(), f"cell layouts do not match ({mism} cells) -- case made with another dx?"
+        snaps, stimes = [], []
+        for t, d in time_dirs(case):
+            Ug = np.full(g.X.shape + (3,), np.nan)
+            Ug[idx[0], idx[1], idx[2]] = read_internal(os.path.join(case, d, "U"), 3, len(Cc))
+            Ug = np.nan_to_num(Ug) * g.fluid[..., None]
+            snaps.append([Ug[..., a] for a in range(3)])
+            stimes.append(t)
+        if stimes[0] > 0:                  # at rest before the first save (as in compare_with_openfoam)
+            snaps.insert(0, [np.zeros(g.X.shape)] * 3)
+            stimes.insert(0, 0.0)
+        t_last = stimes[-1]
+        j = int(np.argmin(np.abs(np.array(stimes) - (t_last - 30.0))))
+        a, b = np.stack(snaps[-1], -1)[g.fluid], np.stack(snaps[j], -1)[g.fluid]
+        steady = float(np.linalg.norm(a - b) / max(np.linalg.norm(a), 1e-30))
+        src = f"OpenFOAM {case} (saved to t = {t_last:g} s)"
+    name = name or os.path.basename(case.rstrip("/"))
+    print(f"{name}: {src}; V = {V}; dx = {dx}; nu = {nu:g}")
+    print(f"  steadiness |U(t_last) - U(t_last - 30 s)| / |U(t_last)| = {100 * steady:.2f}%"
+          + ("   <-- WARNING: flow not steady, frozen-flow CO2 beyond the OpenFOAM horizon is questionable"
+             if steady > 0.05 else ""))
 
-    def to_grid(vals):
-        out = np.full(g.X.shape + vals.shape[1:], np.nan)
-        out[idx[0], idx[1], idx[2]] = vals
-        return out
+    if verify:
+        import fv_torch
+        dev = device
+        r = fv_torch.verify(g, stimes, snaps, t_check=(30.0, 60.0), device=dev)
+        print("  torch FV vs numpy FV, max relative difference: " + ", ".join(f"t={t:g} s {v:.2e}" for t, v in r.items()))
+        return None
 
-    tdirs = time_dirs(case)
-    t_of = [t for t, _ in tdirs]
-    missing = [t for t in times if t > 0 and not any(abs(t - s) < 1e-6 for s in t_of)]
-    assert not missing, f"OpenFOAM did not save t = {missing}"
-    # all saved OpenFOAM velocities (the FV transport interpolates between them)
-    snaps, stimes, U_at = [], [], {}
-    for t, d in tdirs:
-        Ug = to_grid(read_internal(os.path.join(case, d, "U"), 3, len(Cc)))
-        Ug = np.nan_to_num(Ug) * g.fluid[..., None]
-        snaps.append([Ug[..., a] for a in range(3)])
-        stimes.append(t)
-        if any(abs(t - s) < 1e-6 for s in times):
-            U_at[round(t, 6)] = Ug[g.fluid].astype(np.float32)
-    if stimes[0] > 0:                      # at rest before the first save (as in compare_with_openfoam)
-        snaps.insert(0, [np.zeros(g.X.shape)] * 3)
-        stimes.insert(0, 0.0)
-    U_at.setdefault(0.0, np.zeros((int(g.fluid.sum()), 3), np.float32))
-    L2.T_SNAP = stimes
-    L2.T_OUT = tuple(t for t in times if t > 0)
+    t_c = co2_times(t_co2)
     t0 = time.time()
-    ref, dt_used, nsteps = L2.solve_co2(g, snaps)
-    print(f"FV CO2: {nsteps} steps, dt = {dt_used:.4f} s, {time.time() - t0:.0f} s wall")
-    C_list = [np.zeros(int(g.fluid.sum()), np.float32) if t == 0 else ref[t][g.fluid].astype(np.float32)
-              for t in times]
-    U_list = [U_at[round(t, 6)] for t in times]
+    if fv == "torch":
+        import fv_torch
+        ref, dt_used, nsteps = fv_torch.TorchFV(g, device).solve(stimes, snaps, [t for t in t_c if t > 0],
+                                                                  log_every=20000)
+    else:
+        L2.T_SNAP = stimes
+        L2.T_OUT = tuple(t for t in t_c if t > 0)
+        ref, dt_used, nsteps = L2.solve_co2(g, snaps)
+    print(f"  FV CO2 ({fv}): {nsteps} steps, dt = {dt_used:.4f} s, {time.time() - t0:.0f} s wall, to t = {t_c[-1]:g} s")
+    nf = int(g.fluid.sum())
+    C = np.stack([np.zeros(nf, np.float32) if t == 0 else ref[t][g.fluid].astype(np.float32) for t in t_c])
+    t_u = [t for t in stimes if abs(t / 10.0 - round(t / 10.0)) < 1e-6]
+    U = np.stack([np.stack(snaps[stimes.index(t)], -1)[g.fluid].astype(np.float32) for t in t_u])
     P = np.stack([g.X[g.fluid], g.Y[g.fluid], g.Z[g.fluid]], 1).astype(np.float32)
     kz = int(np.argmin(np.abs(g.c1d[2] - BREATHING_HEIGHT)))
     plane = np.abs(P[:, 2] - g.c1d[2][kz]) < 1e-5
     os.makedirs(out_dir, exist_ok=True)
-    out = os.path.join(out_dir, os.path.basename(case.rstrip("/")) + ".npz")
-    np.savez_compressed(out, P=P, t=np.array(times, np.float32), U=np.stack(U_list), C=np.stack(C_list),
+    out = os.path.join(out_dir, name + ".npz")
+    np.savez_compressed(out, P=P, t_u=np.array(t_u, np.float32), U=U, t_c=np.array(t_c, np.float32), C=C,
                         V=np.array(V, np.float32), N_ref=np.float32(N_REF), nu=np.float32(nu), dx=np.float32(dx),
-                        plane=plane, z_plane=np.float32(g.c1d[2][kz]))
-    print(f"saved {out}: {P.shape[0]} points x {len(times)} times, V = {V}, nu = {nu:g}, "
-          f"breathing plane z = {g.c1d[2][kz]:.3f} m ({int(plane.sum())} points), {os.path.getsize(out) / 1e6:.1f} MB")
+                        plane=plane, z_plane=np.float32(g.c1d[2][kz]), steadiness=np.float32(steady))
+    print(f"  saved {out}: {P.shape[0]} points, U at {len(t_u)} times (to {t_u[-1]:g} s, frozen after), "
+          f"C at {len(t_c)} times (to {t_c[-1]:g} s); plane z = {g.c1d[2][kz]:.3f} m; {os.path.getsize(out) / 1e6:.1f} MB")
     return out
 
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--case", required=True)
+    ap.add_argument("--case", default=None)
+    ap.add_argument("--closed", action="store_true", help="all windows closed (no OpenFOAM case needed)")
+    ap.add_argument("--name", default=None)
     ap.add_argument("--out", default=DATA_DIR)
+    ap.add_argument("--t-co2", type=float, default=120.0, help="CO2 transport horizon [s] (Phase 2: 1800)")
+    ap.add_argument("--fv", choices=["numpy", "torch"], default="numpy")
+    ap.add_argument("--device", default="cuda")
+    ap.add_argument("--verify-fv", action="store_true", help="compare torch FV with numpy FV (to 60 s), no output")
     args = ap.parse_args()
-    extract(args.case, args.out)
+    if args.closed == (args.case is not None):
+        raise SystemExit("give exactly one of --case or --closed")
+    if args.closed and not args.name:
+        raise SystemExit("--closed needs --name")
+    extract(None if args.closed else args.case, args.out, args.t_co2, args.fv, args.name,
+            verify=args.verify_fv, device=args.device)
 
 
 if __name__ == "__main__":

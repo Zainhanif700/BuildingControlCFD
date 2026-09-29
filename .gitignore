@@ -35,3 +35,4 @@ experiments/pinto/
 experiments/gnot_openfoam/data/
 experiments/gnot_openfoam/checkpoints/
 experiments/gnot_openfoam/logs/
+experiments/gnot_openfoam/cases/
