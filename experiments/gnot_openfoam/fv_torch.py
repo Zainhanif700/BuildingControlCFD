@@ -17,19 +17,17 @@ from train_gnot import DIFFUSIVITY
 
 
 def _shift(a, axis, s):
-    """torch version of L2.shift: b[i] = a[i+s] along axis, out-of-range entries NaN."""
-    b = torch.full_like(a, float("nan"))
-    src, dst = [slice(None)] * 3, [slice(None)] * 3
-    if s > 0:
-        dst[axis], src[axis] = slice(0, -s), slice(s, None)
-    else:
-        dst[axis], src[axis] = slice(-s, None), slice(0, s)
-    b[tuple(dst)] = a[tuple(src)]
-    return b
+    """b[i] = a[i+s] along axis. L2.shift fills out-of-range entries with NaN; here they WRAP around
+    (torch.roll, one pass instead of fill + copy). Identical results: every use is masked -- neighbour()
+    replaces them by c (nb_ok is False at the boundary), and the 2nd-order branches are selected only
+    where nb_ok(+-1) & nb_ok(+-2) hold (torch.where never lets the unselected branch through)."""
+    return torch.roll(a, shifts=-s, dims=axis)
 
 
 class TorchFV:
-    def __init__(self, g, device="cuda", dtype=torch.float64):
+    def __init__(self, g, device="cuda", dtype=torch.float32):
+        """dtype: float32 (default for the dataset, ~2x faster, results ~1e-6 relative from float64 --
+        checked by verify()); float64 reproduces the numpy solver to round-off (~1e-14)."""
         self.g, self.dev, self.dt_ = g, device, dtype
         T = lambda a: torch.tensor(np.asarray(a), device=device)
         self.fluid = T(g.fluid)
@@ -76,6 +74,8 @@ class TorchFV:
         ts = list(snap_times)
 
         def vel(t):     # = L2.velocity_at (linear in time, clamped -> frozen after the last snapshot)
+            if t >= ts[-1]:        # frozen: a would clamp to 1 -> exactly the last snapshot (no arithmetic)
+                return S[-1]
             j = int(np.searchsorted(ts, t, side="right")) - 1
             j = min(max(j, 0), len(ts) - 2)
             a = (t - ts[j]) / (ts[j + 1] - ts[j])
@@ -99,9 +99,20 @@ class TorchFV:
 
 
 def verify(g, snap_times, snaps, t_check=(30.0, 60.0), device="cuda"):
-    """Both solvers, same inputs: max |c_torch - c_numpy| / max |c_numpy| at t_check."""
+    """numpy vs torch float64 and torch float32 on the same inputs: max |c_torch - c_numpy| / max |c_numpy|
+    at t_check (the times include the frozen-flow branch when t_check exceeds the last snapshot)."""
+    import time
     L2.T_SNAP = list(snap_times)
     L2.T_OUT = tuple(t_check)
-    ref, _, _ = L2.solve_co2(g, snaps)
-    got, _, _ = TorchFV(g, device).solve(snap_times, snaps, t_check)
-    return {t: float(np.max(np.abs(got[t] - ref[t])) / max(np.max(np.abs(ref[t])), 1e-30)) for t in t_check}
+    t0 = time.time()
+    ref, _, n = L2.solve_co2(g, snaps)
+    out = {"numpy_s_per_step": (time.time() - t0) / n}
+    for name, dt in (("float64", torch.float64), ("float32", torch.float32)):
+        if str(device).startswith("cuda"):
+            torch.cuda.synchronize()
+        t0 = time.time()
+        got, _, n = TorchFV(g, device, dt).solve(snap_times, snaps, t_check)
+        out[f"{name}_s_per_step"] = (time.time() - t0) / n
+        for t in t_check:
+            out[f"{name} t={t:g}"] = float(np.max(np.abs(got[t] - ref[t])) / max(np.max(np.abs(ref[t])), 1e-30))
+    return out

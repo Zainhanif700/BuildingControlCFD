@@ -33,7 +33,7 @@ def co2_times(t_co2):
 
 
 def extract(case=None, out_dir=DATA_DIR, t_co2=120.0, fv="numpy", name=None, closed_dx=0.1, verify=False,
-            device="cuda"):
+            device="cuda", fv_dtype="float32"):
     import check_co2_with_model_flow as L2
     from compare_with_openfoam import read_internal, time_dirs
     from point_sampler import ROOM_X, ROOM_Y, BREATHING_HEIGHT, NUM_WINDOWS
@@ -84,21 +84,25 @@ def extract(case=None, out_dir=DATA_DIR, t_co2=120.0, fv="numpy", name=None, clo
     if verify:
         import fv_torch
         dev = device
-        r = fv_torch.verify(g, stimes, snaps, t_check=(30.0, 60.0), device=dev)
-        print("  torch FV vs numpy FV, max relative difference: " + ", ".join(f"t={t:g} s {v:.2e}" for t, v in r.items()))
+        t_chk = (60.0, stimes[-1] + 20.0)   # the 2nd time lies past the last snapshot -> frozen-flow branch tested
+        r = fv_torch.verify(g, stimes, snaps, t_check=t_chk, device=dev)
+        print("  torch FV vs numpy FV (max relative difference; seconds per step):")
+        for k, v in r.items():
+            print(f"    {k:24s} {v:.3e}")
         return None
 
     t_c = co2_times(t_co2)
     t0 = time.time()
     if fv == "torch":
         import fv_torch
-        ref, dt_used, nsteps = fv_torch.TorchFV(g, device).solve(stimes, snaps, [t for t in t_c if t > 0],
-                                                                  log_every=20000)
+        import torch
+        ref, dt_used, nsteps = fv_torch.TorchFV(g, device, getattr(torch, fv_dtype)).solve(
+            stimes, snaps, [t for t in t_c if t > 0], log_every=20000)
     else:
         L2.T_SNAP = stimes
         L2.T_OUT = tuple(t for t in t_c if t > 0)
         ref, dt_used, nsteps = L2.solve_co2(g, snaps)
-    print(f"  FV CO2 ({fv}): {nsteps} steps, dt = {dt_used:.4f} s, {time.time() - t0:.0f} s wall, to t = {t_c[-1]:g} s")
+    print(f"  FV CO2 ({fv}{', ' + fv_dtype if fv == 'torch' else ''}): {nsteps} steps, dt = {dt_used:.4f} s, {time.time() - t0:.0f} s wall, to t = {t_c[-1]:g} s")
     nf = int(g.fluid.sum())
     C = np.stack([np.zeros(nf, np.float32) if t == 0 else ref[t][g.fluid].astype(np.float32) for t in t_c])
     t_u = [t for t in stimes if abs(t / 10.0 - round(t / 10.0)) < 1e-6]
@@ -125,6 +129,7 @@ def main():
     ap.add_argument("--t-co2", type=float, default=120.0, help="CO2 transport horizon [s] (Phase 2: 1800)")
     ap.add_argument("--fv", choices=["numpy", "torch"], default="numpy")
     ap.add_argument("--device", default="cuda")
+    ap.add_argument("--fv-dtype", choices=["float32", "float64"], default="float32")
     ap.add_argument("--verify-fv", action="store_true", help="compare torch FV with numpy FV (to 60 s), no output")
     args = ap.parse_args()
     if args.closed == (args.case is not None):
@@ -132,7 +137,7 @@ def main():
     if args.closed and not args.name:
         raise SystemExit("--closed needs --name")
     extract(None if args.closed else args.case, args.out, args.t_co2, args.fv, args.name,
-            verify=args.verify_fv, device=args.device)
+            verify=args.verify_fv, device=args.device, fv_dtype=args.fv_dtype)
 
 
 if __name__ == "__main__":
