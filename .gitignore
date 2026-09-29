@@ -31,3 +31,7 @@ experiments/gnot/FETCH_HEAD
 experiments/gnot/openfoam/cases/
 # leftover local copy of the removed PINTO experiment folder on the server
 experiments/pinto/
+# Track 2 (experiments/gnot_openfoam): extracted datasets, checkpoints and logs are regenerated on the server
+experiments/gnot_openfoam/data/
+experiments/gnot_openfoam/checkpoints/
+experiments/gnot_openfoam/logs/
