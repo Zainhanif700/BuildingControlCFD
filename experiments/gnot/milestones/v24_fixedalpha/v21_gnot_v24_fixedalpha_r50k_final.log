@@ -1,0 +1,40 @@
+v21 check: checkpoints/v24_fixedalpha_r50k/gnot_v24_fixedalpha_r50k_final.pth  (nu = 0.01, OpenFOAM case openfoam/cases/W1_1ms_dx0.1, Tue Sep 29 10:44:17 AM CEST 2026)
+
+== 1 compare with OpenFOAM
+OpenFOAM case /home/iai-labor/BuildingControlCFD/experiments/gnot/openfoam/cases/W1_1ms_dx0.1
+  scenario W1 1m/s: V = [1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0], dx = 0.1
+model /home/iai-labor/BuildingControlCFD/experiments/gnot/checkpoints/v24_fixedalpha_r50k/gnot_v24_fixedalpha_r50k_final.pth (version=v24_fixedalpha_r50k, iter=50000), code from /home/iai-labor/BuildingControlCFD/experiments/gnot
+grid: 438929 OpenFOAM cells on 155x92x31; fluid-mask mismatch 0 cells
+saved OpenFOAM times: 61 (up to t = 120 s)
+
+AIRFLOW: model vs OpenFOAM (relative L2 of the velocity vector)
+ t [s] |  volume   plane |  |u| OF |u| model | door1 / door2 [m^3/s] OF   split OF  alpha model
+    30 |   63.1%   64.2% |   0.100     0.059 |   0.992 /   0.930    0.516      0.594
+    60 |   51.9%   49.4% |   0.093     0.059 |   1.184 /   0.738    0.616      0.594
+   120 |   51.3%   48.9% |   0.090     0.059 |   1.195 /   0.727    0.622      0.594
+
+CO2: model vs finite-volume CO2 transported by the OPENFOAM flow (N = 20)
+  FV transport: 4427 steps, dt = 0.0271 s, 61 OpenFOAM snapshots
+ t [s] | plane L2 volume L2 | mass model/ref
+    30 |    36.4%     31.7% |          1.047
+    60 |    65.7%     57.8% |          1.035
+   120 |    79.7%     72.8% |          1.040
+
+results in /home/iai-labor/BuildingControlCFD/experiments/gnot/openfoam/results/W1_1ms_dx0.1__v24_fixedalpha_r50k_iter50000
+
+== 2 flow-correction diagnosis
+/home/iai-labor/BuildingControlCFD/experiments/gnot/checkpoints/v24_fixedalpha_r50k/gnot_v24_fixedalpha_r50k_final.pth (version=v24_fixedalpha_r50k); scenario W1 1m/s V=[1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]; correction scale s(V) = 0.430 m/s
+
+    t |  |u_Bp| |u_corr|  |u_OF|     |d| | size |corr|/|d| alignment achieved | region
+   60 |   0.131    0.054   0.179   0.112 |           0.484     0.570    0.276 | whole room
+   60 |   0.136    0.052   0.207   0.125 |           0.420     0.607    0.254 | breathing plane
+  120 |   0.131    0.054   0.178   0.110 |           0.495     0.561    0.278 | whole room
+  120 |   0.136    0.052   0.206   0.123 |           0.426     0.595    0.253 | breathing plane
+
+Reading: alignment near +1 but size << 1  -> right direction, too small (scaling, e.g. s(V));
+         alignment near 0 or negative    -> the correction does not move towards the NS solution
+                                            (loss/training), whatever its size.
+
+Reference numbers (nu 0.01): v19 velocity error 74% (volume) / 67% (plane); B_p alone 71% / 65%;
+v19 alignment 0.14, achieved 0.05. v21 is a success if the error is clearly below B_p's and
+the alignment clearly above 0.14.
