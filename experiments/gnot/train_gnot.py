@@ -636,6 +636,11 @@ def gradnorm_weight_update(grad_ns, grad_co2, prev_weight):
 #   v25_nsuniform   -- v24 + NS residual only on the uniform interior points (NS_UNIFORM_POINTS_ONLY; CO2 on
 #                     all points). Same model format -> A/B test by resuming from v24's iter-20000 checkpoint
 #                     (same LR schedule) and comparing with r50k at the same iterations (30k, 41k).
+#                     RESULT at 30k (A/B vs v24 r50k at 30k, same start/LR): velocity error 50.9/48.8% (v24:
+#                     51.7/50.0%; v24 at 50k: 51.3/48.9%), alignment 0.58/0.63 (0.55/0.57), achieved
+#                     0.265/0.233 (0.265/0.225), size 0.46/0.37 (0.48/0.39), CO2 unchanged (mass 1.07).
+#                     Small but consistent gain in DIRECTION, not in size -> kept (no cost). Single seed:
+#                     differences of ~1 pp are near run-to-run noise (not measured).
 #
 # IMPORTANT: this VERSION variable (and CKPT_DIR below) is what train_gnot.py's own
 # main() uses for a FULL 20k-iteration production run. Bump this to match whichever
