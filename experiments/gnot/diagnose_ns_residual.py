@@ -87,7 +87,10 @@ def main():
                 L_train = tg.physics_loss(model, dev, nu=nu_ck)[0].item()
             finally:
                 tg.sample_interior = orig
-            L_here = (((R0 - nu_ck * LAP) / sc) ** 2).sum(1).mean().item()
+            n_sel = ps.interior_uniform_count(R0.shape[0]) if getattr(tg, "NS_UNIFORM_POINTS_ONLY", False) else R0.shape[0]
+            r2_here = (((R0 - nu_ck * LAP) / sc) ** 2).sum(1)[:n_sel]          # v25: NS on uniform rows only
+            L_here = (2.0 * (torch.sqrt(1.0 + r2_here) - 1.0)).mean().item() if getattr(tg, "NS_PSEUDO_HUBER", False) \
+                else r2_here.mean().item()
             print(f"self-check: physics_loss {L_train:.6g} vs per-point mean {L_here:.6g} "
                   f"({'OK' if abs(L_train - L_here) <= 1e-3 * abs(L_train) + 1e-9 else 'MISMATCH'})")
         rows.append((x.detach(), y.detach(), z.detach(), t.detach(), R0, LAP, sc))

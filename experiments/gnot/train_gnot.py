@@ -21,7 +21,7 @@ from gnot_model import GNOTOperator, NONDIM_CHECKPOINT_KEY, MODEL_FORMAT_KEY, MO
 from throughflow import bp_velocity_laplacian
 from point_sampler import (
     sample_interior, sample_walls, sample_doors, sample_windows, sample_ic,
-    sample_columns_surface, _generate_interior_batch,
+    sample_columns_surface, _generate_interior_batch, interior_uniform_count, USE_PERSISTENT_POOL,
     ROOM_X, ROOM_Y, ROOM_Z, NUM_WINDOWS, CO2_SOURCE_SIGMA, BREATHING_HEIGHT,
     EMISSION_PER_PERSON, S_REF, C_REF, TAU_RAMP, COLUMNS, N_PEOPLE_MAX, WINDOWS, DOORS,
 )
@@ -623,13 +623,26 @@ def gradnorm_weight_update(grad_ns, grad_co2, prev_weight):
 #                     learned door split alpha(W1) drifted 0.59 -> 0.82 (OpenFOAM 0.62), in step with Walls.
 #   v24_fixedalpha  -- v23 + door split fixed to the potential-flow value (gnot_model.LEARN_ALPHA = False);
 #                     20000 iterations. Checks at 5000 / 10000 / 20000 (check_v21_stage.sh).
+#                     RESULT (POSITIVE, still slowly improving): t = 120 s, volume / plane velocity error,
+#                     alignment room / plane, achieved room / plane:
+#                       5k 56.0/54.6%, 0.43/0.44, 0.17/0.12;  10k 54.7/53.4%, 0.47/0.50, 0.18/0.13;
+#                       20k 52.3/50.3%, 0.54/0.57, 0.25/0.21; resumed (--resume, tag r50k) 41k 51.4/49.3%,
+#                       0.56/0.59, 0.27/0.24 -- gains ~3x slower after 20k; model speed 0.059 vs OpenFOAM
+#                       0.090 m/s since 20k. CO2 on the OpenFOAM flow 37-80%, mass 1.05-1.12.
+#                       30k 51.7/50.0%, 0.55/0.57, 0.265/0.225; 50k (final, PLATEAU) 51.3/48.9%, 0.56/0.60,
+#                       0.278/0.253, correction size 0.50/0.43, CO2 mass 1.04. Error at t = 30 s stuck at
+#                       63% since 20k (model speed 0.059 at every t; OpenFOAM 0.100 at 30 s -> the start-up
+#                       transient is not represented). Best data-free result so far.
+#   v25_nsuniform   -- v24 + NS residual only on the uniform interior points (NS_UNIFORM_POINTS_ONLY; CO2 on
+#                     all points). Same model format -> A/B test by resuming from v24's iter-20000 checkpoint
+#                     (same LR schedule) and comparing with r50k at the same iterations (30k, 41k).
 #
 # IMPORTANT: this VERSION variable (and CKPT_DIR below) is what train_gnot.py's own
 # main() uses for a FULL 20k-iteration production run. Bump this to match whichever
 # fix combination is confirmed working via the closed-window diagnostic BEFORE
 # launching the next full run through this file, so production checkpoints aren't
 # mislabeled with stale physics/sampling.
-VERSION = "v24_fixedalpha"
+VERSION = "v25_nsuniform"
 SINGLE_SCENARIO_V = [1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]   # v21: W1 1 m/s (= openfoam case W1_1ms); None = mix
 
 # v15: optimizer switch. "adam" = v1-v14 behaviour; "soap" = soap.py (official
@@ -683,6 +696,11 @@ SKIP_IC_LOSS = True             # v23: u(t=0) = 0 and C(t=0) = 0 are exact by co
 # (IC = 0.00000 in every log) -- its backward pass only cost time
 BP_WEIGHT_TAU = 1.0             # r_Bp^2 at which a point's weight is 1/2 (natural momentum scale)
 _NS_DIAG = {}                   # last weighting statistics, for the log line
+NS_UNIFORM_POINTS_ONLY = True   # v25: NS residual only on the uniformly sampled interior points (volume-
+# weighted, like the error metric). v4b-v24 evaluated it on the same batch as CO2, 60% of which is
+# concentrated around the CO2 source in the room centre (SOURCE_SAMPLE_FRAC = 0.6) -> only ~3% of the NS
+# points lay in the window-1 jet corridor (~7.7% of the room). CO2 keeps ALL points (v14: uniform-only
+# sampling starved the source). No extra cost: same points, same forward pass.
 
 
 def physics_loss(model, device, nu=NU):
@@ -730,6 +748,12 @@ def physics_loss(model, device, nu=NU):
     # every other term and make the fast scenarios dominate (independent review of v19).
     ns_scale = velocity_scale(V) ** 2 / L_NS
     r2 = (res_u / ns_scale) ** 2 + (res_v / ns_scale) ** 2 + (res_w / ns_scale) ** 2   # (B,1)
+    n_ns = r2.shape[0]
+    if NS_UNIFORM_POINTS_ONLY:   # v25: the first interior_uniform_count(n) rows are the uniform points
+        assert not USE_PERSISTENT_POOL, "NS_UNIFORM_POINTS_ONLY relies on the fresh batch's row order"
+        n_ns = interior_uniform_count(r2.shape[0])
+        r2 = r2[:n_ns]
+    _NS_DIAG["n"] = n_ns
     if USE_BP_RESIDUAL_WEIGHT:
         # v22: weighted least squares with the KNOWN irreducible error of the lifting. B_p's own viscous
         # term nu*lap(curl B_p) is concentrated in the entry zones of the openings (v22 check 3: 99.6%
@@ -741,7 +765,7 @@ def physics_loss(model, device, nu=NU):
         with torch.no_grad():
             alpha = model.door_split(t.detach(), V)
             lap_bp = bp_velocity_laplacian(x, y, z, t, V, alpha)
-            r_bp2 = ((nu * lap_bp / ns_scale) ** 2).sum(dim=1, keepdim=True)
+            r_bp2 = ((nu * lap_bp / ns_scale) ** 2).sum(dim=1, keepdim=True)[:n_ns]
             wgt = 1.0 / (1.0 + r_bp2 / BP_WEIGHT_TAU)
         ns_loss = (wgt * r2).mean() / wgt.mean()   # = unweighted sum of the 3 component means when w = 1
         _NS_DIAG.update(raw=r2.mean().item(), w_mean=wgt.mean().item(),
@@ -750,7 +774,7 @@ def physics_loss(model, device, nu=NU):
         ns_loss = (2.0 * (torch.sqrt(1.0 + r2) - 1.0)).mean()
         _NS_DIAG.update(raw=r2.mean().item(), w_mean=1.0, w_low=0.0)
     else:
-        ns_loss = ((res_u / ns_scale) ** 2).mean() + ((res_v / ns_scale) ** 2).mean() + ((res_w / ns_scale) ** 2).mean()
+        ns_loss = r2.mean()   # = sum of the 3 component means (v8-v21 form) on the selected points
     # v8_nondim: divide by S_REF so the CO2 residual is O(1) instead of
     # O(6e-3) -- every term in res_c (dc/dt, conv_c, D*lap(c), S) has units
     # of concentration/second, so this is a pure rescaling of the same

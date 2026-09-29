@@ -364,14 +364,20 @@ def _sample_uniform_xyz(n, device):
     return torch.cat(pts, dim=0)[:n]
 
 
+def interior_uniform_count(n):
+    """v25: number of UNIFORMLY sampled points in an interior batch of n; they are the first rows
+    (train_gnot.physics_loss evaluates the NS residual on these only -- volume-weighted)."""
+    return n - int(round(n * SOURCE_SAMPLE_FRAC))
+
+
 def _generate_interior_batch(n, device):
     """The actual point-generation logic (uniform + source-concentrated
     spatial mixture, fix #2; plus scenario sampling, fix #3) -- factored out
     of sample_interior() so both the initial pool build and each periodic
     partial refresh below can reuse it identically."""
-    n_source = int(round(n * SOURCE_SAMPLE_FRAC))
-    n_uniform = n - n_source
-    xyz_uniform = _sample_uniform_xyz(n_uniform, device)
+    n_uniform = interior_uniform_count(n)
+    n_source = n - n_uniform
+    xyz_uniform = _sample_uniform_xyz(n_uniform, device)   # v25: the FIRST n_uniform rows are uniform
 
     if n_source > 0:
         xs, ys, zs = _sample_near_source(n_source, device)

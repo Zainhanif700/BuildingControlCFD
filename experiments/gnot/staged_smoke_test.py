@@ -733,6 +733,29 @@ def test_v23(device):
           f"p = U_ref^2 p_raw at t = 0 and 60 s; doors loss scaled; alpha fixed = potential ({a_m[0].item():.3f} for W1)")
 
 
+@stage("0l. v25 NS on uniform points only -- first rows of an interior batch are uniform, NS uses exactly those")
+def test_v25(device):
+    import point_sampler as ps
+    import train_gnot as tg
+    assert tg.NS_UNIFORM_POINTS_ONLY and not ps.USE_PERSISTENT_POOL
+    n = 4000
+    nu_ = ps.interior_uniform_count(n)
+    assert nu_ == n - int(round(n * ps.SOURCE_SAMPLE_FRAC)) and 0 < nu_ < n
+    torch.manual_seed(1)
+    x, y, z, t, V, N = ps.sample_interior(n, device)
+    # uniform rows: x-spread ~ LX/sqrt(12) = 4.48 m; source rows ~ source std (1.25 m): distinguishable
+    sx_u, sx_s = x[:nu_].std().item(), x[nu_:].std().item()
+    assert 3.8 < sx_u < 5.2 and sx_s < 2.5, f"row order broken: x std uniform part {sx_u:.2f}, source part {sx_s:.2f}"
+    from gnot_model import GNOTOperator
+    torch.manual_seed(2)
+    model = GNOTOperator().to(device)
+    torch.manual_seed(3)
+    tg.physics_loss(model, device)
+    assert tg._NS_DIAG["n"] == ps.interior_uniform_count(tg.POINTS_INTERIOR), f"NS used {tg._NS_DIAG['n']} points"
+    print(f"  interior batch: first {nu_}/{n} rows uniform (x std {sx_u:.2f} m vs source part {sx_s:.2f} m); "
+          f"NS residual on {tg._NS_DIAG['n']} of {tg.POINTS_INTERIOR} points, CO2 on all")
+
+
 @stage("0b. v8 non-dimensionalization -- no input saturation, training CO2 loss actually scaled, checkpoint guard")
 def test_nondim(device):
     from gnot_model import GNOTOperator, check_checkpoint_compat
@@ -1212,6 +1235,7 @@ def main():
     test_v22(device)
     test_v22_weight(device)
     test_v23(device)
+    test_v25(device)
     test_nondim(device)
     test_fourier_features(device)
     test_query_encoder(device)
