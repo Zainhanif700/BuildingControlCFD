@@ -641,6 +641,11 @@ def gradnorm_weight_update(grad_ns, grad_co2, prev_weight):
 #                     0.265/0.233 (0.265/0.225), size 0.46/0.37 (0.48/0.39), CO2 unchanged (mass 1.07).
 #                     Small but consistent gain in DIRECTION, not in size -> kept (no cost). Single seed:
 #                     differences of ~1 pp are near run-to-run noise (not measured).
+#                     Continued to 50k (--resume ..._ab_iter30000 --tag r50k): 50.6/48.3% (best data-free
+#                     result), speed 0.059 vs 0.090 m/s, CO2 plane 36-80%, mass 1.06-1.09 -- no change from
+#                     30k: plateau of THIS setup. Untested levers: finer Fourier features (model change), and
+#                     whether the curl(B_p + s phi A) parametrisation itself limits the fit (train it
+#                     supervised on the OpenFOAM data, Track 2).
 #
 # IMPORTANT: this VERSION variable (and CKPT_DIR below) is what train_gnot.py's own
 # main() uses for a FULL 20k-iteration production run. Bump this to match whichever
