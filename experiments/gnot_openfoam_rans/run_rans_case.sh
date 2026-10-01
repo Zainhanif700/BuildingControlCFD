@@ -1,0 +1,37 @@
+#!/usr/bin/env bash
+# Mesh + run one RANS case made by make_rans_case.py (conda env "foam" active). Same mesh steps as
+# experiments/gnot/openfoam/run_openfoam_case.sh, plus the seating cellZone for the CO2 cross-check.
+# Serial run (MPI is not usable on this server).
+# Usage:  bash run_rans_case.sh cases/W1_1ms_rans_dx0.1
+set -eu
+CASE="${1:?usage: bash run_rans_case.sh <case dir>}"
+cd "$CASE"
+command -v pimpleFoam > /dev/null || { echo "OpenFOAM not found -- run: conda activate foam"; exit 1; }
+say() { echo "[$(date '+%T')] $*"; }
+trap 'echo "FAILED at: $BASH_COMMAND -- see the newest log.* file in $CASE"; ls -t log.* 2>/dev/null | head -1' ERR
+rm -rf 0 processor* constant/polyMesh
+find . -maxdepth 1 -regextype posix-extended -regex './[0-9.]+(e[-+]?[0-9]+)?' ! -name '0.orig' -exec rm -rf {} +
+say "mesh: blockMesh";                 blockMesh > log.blockMesh 2>&1
+say "mesh: remove the columns";        cp system/topoSetDict.fluid system/topoSetDict
+                                       topoSet > log.topoSet.fluid 2>&1
+                                       subsetMesh fluid -patch columns -overwrite > log.subsetMesh 2>&1
+say "mesh: window/door patches";       cp system/topoSetDict.openings system/topoSetDict
+                                       topoSet > log.topoSet.openings 2>&1
+                                       createPatch -overwrite > log.createPatch 2>&1
+say "mesh: seating zone";              cp system/topoSetDict.seats system/topoSetDict
+                                       topoSet > log.topoSet.seats 2>&1
+checkMesh > log.checkMesh 2>&1 || true
+grep -E "cells:|Mesh OK|Failed|\*\*\*" log.checkMesh | head -8
+grep -E "seats.*size|cellZone" log.topoSet.seats | tail -2 || true
+rm -rf 0 && cp -r 0.orig 0
+postProcess -func writeCellCentres -time 0 > log.cellCentres 2>&1
+say "run: pimpleFoam (k-omega SST) on 1 core (log.pimpleFoam)"
+pimpleFoam > log.pimpleFoam 2>&1
+for d in [0-9]*; do
+    case "$d" in 0|0.orig|30|60|120|180) ;; *) rm -f "$d"/p "$d"/p.gz "$d"/phi "$d"/phi.gz ;; esac
+done
+say "disk use of this case: $(du -sh . | cut -f1)"
+say "done. last time step:"
+grep -E "^Time =" log.pimpleFoam | tail -1
+grep -E "Courant Number" log.pimpleFoam | tail -1
+grep -A3 -E "^yPlus" log.pimpleFoam | tail -4 || true

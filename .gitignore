@@ -36,3 +36,7 @@ experiments/gnot_openfoam/data/
 experiments/gnot_openfoam/checkpoints/
 experiments/gnot_openfoam/logs/
 experiments/gnot_openfoam/cases/
+# Track 2b (RANS): cases and extracted data are regenerated on the server
+experiments/gnot_openfoam_rans/cases/
+experiments/gnot_openfoam_rans/data/
+experiments/gnot_openfoam_rans/logs/
