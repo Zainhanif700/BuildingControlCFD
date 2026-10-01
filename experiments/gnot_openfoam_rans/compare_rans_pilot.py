@@ -54,6 +54,9 @@ def main():
     mr, Vr, g, Cr, ir, tr = load_case(rans, read_internal, time_dirs, L2)
     ml, Vl, gl, Cl, il, tl = load_case(lam, read_internal, time_dirs, L2)
     assert Vr == Vl and g.n == gl.n, "the two cases must have the same windows and grid"
+    if max(tr) < 60.0:
+        raise SystemExit(f"the RANS case has results only up to t = {max(tr):g} s -- the OpenFOAM run did not "
+                         f"finish. See: tail -40 {rans}/log.pimpleFoam (and the newest log.* file there)")
     fl = g.fluid
     kz = int(np.argmin(np.abs(g.c1d[2] - BREATHING_Z)))
     pl = fl[:, :, kz]
