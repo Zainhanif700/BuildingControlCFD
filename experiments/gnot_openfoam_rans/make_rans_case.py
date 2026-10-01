@@ -49,6 +49,10 @@ def main():
     ap.add_argument("--t-end", type=float, default=180.0)
     ap.add_argument("--write-interval", type=float, default=10.0)
     ap.add_argument("--out", default=CASES_DIR)
+    ap.add_argument("--steady", action="store_true",
+                    help="steady RANS (simpleFoam, SIMPLEC) instead of the transient run: the mean flow, no "
+                         "fluctuations (pilot: the transient flow fluctuates ~24 %% around its mean)")
+    ap.add_argument("--iters", type=int, default=3000, help="(steady) maximum SIMPLE iterations")
     args = ap.parse_args()
     V = [float(v) for v in args.V.split(",")]
 
@@ -171,15 +175,81 @@ functions
 }}
 """
     wr("system/controlDict", cd)
+    if args.steady:
+        write_steady(W, args.iters)
     with open(os.path.join(case, "scenario.txt")) as f:
         meta = f.read()
     meta = re.sub(r"^nu .*$", f"nu {NU_AIR:g}", meta, flags=re.M)
+    meta += ("solver simpleFoam (steady)\n" if args.steady else "solver pimpleFoam (transient)\n")
     meta += f"turbulence kOmegaSST\nseat_cells {n_seat}\nseat_volume {v_seat:.6g}\nco2_rate_ppm_s {rate:.8g}\nN_ref {N_REF:g}\n"
     with open(os.path.join(case, "scenario.txt"), "w") as f:
         f.write(meta)
     print(f"RANS case ready: {case}\n  k-omega SST, nu = {NU_AIR:g}; seating zone {n_seat} cells ({v_seat:.2f} m^3), "
           f"CO2 source {rate:.4g} ppm/s for {N_REF:g} people"
           + ("  [SEAT_BOX is a PLACEHOLDER]" if common.SEAT_BOX_IS_PLACEHOLDER else ""))
+
+
+def write_steady(W, iters):
+    """Steady RANS: simpleFoam with SIMPLEC (consistent), 2nd-order upwind for U, 1st-order for k/omega
+    (robust), relaxation U 0.9 / k, omega 0.7; stops early when all initial residuals are below
+    residualControl. The window inflow table is evaluated at 'time' = iteration (full speed after ~5).
+    No scalarTransport here: a steady scalar run would not be the 30-min transient CO2 (that is fv_turb)."""
+    W("system/controlDict", "dictionary", "controlDict", f"""
+application     simpleFoam;
+startFrom       startTime;
+startTime       0;
+stopAt          endTime;
+endTime         {iters};
+deltaT          1;
+writeControl    timeStep;
+writeInterval   500;
+purgeWrite      2;
+writeFormat     ascii;
+writePrecision  8;
+writeCompression on;
+timeFormat      general;
+timePrecision   6;
+runTimeModifiable true;
+functions
+{{
+    yPlus {{ type yPlus; libs (fieldFunctionObjects); writeControl writeTime; }}
+}}
+""")
+    W("system/fvSchemes", "dictionary", "fvSchemes", """
+ddtSchemes      { default steadyState; }
+gradSchemes     { default Gauss linear; }
+divSchemes
+{
+    default         none;
+    div(phi,U)      bounded Gauss linearUpwind grad(U);
+    div(phi,k)      bounded Gauss upwind;
+    div(phi,omega)  bounded Gauss upwind;
+    div((nuEff*dev2(T(grad(U))))) Gauss linear;
+}
+laplacianSchemes { default Gauss linear corrected; }
+interpolationSchemes { default linear; }
+snGradSchemes   { default corrected; }
+wallDist        { method meshWave; }
+""")
+    W("system/fvSolution", "dictionary", "fvSolution", """
+solvers
+{
+    p      { solver GAMG; smoother GaussSeidel; tolerance 1e-8; relTol 0.05; }
+    "(U|k|omega)" { solver smoothSolver; smoother symGaussSeidel; tolerance 1e-9; relTol 0.1; }
+}
+SIMPLE
+{
+    consistent      yes;
+    nNonOrthogonalCorrectors 0;
+    pRefCell        0;
+    pRefValue       0;
+    residualControl { p 1e-5; U 1e-6; "(k|omega)" 1e-6; }
+}
+relaxationFactors
+{
+    equations { U 0.9; "(k|omega)" 0.7; }
+}
+""")
 
 
 if __name__ == "__main__":

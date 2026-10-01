@@ -25,13 +25,19 @@ grep -E "cells:|Mesh OK|Failed|\*\*\*" log.checkMesh | head -8
 grep -E "seats.*size|cellZone" log.topoSet.seats | tail -2 || true
 rm -rf 0 && cp -r 0.orig 0
 postProcess -func writeCellCentres -time 0 > log.cellCentres 2>&1
-say "run: pimpleFoam (k-omega SST) on 1 core (log.pimpleFoam)"
-pimpleFoam > log.pimpleFoam 2>&1
-for d in [0-9]*; do
-    case "$d" in 0|0.orig|30|60|120|180) ;; *) rm -f "$d"/p "$d"/p.gz "$d"/phi "$d"/phi.gz ;; esac
-done
+APP=$(foamDictionary -entry application -value system/controlDict)
+say "run: $APP (k-omega SST) on 1 core (log.$APP)"
+$APP > log.$APP 2>&1
+if [ "$APP" = pimpleFoam ]; then         # transient: keep p/phi only at the comparison times
+    for d in [0-9]*; do
+        case "$d" in 0|0.orig|30|60|120|180) ;; *) rm -f "$d"/p "$d"/p.gz "$d"/phi "$d"/phi.gz ;; esac
+    done
+else                                      # steady: report convergence
+    grep -E "SIMPLE solution converged|End" log.$APP | tail -2 || true
+    grep -E "Solving for (Ux|p|k|omega)," log.$APP | tail -4 | sed 's/, Final.*//' || true
+fi
 say "disk use of this case: $(du -sh . | cut -f1)"
 say "done. last time step:"
-grep -E "^Time =" log.pimpleFoam | tail -1
-grep -E "Courant Number" log.pimpleFoam | tail -1
-grep -A3 -E "^yPlus" log.pimpleFoam | tail -4 || true
+grep -E "^Time =" log.$APP | tail -1
+grep -E "Courant Number" log.$APP | tail -1 || true
+grep -A3 -E "^yPlus" log.$APP | tail -4 || true
