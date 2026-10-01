@@ -88,5 +88,8 @@ def seat_source(g, n_people):
     fluid cells whose centre lies in SEAT_BOX (same cells as the OpenFOAM cellZone 'seats')."""
     from make_rans_case import seat_mask
     m = seat_mask(g)
+    if not m.any():
+        raise ValueError(f"no grid cell centre lies in SEAT_BOX {common.SEAT_BOX} on this grid (h = {g.h}) "
+                         f"-- use a finer grid or a taller seating box")
     vol = m.sum() * g.h[0] * g.h[1] * g.h[2]
     return np.where(m, n_people * common.PPM_M3S_PER_PERSON / vol, 0.0)

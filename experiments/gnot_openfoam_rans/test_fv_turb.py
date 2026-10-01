@@ -48,7 +48,8 @@ def main():
     check("1 constant D reproduces fv_torch", err < 1e-12, f"(max rel. difference {err:.1e})")
 
     # 2. conservation with variable D, closed room, no flow
-    gc = L2.Grid(0.5, [0.0] * 8)
+    gc = L2.Grid(0.25, [0.0] * 8)            # 0.25 m: one cell layer (z = 1.09 m) lies in the seating height 1.0-1.2 m
+    #                                          (at 0.5 m no cell centre falls into it -> empty source)
     nut = rng.uniform(0.0, 0.05, gc.X.shape) * gc.fluid
     z = np.zeros(gc.X.shape)
     S = seat_source(gc, 20.0)
