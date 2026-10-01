@@ -115,6 +115,20 @@ def main():
               f"({losses[0]:.3e} -> {losses[-1]:.3e})")
         check("3c checkpoint written", os.path.isfile(os.path.join(common.CKPT_DIR, "t", "sup_t_iter400.pth")))
         check("3d held-out times reported", "held-out time" in log)
+
+        # 4. the same with the data kept in CPU RAM (--data-on-cpu, as for the 40-case run) and a
+        #    held-out TEST case: the evaluation path must handle data and model on different devices
+        buf = io.StringIO()
+        sys.argv = ["train_supervised.py", "--data", data, "--test-data", data, "--tag", "t_cpu", "--iters", "200",
+                    "--batch", "512", "--eval-every", "200", "--device", dev, "--data-on-cpu"]
+        try:
+            with contextlib.redirect_stdout(buf):
+                ts.main()
+        finally:
+            sys.argv = argv
+        log = buf.getvalue()
+        check("4a --data-on-cpu: training + evaluation run end to end", "done" in log and "TEST case" in log)
+        check("4b checkpoint written before evaluation", os.path.isfile(os.path.join(common.CKPT_DIR, "t_cpu", "sup_t_cpu_iter200.pth")))
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
     print("\nRESULT:", "ALL PASSED" if not FAILED else f"FAILED: {FAILED}")

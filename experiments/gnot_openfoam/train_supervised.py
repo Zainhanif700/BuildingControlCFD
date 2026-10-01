@@ -66,7 +66,7 @@ def predict(model, ds, ti, dev, n_people=None, batch=16384):
             Q = P[i:i + batch]
             b = Q.shape[0]
             u, v, w, C = model(Q[:, 0:1], Q[:, 1:2], Q[:, 2:3], torch.full((b, 1), t, device=dev),
-                               ds["V_d"].view(1, -1).expand(b, -1), torch.full((b, 1), N, device=dev))
+                               ds["V_d"].to(dev).view(1, -1).expand(b, -1), torch.full((b, 1), N, device=dev))
             Us.append(torch.cat([u, v, w], 1))
             Cs.append(C.squeeze(1))
     return torch.cat(Us), torch.cat(Cs)
@@ -177,12 +177,13 @@ def main():
             print(f"[{it:6d}/{args.iters}] loss {loss.item():.4e} (u {L_u.item():.3e}, C {L_c.item():.3e}) "
                   f"lr {lr_at(it):.2e} | {(it + 1) / (time.time() - t0):.1f} it/s", flush=True)
         if it % args.eval_every == 0 and it > 0 or it == args.iters:
-            print(f"  eval at iter {it}:")
-            # all test cases; of the training cases only the first 3 (evaluation of 30+ full fields is slow)
-            report(model, [(d, "train") for d in train[:3]] + [(d, "TEST case") for d in test], dev, hold)
+            # checkpoint FIRST, so a failing evaluation can never lose the training
             torch.save({"iter": it, "model_state": model.state_dict(), "args": vars(args), "t_horizon": model.t_horizon,
                         "scales": (u2, c2), "train": args.data, "holdout_times": sorted(hold)},
                        os.path.join(out_dir, f"sup_{args.tag}_iter{it}.pth"))
+            print(f"  eval at iter {it}:")
+            # all test cases; of the training cases only the first 3 (evaluation of 30+ full fields is slow)
+            report(model, [(d, "train") for d in train[:3]] + [(d, "TEST case") for d in test], dev, hold)
     print("done")
 
 
