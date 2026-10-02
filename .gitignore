@@ -40,3 +40,4 @@ experiments/gnot_openfoam/cases/
 experiments/gnot_openfoam_rans/cases/
 experiments/gnot_openfoam_rans/data/
 experiments/gnot_openfoam_rans/logs/
+experiments/gnot_openfoam_rans/checkpoints/
