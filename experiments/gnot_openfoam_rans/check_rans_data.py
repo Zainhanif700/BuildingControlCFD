@@ -79,7 +79,11 @@ def main():
         P = np.stack([g.X[fl], g.Y[fl], g.Z[fl]], 1)
         print(f"OpenFOAM CO2 (s) in the pilot {case}:")
         for t in (300.0, 600.0, 900.0, 1200.0, 1500.0, 1800.0):
-            if t in td and os.path.exists(os.path.join(case, td[t], "s")):
+            fs = os.path.join(case, td[t], "s") if t in td else ""
+            if not (t in td and (os.path.exists(fs) or os.path.exists(fs + ".gz"))):
+                print(f"  {t:>6g} s: no saved s field")
+                continue
+            if True:
                 s = np.nan_to_num(to_grid(g, idx, read_internal(os.path.join(case, td[t], "s"), 1, len(Cc)).reshape(-1)))
                 stats(s[fl], P, common.SEAT_BOX, f"{t:g} s")
         return

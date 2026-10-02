@@ -32,9 +32,9 @@ def main():
             issues.append(f"time grid {C.shape[0]} frames to {t[-1]:g}")
         if not np.isfinite(C).all():
             issues.append("NaN/inf in C")
-        mx = float(C.max())
-        if C.min() < -0.02 * mx:
-            issues.append(f"negative C {C.min():.2f}")
+        negmass = float(-C[-1][C[-1] < 0].sum() / max(C[-1][C[-1] > 0].sum(), 1e-30))
+        if negmass > 0.005:      # small undershoots of the unlimited 2nd-order scheme are expected (<0.1 %)
+            issues.append(f"negative CO2 mass {100 * negmass:.2f} % (min {C.min():.2f})")
         m = C.mean(1)
         at = lambda s: m[int(round(s / 30))]
         if not (at(300) < at(600) < at(1200) <= at(1800) * 1.02):
