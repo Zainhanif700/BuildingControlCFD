@@ -75,10 +75,17 @@ def extract(case, name, out_dir=DATA_DIR, device="cuda"):
     rel = lambda c: float(np.linalg.norm(c[fl] - ref[fl]) / np.linalg.norm(ref[fl]))
     chk = {"err_real_vs_OF": rel(real[t_end]), "err_B2_vs_OF": rel(b2),
            "mass_real_vs_OF": float(real[t_end][fl].sum() / ref[fl].sum()), "mass_B2_vs_OF": float(b2[fl].sum() / ref[fl].sum())}
+    # the paper's metric: plane l2 of the ABSOLUTE ppm (400 + excess), at 1.1 m and at 1.6 m (paper plane)
+    for zz in (1.1, 1.6):
+        k_ = int(np.argmin(np.abs(g.c1d[2] - zz)))
+        m_ = fl[:, :, k_]
+        r_ = ref[:, :, k_][m_] + common.PPM_OUTDOOR
+        chk["abs_err_B2_z" + f"{zz:g}".replace(".", "p")] = float(np.linalg.norm(b2[:, :, k_][m_] + common.PPM_OUTDOOR - r_) / np.linalg.norm(r_))
     print(f"{name}: V = {V}; flow fluctuation around the mean {100 * fluct:.1f} %, mean speed {np.mean(speeds):.3f} m/s "
           f"(+-{100 * np.std(speeds) / np.mean(speeds):.1f} %); CO2: {n} steps, dt {dt:.4f} s, {time.time() - t0:.0f} s wall")
     print(f"  check at {t_end:g} s vs OpenFOAM CO2: real flow {100 * chk['err_real_vs_OF']:.1f} % (mass {chk['mass_real_vs_OF']:.3f}), "
-          f"B2 flow {100 * chk['err_B2_vs_OF']:.1f} % (mass {chk['mass_B2_vs_OF']:.3f})")
+          f"B2 flow {100 * chk['err_B2_vs_OF']:.1f} % (mass {chk['mass_B2_vs_OF']:.3f}); paper metric (absolute ppm, plane) "
+          f"B2 {100 * chk['abs_err_B2_z1p1']:.1f} % at 1.1 m, {100 * chk['abs_err_B2_z1p6']:.1f} % at 1.6 m")
 
     P = np.stack([g.X[fl], g.Y[fl], g.Z[fl]], 1).astype(np.float32)
     kz = int(np.argmin(np.abs(g.c1d[2] - BREATHING_Z)))

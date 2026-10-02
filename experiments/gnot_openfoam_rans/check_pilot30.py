@@ -77,6 +77,22 @@ def main():
             ep = np.linalg.norm(c[:, :, kz][pl] - ref[:, :, kz][pl]) / np.linalg.norm(ref[:, :, kz][pl])
             cells.append(f"{100 * ev:5.1f} {100 * ep:5.1f} {c[fl].sum() / ref[fl].sum():6.3f}")
         print(f"{t:5.0f} | " + " | ".join(f"{s:>22s}" for s in cells) + f" | {ref[fl].mean():7.1f}")
+
+    # 3. the paper's metric: l2 relative error of the ABSOLUTE concentration (400 ppm + excess, Bian & Shi
+    #    report ppm incl. the 400 ppm fresh air, Table 3 ~530-650 ppm) on a plane; 1.1 m (ours, inside the
+    #    seat source box 1.0-1.2 m) and 1.6 m (the paper's people plane, above the sources)
+    k16 = int(np.argmin(np.abs(g.c1d[2] - 1.6)))
+    print(f"\n3. paper metric: plane l2 of ABSOLUTE ppm (400 + excess) -- B2 / real-flow vs OpenFOAM [%]")
+    print(f"{'t':>5s} | {'z = %.2f m' % g.c1d[2][kz]:>20s} | {'z = %.2f m' % g.c1d[2][k16]:>20s} | plane mean excess OF 1.1 / 1.6 m [ppm]")
+    for t in t_chk:
+        ref = rd(t, "s", 1) * fl
+        row = []
+        for k_ in (kz, k16):
+            m_ = fl[:, :, k_]
+            r_ = ref[:, :, k_][m_] + common.PPM_OUTDOOR
+            e = lambda c: 100 * np.linalg.norm(c[:, :, k_][m_] + common.PPM_OUTDOOR - r_) / np.linalg.norm(r_)
+            row.append(f"{e(runs['B2'][t]):6.2f} / {e(runs['real'][t]):6.2f}")
+        print(f"{t:5.0f} | {row[0]:>20s} | {row[1]:>20s} | {ref[:, :, kz][pl].mean():6.1f} / {ref[:, :, k16][fl[:, :, k16]].mean():6.1f}")
     print("\nReading: 1. small difference -> the mean flow is the same in minutes 10-30."
           "\n         2. B2 error roughly constant after 10 min -> the 30-min data are as good as at 10 min;"
           "\n            growing -> B2 drifts away from the real run in minutes 10-30.")

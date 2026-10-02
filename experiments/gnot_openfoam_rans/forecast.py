@@ -33,14 +33,20 @@ N_MAX_FC = 80.0                    # occupancy normalisation (Bian & Shi sample 
 N_HIST_TOKENS = 900
 
 
-def load_plane(path):
-    """-> dict: xy (Np, 2), z, frames (F, Np) on the 30-s grid [native units], V (8,), N_ref."""
+def load_plane(path, z=None):
+    """-> dict: xy (Np, 2), z, frames (F, Np) on the 30-s grid [native units], V (8,), N_ref.
+    z: plane height [m]; None = the plane stored in the file (1.1 m RANS). The files hold C in the whole
+    room, so any cell-centre height can be chosen (e.g. 1.6 m = the paper's people plane)."""
     d = np.load(path)
     t = d["t_c"].astype(float)
     grid = np.arange(0.0, t[-1] + 1e-6, DT)
     idx = [int(np.argmin(np.abs(t - g))) for g in grid]
     assert all(abs(t[i] - g) < 1e-3 for i, g in zip(idx, grid)), f"{path}: CO2 not saved every {DT:g} s"
-    pl = d["plane"].astype(bool)
+    if z is None:
+        pl = d["plane"].astype(bool)
+    else:
+        zs = np.unique(d["P"][:, 2])
+        pl = np.abs(d["P"][:, 2] - zs[np.argmin(np.abs(zs - z))]) < 1e-5
     P = d["P"][pl]
     return {"xy": P[:, :2].astype(np.float32), "z": float(P[0, 2]), "frames": d["C"][idx][:, pl].astype(np.float32),
             "V": d["V"].astype(np.float32), "N_ref": float(d["N_ref"]), "name": str(path).split("/")[-1]}
@@ -109,8 +115,8 @@ def l2_rel(pred, target):
 class PlaneData:
     """All cases of a split on the device; samples (case, t0, N) with history t0-11..t0 and future
     t0+1..t0+6. N is drawn from [n_lo, n_hi] and the frames scaled by N / N_ref (exact linearity)."""
-    def __init__(self, paths, device, seed=0):
-        self.cases = [load_plane(p) for p in paths]
+    def __init__(self, paths, device, seed=0, z=None):
+        self.cases = [load_plane(p, z) for p in paths]
         xy0 = self.cases[0]["xy"]
         for c in self.cases:
             assert c["xy"].shape == xy0.shape and np.allclose(c["xy"], xy0), "all cases must share the grid"
@@ -159,9 +165,11 @@ def predict_full(model, data, k, t0, N, chunk=4096):
     return torch.cat(out), fut, hist
 
 
-def evaluate(models, data, N=None, every=1):
+def evaluate(models, data, N=None, every=1, offset=0.0):
     """Mean l2 (eq. 12) over all (case, t0) samples of `data` for the ensemble mean of `models`, plus the
-    persistence baseline (future = last observed frame). N: fixed occupancy (default each case's N_ref)."""
+    persistence baseline (future = last observed frame). N: fixed occupancy (default each case's N_ref).
+    offset: added to prediction and truth before the error -- 400 for RANS data gives the paper's metric
+    (absolute ppm incl. the fresh-air 400 ppm); 0 = error of the excess CO2 (stricter)."""
     errs, base = [], []
     for k in range(len(data.cases)):
         n = data.N_ref[k] if N is None else N
@@ -171,6 +179,6 @@ def evaluate(models, data, N=None, every=1):
             fut, hist = preds[0][1], preds[0][2]
             if torch.linalg.norm(fut) == 0:
                 continue
-            errs.append(l2_rel(mean, fut))
-            base.append(l2_rel(hist[:, -1:].expand_as(fut), fut))
+            errs.append(l2_rel(mean + offset, fut + offset))
+            base.append(l2_rel(hist[:, -1:].expand_as(fut) + offset, fut + offset))
     return float(np.mean(errs)), float(np.mean(base)), len(errs)

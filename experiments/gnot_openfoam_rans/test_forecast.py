@@ -49,7 +49,9 @@ def main():
     C_r, t_r = synth(os.path.join(tmp, "R.npz"), [0.5] * 8)
     a, b = F.load_plane(os.path.join(tmp, "L.npz")), F.load_plane(os.path.join(tmp, "R.npz"))
     e1 = np.abs(a["frames"] - b["frames"]).max()
-    good = a["frames"].shape == (61, b["xy"].shape[0]) and e1 == 0 and abs(a["z"] - 1.15) < 1e-6
+    c2 = F.load_plane(os.path.join(tmp, "R.npz"), z=1.9)          # nearest stored height: 2.05 m, 200 points
+    good = (a["frames"].shape == (61, b["xy"].shape[0]) and e1 == 0 and abs(a["z"] - 1.15) < 1e-6
+            and c2["frames"].shape == (61, 200) and abs(c2["z"] - 2.05) < 1e-6)
     print(f"1 frames: laminar {a['frames'].shape} RANS {b['frames'].shape}, max diff {e1:g}  -> {'OK' if good else 'FAIL'}")
     ok &= good
 
@@ -96,9 +98,10 @@ def main():
         hist.append(float(loss))
     m.eval()
     e, base, n = F.evaluate([m], d4, every=8)
-    good = np.mean(hist[-30:]) < np.mean(hist[:30]) - 0.5 and np.isfinite(e)
+    eo, _, _ = F.evaluate([m], d4, every=8, offset=400.0)
+    good = np.mean(hist[-30:]) < np.mean(hist[:30]) - 0.5 and np.isfinite(e) and 0 < eo < e
     print(f"4 training: NLL {np.mean(hist[:30]):+.3f} -> {np.mean(hist[-30:]):+.3f}; l2 {100 * e:.2f}% "
-          f"(persistence {100 * base:.2f}%, {n} samples)  -> {'OK' if good else 'FAIL'}")
+          f"(persistence {100 * base:.2f}%, {n} samples); with +400 offset {100 * eo:.2f}%  ->{'OK' if good else 'FAIL'}")
     ok &= good
 
     # 5. end to end

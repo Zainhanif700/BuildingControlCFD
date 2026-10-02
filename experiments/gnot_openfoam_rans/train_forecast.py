@@ -96,7 +96,10 @@ def main():
     ap.add_argument("--layers", type=int, default=3)
     ap.add_argument("--log-every", type=int, default=500)
     ap.add_argument("--eval-every", type=int, default=5000)
-    ap.add_argument("--device", default="cuda" if torch.cuda.is_available() else "cpu")
+    ap.add_argument("--z", type=float, default=None, help="plane height [m]; default the file's plane (1.6 = paper)")
+    ap.add_argument("--c-offset",type=float, default=0.0,
+                    help="RANS data: 400 -> also report the paper's metric (absolute ppm); laminar data: 0")
+    ap.add_argument("--device",default="cuda" if torch.cuda.is_available() else "cpu")
     args = ap.parse_args()
     args.out = os.path.join(HERE, "checkpoints", args.tag)
     os.makedirs(args.out, exist_ok=True)
@@ -104,8 +107,8 @@ def main():
         raise SystemExit(f"{args.out} already has checkpoints -- use a new --tag")
     dev = torch.device(args.device)
     trp, tep = split(args.data_dir, args.scenarios, args.with_s00)
-    tr = PlaneData(trp, dev, seed=0)
-    te = PlaneData(tep, dev, seed=0)
+    tr = PlaneData(trp, dev, seed=0, z=args.z)
+    te = PlaneData(tep, dev, seed=0, z=args.z)
     assert torch.equal(tr.hist_idx, te.hist_idx)
     c_scale = c_scale_of(tr)
     print(f"data {args.data_dir}: {len(trp)} train / {len(tep)} test cases, {tr.xyz.shape[0]} plane points "
@@ -118,6 +121,10 @@ def main():
         e1, b, n = evaluate(models[:1], d)
         eE, _, _ = evaluate(models, d)
         print(f"  {name:5s}: member 0 {100 * e1:.2f}%  ensemble({len(models)}) {100 * eE:.2f}%  persistence {100 * b:.2f}%  [{n} samples]")
+    if args.c_offset:
+        for name, d in (("train", tr), ("test", te)):
+            eE, b, _ = evaluate(models, d, offset=args.c_offset)
+            print(f"  {name:5s} PAPER METRIC (absolute = {args.c_offset:g} + excess): ensemble {100 * eE:.2f}%  persistence {100 * b:.2f}%")
     for N in (10.0, 80.0):
         eE, b, _ = evaluate(models, te, N=N)
         print(f"  test at N = {N:g}: ensemble {100 * eE:.2f}%  persistence {100 * b:.2f}%")
