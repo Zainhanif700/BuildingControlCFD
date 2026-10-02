@@ -86,14 +86,14 @@ def main():
         synth(p, [v] * 8)
         paths.append(p)
     d4 = F.PlaneData(paths, torch.device("cpu"))
-    m = F.ForecastGNOT(d=64, layers=2, c_scale=500.0)
+    m = F.ForecastGNOT(d=64, layers=2, c_scale=500.0, d_scale=100.0)
     opt = torch.optim.AdamW(m.parameters(), lr=1e-3)
     gen = torch.Generator().manual_seed(1)
     hist = []
     for it in range(300):
         qx, qh, hx, hh, V, N, tg = d4.batch(4, 256, gen)
         mean, lv = m(qx, qh, hx, hh, V, N)
-        loss = F.nll(mean, lv, tg, 500.0)
+        loss = F.nll(mean, lv, tg, m.d_scale)
         opt.zero_grad(); loss.backward(); opt.step()
         hist.append(float(loss))
     m.eval()

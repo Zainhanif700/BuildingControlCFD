@@ -44,19 +44,29 @@ def c_scale_of(data, n_typ=45.0):
     return float(np.sqrt(np.mean(sq)))
 
 
-def train_member(k, tr, te, args, dev, c_scale):
+def d_scale_of(data, n_typ=45.0):
+    """RMS of the 3-min change (future frames - last history frame) over all training samples, typical N."""
+    sq = []
+    for f, n, t0s in zip(data.frames, data.N_ref, data.t0s):
+        f = f * (n_typ / n)
+        for t0 in t0s:
+            sq.append(float((f[t0 + 1:t0 + 7] - f[t0:t0 + 1]).pow(2).mean()))
+    return float(np.sqrt(np.mean(sq)))
+
+
+def train_member(k, tr, te, args, dev, c_scale, d_scale):
     torch.manual_seed(1000 + k)
     gen = torch.Generator().manual_seed(2000 + k)
-    model = ForecastGNOT(d=args.d, layers=args.layers, c_scale=c_scale).to(dev)
+    model = ForecastGNOT(d=args.d, layers=args.layers, c_scale=c_scale, d_scale=d_scale).to(dev)
     opt = torch.optim.AdamW(model.parameters(), lr=args.lr, weight_decay=1e-4)
     sched = torch.optim.lr_scheduler.OneCycleLR(opt, max_lr=args.lr, total_steps=args.iters, pct_start=0.05)
     n_par = sum(p.numel() for p in model.parameters())
-    print(f"member {k}: {n_par / 1e3:.0f}k parameters, c_scale {c_scale:.4g}", flush=True)
+    print(f"member {k}: {n_par / 1e3:.0f}k parameters, c_scale {c_scale:.4g}, d_scale {d_scale:.4g}", flush=True)
     t0, run = time.time(), []
     for it in range(1, args.iters + 1):
         qx, qh, hx, hh, V, N, tg = tr.batch(args.batch, args.queries, gen)
         mean, logvar = model(qx, qh, hx, hh, V, N)
-        loss = nll(mean, logvar, tg, c_scale)
+        loss = nll(mean, logvar, tg, d_scale)
         opt.zero_grad(set_to_none=True)
         loss.backward()
         torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
@@ -74,7 +84,7 @@ def train_member(k, tr, te, args, dev, c_scale):
                 msg += f"  | l2 train {100 * e_tr:.2f}%  test {100 * e_te:.2f}%  (persistence {100 * b_te:.2f}%)"
             print(msg, flush=True)
     path = os.path.join(args.out, f"member{k}.pth")
-    torch.save({"state": model.state_dict(), "c_scale": c_scale, "d": args.d, "layers": args.layers,
+    torch.save({"state": model.state_dict(), "c_scale": c_scale, "d_scale": d_scale, "d": args.d, "layers": args.layers,
                 "data_dir": args.data_dir, "hist_idx": tr.hist_idx.cpu()}, path)
     print(f"  saved {path}", flush=True)
     model.eval()
@@ -110,17 +120,18 @@ def main():
     tr = PlaneData(trp, dev, seed=0, z=args.z)
     te = PlaneData(tep, dev, seed=0, z=args.z)
     assert torch.equal(tr.hist_idx, te.hist_idx)
-    c_scale = c_scale_of(tr)
+    c_scale, d_scale = c_scale_of(tr), d_scale_of(tr)
     print(f"data {args.data_dir}: {len(trp)} train / {len(tep)} test cases, {tr.xyz.shape[0]} plane points "
           f"(z = {float(tr.xyz[0, 2]):.2f} m), {sum(map(len, tr.t0s))} train samples per occupancy; device {dev}", flush=True)
 
-    models = [train_member(k, tr, te, args, dev, c_scale) for k in range(args.members)]
+    models = [train_member(k, tr, te, args, dev, c_scale, d_scale) for k in range(args.members)]
 
     print("\nFINAL (every sample, occupancy = N_ref of the data)")
     for name, d in (("train", tr), ("test", te)):
         e1, b, n = evaluate(models[:1], d)
         eE, _, _ = evaluate(models, d)
-        print(f"  {name:5s}: member 0 {100 * e1:.2f}%  ensemble({len(models)}) {100 * eE:.2f}%  persistence {100 * b:.2f}%  [{n} samples]")
+        print(f"  {name:5s}: member 0 {100 * e1:.2f}%  ensemble({len(models)}) {100 * eE:.2f}%  persistence {100 * b:.2f}%  [{n} samples]"
+              f"  -> model error = {eE / b:.2f} x persistence (must be < 1 to be useful)")
     if args.c_offset:
         for name, d in (("train", tr), ("test", te)):
             eE, b, _ = evaluate(models, d, offset=args.c_offset)

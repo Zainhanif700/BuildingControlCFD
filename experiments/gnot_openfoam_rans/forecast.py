@@ -53,9 +53,13 @@ def load_plane(path, z=None):
 
 
 class ForecastGNOT(nn.Module):
-    def __init__(self, d=128, heads=4, layers=3, c_scale=1.0):
+    def __init__(self, d=128, heads=4, layers=3, c_scale=1.0, d_scale=None):
         super().__init__()
-        self.c_scale = float(c_scale)     # typical CO2 value (training data) -> inputs O(1)
+        self.c_scale = float(c_scale)     # typical CO2 LEVEL (training data)
+        # typical 3-min CHANGE of CO2 (training data). The changes are much smaller than the level (laminar:
+        # 'CO2 stays as it is' is already 0.5 % off), so increments and history differences are scaled by
+        # THIS value -- otherwise the network has to resolve a change of ~1 % of its output scale.
+        self.d_scale = float(d_scale if d_scale is not None else c_scale)
         self.ff = FourierFeatures(room_length=ROOM_X[1] - ROOM_X[0], sigma=2.5, n_octaves=7)
         nf = 2 * self.ff.n_freq
         self.q_in = nn.Sequential(nn.Linear(nf + H_IN, d), nn.GELU(), nn.Linear(d, d))
@@ -74,17 +78,19 @@ class ForecastGNOT(nn.Module):
         self.register_buffer("tok_pos", (pos - lo) / ext)            # (11, 3)
 
     def _point_feats(self, xyz, hist):
-        """xyz (B, M, 3) physical, hist (B, M, H) scaled -> (B, M, nf + H)"""
+        """xyz (B, M, 3) physical, hist (B, M, H) native -> (B, M, nf + H): Fourier features, the last level
+        / c_scale, and the H-1 differences to the last frame / d_scale (the recent trend)"""
         B, M, _ = xyz.shape
         f = self.ff(xyz.reshape(-1, 3)).reshape(B, M, -1)
-        return torch.cat([f, hist], -1)
+        last = hist[..., -1:]
+        return torch.cat([f, last / self.c_scale, (hist[..., :-1] - last) / self.d_scale], -1)
 
     def forward(self, q_xyz, q_hist, h_xyz, h_hist, V, N):
         """q_xyz (B,Q,3), q_hist (B,Q,H) [native units], h_xyz (B,K,3), h_hist (B,K,H), V (B,8), N (B,1).
-        Returns mean (B,Q,T) [native units] and log-variance (B,Q,T) [scaled units]."""
-        s = self.c_scale
-        q = self.q_in(self._point_feats(q_xyz, q_hist / s))
-        hk = self.h_in(self._point_feats(h_xyz, h_hist / s)) + self.type_emb.weight[3]
+        Returns mean (B,Q,T) [native units] and log-variance (B,Q,T) [units of d_scale]."""
+        s = self.d_scale
+        q = self.q_in(self._point_feats(q_xyz, q_hist))
+        hk = self.h_in(self._point_feats(h_xyz, h_hist)) + self.type_emb.weight[3]
         B = V.shape[0]
         val = torch.cat([V / V_MAX, torch.zeros(B, 2, device=V.device), N / N_MAX_FC], 1).unsqueeze(-1)   # (B, 11, 1)
         ck = self.c_in(torch.cat([self.tok_pos.unsqueeze(0).expand(B, -1, -1), val], -1))
@@ -101,9 +107,9 @@ class ForecastGNOT(nn.Module):
         return mean, logvar
 
 
-def nll(mean, logvar, target, c_scale):
-    """Gaussian NLL (Bian & Shi eq. 8) on scaled values."""
-    r = (target - mean) / c_scale
+def nll(mean, logvar, target, scale):
+    """Gaussian NLL (Bian & Shi eq. 8) on scaled values (scale = the model's d_scale)."""
+    r = (target - mean) / scale
     return 0.5 * (logvar + math.log(2 * math.pi) + r ** 2 * torch.exp(-logvar)).mean()
 
 
