@@ -40,11 +40,12 @@ def main():
     for t in times:
         u = rd(t, "U", 3) * fl[..., None]
         snaps[t] = [u[..., 0], u[..., 1], u[..., 2], rd(t, "nut", 1) * fl]
-    mean = [np.mean([snaps[t][k] for t in times if t >= T_AVG], axis=0) for k in range(4)]
+    mean = [np.mean([snaps[t][k] for t in times if T_AVG <= t <= 600.0], axis=0) for k in range(4)]   # as the dataset: 150-600 s
     T = [0.0] + [t for t in times if t <= T_AVG]
     S = [snaps[t] for t in T] + [mean]
     T = T + [T[-1] + 10.0]
-    t_chk = [t for t in (300.0, 600.0) if t in td]
+    has_s = lambda t: any(os.path.exists(os.path.join(case, td[t], f)) for f in ("s", "s.gz"))
+    t_chk = [t for t in (300.0, 600.0, 900.0, 1200.0, 1500.0, 1800.0) if t in td and has_s(t)]
     refs = {t: rd(t, "s", 1) * fl for t in t_chk}
     src = seat_source(g, N_REF)
     k11 = int(np.argmin(np.abs(g.c1d[2] - 1.1)))
