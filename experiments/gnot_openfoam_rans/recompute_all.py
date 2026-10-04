@@ -3,7 +3,7 @@ Recompute the CO2 of all extracted files with the chosen solver and Sc_t (from t
 OpenFOAM). Files already done with these settings are skipped, so it can be re-run any time (e.g. again
 when the dataset has produced more files). One file at a time, ~30 min each on the GPU.
 Usage (training env, from experiments/gnot_openfoam_rans):
-  python3 recompute_all.py --solver cons --sct 0.3
+  python3 recompute_all.py            (defaults: common.DATA_CO2_SOLVER, common.SC_T_DATA)
 """
 import argparse
 import glob
@@ -11,13 +11,15 @@ import os
 
 import numpy as np
 
+import common
+
 HERE = os.path.dirname(os.path.abspath(__file__))
 
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--solver", default="cons", choices=["old", "cons"])
-    ap.add_argument("--sct", type=float, required=True)
+    ap.add_argument("--solver", default=common.DATA_CO2_SOLVER, choices=["old", "cons"])
+    ap.add_argument("--sct", type=float, default=common.SC_T_DATA)
     ap.add_argument("--pattern", default="S*.npz")
     ap.add_argument("--device", default="cuda")
     args = ap.parse_args()
@@ -25,7 +27,12 @@ def main():
     files = sorted(glob.glob(os.path.join(HERE, "data", args.pattern)))
     todo = []
     for f in files:
-        d = np.load(f)
+        try:
+            d = np.load(f)
+            d.files
+        except Exception as e:      # e.g. a file still being written by a running extraction
+            print(f"  {os.path.basename(f)}: not readable now ({e.__class__.__name__}) -- skipped, run again later")
+            continue
         done = ("co2_solver" in d.files and str(d["co2_solver"]) == args.solver
                 and "sc_t" in d.files and abs(float(d["sc_t"]) - args.sct) < 1e-6)
         if not done:

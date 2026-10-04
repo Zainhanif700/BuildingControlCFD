@@ -61,7 +61,10 @@ def main():
         src = os.path.abspath(args.recompute_test)
         tmp = os.path.join(tempfile.mkdtemp(), os.path.basename(src))
         shutil.copy(src, tmp)
-        recompute(tmp, args.device)
+        d0 = np.load(src)
+        solver = str(d0["co2_solver"]) if "co2_solver" in d0.files else "old"     # settings the file was made with
+        sct = float(d0["sc_t"]) if "sc_t" in d0.files else common.SC_T
+        recompute(tmp, args.device, solver, sct)
         a, b = np.load(src)["C"], np.load(tmp)["C"]
         rel = float(np.abs(a - b).max() / np.abs(a).max())
         print(f"recompute test {src}: max |C_new - C_stored| / max C = {rel:.2e}  -> "

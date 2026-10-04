@@ -28,8 +28,8 @@ T_CO2 = 1800.0
 DT_OUT = 30.0
 
 
-def co2_b2(g, src, t_snap, snaps, mean, device, solver="old", sct=common.SC_T, V=None):
-    """solver 'old' = fv_turb (advective form, as extracted); 'cons' = fv_cons (mass-conserving, needs V)"""
+def co2_b2(g, src, t_snap, snaps, mean, device, solver=common.DATA_CO2_SOLVER, sct=common.SC_T_DATA, V=None):
+    """solver 'cons' = fv_cons (mass-conserving, needs V; dataset default); 'old' = fv_turb (advective form)"""
     import torch
     T = list(t_snap) + [t_snap[-1] + 10.0]
     S = list(snaps) + [mean]
@@ -71,13 +71,17 @@ def extract(case, name, out_dir=DATA_DIR, device="cuda"):
     src = seat_source(g, N_REF)
 
     t0 = time.time()
-    out_t, C, dt, n = co2_b2(g, src, t_snap, [snaps[t] for t in t_snap], mean, device)
-    # per-case check at the last OpenFOAM time against OpenFOAM's own CO2 on the real flow
-    real, _, _ = TurbFV(g, src, device, torch.float32).solve([0.0] + times, [snaps[t] for t in [0.0] + times], [t_end])
+    out_t, C, dt, n = co2_b2(g, src, t_snap, [snaps[t] for t in t_snap], mean, device, V=V)
+    # per-case check at the last OpenFOAM time against OpenFOAM's own CO2:
+    #  'real' = our solver on all real snapshots with OpenFOAM's own Sc_t (solver check); 'B2' = the dataset CO2
+    if common.DATA_CO2_SOLVER == "cons":
+        from fv_cons import ConsFV
+        real, _, _ = ConsFV(g, src, V, device, torch.float32).solve([0.0] + times, [snaps[t] for t in [0.0] + times], [t_end])
+    else:
+        real, _, _ = TurbFV(g, src, device, torch.float32).solve([0.0] + times, [snaps[t] for t in [0.0] + times], [t_end])
     ref = np.nan_to_num(to_grid(g, idx, read_internal(os.path.join(case, td[t_end], "s"), 1, len(Cc)).reshape(-1))) * fl
-    b2 = C[t_end] if t_end in C else None
-    if b2 is None:   # t_end not on the 30-s grid: integrate the B2 flow to t_end once more
-        b2 = TurbFV(g, src, device, torch.float32).solve(t_snap + [T_AVG + 10.0], [snaps[t] for t in t_snap] + [mean], [t_end])[0][t_end]
+    assert t_end in C, f"last OpenFOAM time {t_end:g} s is not on the {DT_OUT:g}-s output grid"
+    b2 = C[t_end]
     rel = lambda c: float(np.linalg.norm(c[fl] - ref[fl]) / np.linalg.norm(ref[fl]))
     chk = {"err_real_vs_OF": rel(real[t_end]), "err_B2_vs_OF": rel(b2),
            "mass_real_vs_OF": float(real[t_end][fl].sum() / ref[fl].sum()), "mass_B2_vs_OF": float(b2[fl].sum() / ref[fl].sum())}
@@ -97,8 +101,10 @@ def extract(case, name, out_dir=DATA_DIR, device="cuda"):
     kz = int(np.argmin(np.abs(g.c1d[2] - BREATHING_Z)))
     os.makedirs(out_dir, exist_ok=True)
     out = os.path.join(out_dir, name + ".npz")
-    np.savez_compressed(
-        out, P=P, plane=np.abs(P[:, 2] - g.c1d[2][kz]) < 1e-5, z_plane=np.float32(g.c1d[2][kz]),
+    tmp = out + ".tmp"                      # atomic: other scripts never see a half-written file
+    with open(tmp, "wb") as fh:
+      np.savez_compressed(
+        fh, P=P, plane=np.abs(P[:, 2] - g.c1d[2][kz]) < 1e-5, z_plane=np.float32(g.c1d[2][kz]),
         V=np.array(V, np.float32), N_ref=np.float32(N_REF), dx=np.float32(float(meta["dx"])),
         t_c=np.array([0.0] + out_t, np.float32),
         C=np.stack([np.zeros(int(fl.sum()), np.float32)] + [C[t][fl].astype(np.float32) for t in out_t]),
@@ -108,13 +114,15 @@ def extract(case, name, out_dir=DATA_DIR, device="cuda"):
         U_mean=um.astype(np.float32), nut_mean=mean[3][fl].astype(np.float32),
         t_avg=np.float32(T_AVG), t_end_of=np.float32(t_end), fluctuation=np.float32(fluct),
         seat_box=np.array(SEAT_BOX, np.float32), seat_box_placeholder=common.SEAT_BOX_IS_PLACEHOLDER,
+        co2_solver=np.array(common.DATA_CO2_SOLVER), sc_t=np.float32(common.SC_T_DATA),
         **{k: np.float32(v) for k, v in chk.items()})
+    os.replace(tmp, out)
     print(f"  saved {out} ({os.path.getsize(out) / 1e6:.0f} MB): C every {DT_OUT:g} s to {T_CO2:g} s (ppm excess over "
           f"{common.PPM_OUTDOOR:g} ppm, {N_REF:g} people)" + ("  [SEAT_BOX placeholder]" if common.SEAT_BOX_IS_PLACEHOLDER else ""))
     return out
 
 
-def recompute(npz, device="cuda", solver="old", sct=common.SC_T):
+def recompute(npz, device="cuda", solver=common.DATA_CO2_SOLVER, sct=common.SC_T_DATA):
     """New CO2 from the stored flow (other SEAT_BOX, solver or Sc_t); overwrites C and records the settings.
     Atomic: written to a temporary file first, then renamed (a crash never leaves a broken file)."""
     import check_co2_with_model_flow as L2
@@ -146,8 +154,8 @@ def main():
     ap.add_argument("--case", default=None)
     ap.add_argument("--name", default=None)
     ap.add_argument("--recompute", default=None, help="npz: recompute the CO2 from the stored flow")
-    ap.add_argument("--solver", default="old", choices=["old", "cons"], help="(recompute) CO2 solver")
-    ap.add_argument("--sct", type=float, default=common.SC_T, help="(recompute) turbulent Schmidt number")
+    ap.add_argument("--solver", default=common.DATA_CO2_SOLVER, choices=["old", "cons"], help="(recompute) CO2 solver")
+    ap.add_argument("--sct", type=float, default=common.SC_T_DATA, help="(recompute) turbulent Schmidt number")
     ap.add_argument("--device", default="cuda")
     args = ap.parse_args()
     if args.recompute:

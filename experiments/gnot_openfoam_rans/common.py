@@ -21,7 +21,12 @@ DATA_DIR = os.path.join(HERE, "data")
 # --- air and CO2 (physical values; Track 1 / laminar Track 2 used effective nu = 0.01, D = 0.005) ---
 NU_AIR = 1.5e-5            # m^2/s, kinematic viscosity of air at ~20 C
 D_CO2 = 1.6e-5             # m^2/s, molecular diffusivity of CO2 in air
-SC_T = 0.7                 # turbulent Schmidt number (common default, also ANSYS Fluent's)
+SC_T = 0.7                 # turbulent Schmidt number (common default, also ANSYS Fluent's); used INSIDE OpenFOAM
+# Dataset CO2 (B2: averaged flow): mass-conserving solver fv_cons with Sc_t = 0.3. The averaged flow lacks the
+# flow fluctuations; the extra turbulent mixing replaces their effect. Chosen on 3 kept OpenFOAM cases (V02, V04,
+# V08): paper metric vs OpenFOAM's own CO2 6-9 % -> 2-4 % (V04 checked to 30 min: 8.6 % -> 3.1 %).
+DATA_CO2_SOLVER = "cons"
+SC_T_DATA = 0.3
 
 # --- turbulence at the open windows (assumption; no measured value) ---
 TURB_INTENSITY = 0.05      # 5 % of the window speed
