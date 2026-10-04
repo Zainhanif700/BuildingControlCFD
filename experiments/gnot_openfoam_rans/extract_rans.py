@@ -28,13 +28,19 @@ T_CO2 = 1800.0
 DT_OUT = 30.0
 
 
-def co2_b2(g, src, t_snap, snaps, mean, device):
+def co2_b2(g, src, t_snap, snaps, mean, device, solver="old", sct=common.SC_T, V=None):
+    """solver 'old' = fv_turb (advective form, as extracted); 'cons' = fv_cons (mass-conserving, needs V)"""
     import torch
-    from fv_turb import TurbFV
     T = list(t_snap) + [t_snap[-1] + 10.0]
     S = list(snaps) + [mean]
     out_t = [float(t) for t in np.arange(DT_OUT, T_CO2 + 1e-9, DT_OUT)]
-    out, dt, n = TurbFV(g, src, device, torch.float32).solve(T, S, out_t, log_every=50000)
+    if solver == "cons":
+        from fv_cons import ConsFV
+        fv = ConsFV(g, src, V, device, torch.float32, sc_t=sct)
+    else:
+        from fv_turb import TurbFV
+        fv = TurbFV(g, src, device, torch.float32, sc_t=sct)
+    out, dt, n = fv.solve(T, S, out_t, log_every=50000)
     return out_t, out, dt, n
 
 
@@ -108,22 +114,31 @@ def extract(case, name, out_dir=DATA_DIR, device="cuda"):
     return out
 
 
-def recompute(npz, device="cuda"):
-    """New CO2 (e.g. after changing SEAT_BOX in common.py) from the stored flow; overwrites C, seat_box."""
+def recompute(npz, device="cuda", solver="old", sct=common.SC_T):
+    """New CO2 from the stored flow (other SEAT_BOX, solver or Sc_t); overwrites C and records the settings.
+    Atomic: written to a temporary file first, then renamed (a crash never leaves a broken file)."""
     import check_co2_with_model_flow as L2
     from fv_turb import seat_source
     d = dict(np.load(npz))
-    g = L2.Grid(float(d["dx"]), [float(v) for v in d["V"]])
+    V = [float(v) for v in d["V"]]
+    g = L2.Grid(float(d["dx"]), V)
     fl = g.fluid
     grid = lambda a: (lambda o: (o.__setitem__(fl, a), o)[1])(np.zeros(g.X.shape))
     snaps = [[grid(U[:, 0]), grid(U[:, 1]), grid(U[:, 2]), grid(nu)] for U, nu in zip(d["U_snap"], d["nut_snap"])]
     mean = [grid(d["U_mean"][:, 0]), grid(d["U_mean"][:, 1]), grid(d["U_mean"][:, 2]), grid(d["nut_mean"])]
-    out_t, C, _, _ = co2_b2(g, seat_source(g, N_REF), [float(t) for t in d["t_snap"]], snaps, mean, device)
+    t0 = time.time()
+    out_t, C, _, _ = co2_b2(g, seat_source(g, N_REF), [float(t) for t in d["t_snap"]], snaps, mean, device,
+                            solver=solver, sct=sct, V=V)
     d["C"] = np.stack([np.zeros(int(fl.sum()), np.float32)] + [C[t][fl].astype(np.float32) for t in out_t])
     d["seat_box"] = np.array(SEAT_BOX, np.float32)
     d["seat_box_placeholder"] = common.SEAT_BOX_IS_PLACEHOLDER
-    np.savez_compressed(npz, **d)
-    print(f"recomputed CO2 in {npz} with SEAT_BOX {SEAT_BOX}")
+    d["co2_solver"] = np.array(solver)
+    d["sc_t"] = np.float32(sct)
+    tmp = npz + ".tmp"                      # not *.npz, so no checker ever picks it up
+    with open(tmp, "wb") as f:
+        np.savez_compressed(f, **d)
+    os.replace(tmp, npz)
+    print(f"recomputed CO2 in {npz}: solver {solver}, Sc_t {sct:g}, SEAT_BOX {SEAT_BOX} ({time.time() - t0:.0f} s)", flush=True)
 
 
 def main():
@@ -131,10 +146,12 @@ def main():
     ap.add_argument("--case", default=None)
     ap.add_argument("--name", default=None)
     ap.add_argument("--recompute", default=None, help="npz: recompute the CO2 from the stored flow")
+    ap.add_argument("--solver", default="old", choices=["old", "cons"], help="(recompute) CO2 solver")
+    ap.add_argument("--sct", type=float, default=common.SC_T, help="(recompute) turbulent Schmidt number")
     ap.add_argument("--device", default="cuda")
     args = ap.parse_args()
     if args.recompute:
-        recompute(args.recompute, args.device)
+        recompute(args.recompute, args.device, args.solver, args.sct)
     else:
         if not (args.case and args.name):
             raise SystemExit("give --case and --name (or --recompute <npz>)")
