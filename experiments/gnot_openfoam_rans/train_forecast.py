@@ -39,16 +39,23 @@ def split(data_dir, scen, with_s00):
 
 
 def c_scale_of(data, n_typ=45.0):
-    """RMS CO2 of the training frames at a typical occupancy (middle of 10-80)."""
-    sq = [float((f * (n_typ / n)).pow(2).mean()) for f, n in zip(data.frames, data.N_ref)]
+    """RMS CO2 of the training frames at a typical occupancy (middle of 10-80; transitions: N_A = N_B = 45)."""
+    sq = []
+    for k in range(len(data.cases)):
+        f = data.frames[k] * (n_typ / data.N_ref[k])
+        if data.H is not None:
+            f = f + data.H[k] * (n_typ / data.N_ref[k])
+        sq.append(float(f.pow(2).mean()))
     return float(np.sqrt(np.mean(sq)))
 
 
 def d_scale_of(data, n_typ=45.0):
     """RMS of the 3-min change (future frames - last history frame) over all training samples, typical N."""
     sq = []
-    for f, n, t0s in zip(data.frames, data.N_ref, data.t0s):
+    for k, (f, n, t0s) in enumerate(zip(data.frames, data.N_ref, data.t0s)):
         f = f * (n_typ / n)
+        if data.H is not None:
+            f = f + data.H[k] * (n_typ / n)
         for t0 in t0s:
             sq.append(float((f[t0 + 1:t0 + 7] - f[t0:t0 + 1]).pow(2).mean()))
     return float(np.sqrt(np.mean(sq)))
@@ -106,6 +113,8 @@ def main():
     ap.add_argument("--layers", type=int, default=3)
     ap.add_argument("--log-every", type=int, default=500)
     ap.add_argument("--eval-every", type=int, default=5000)
+    ap.add_argument("--transitions", action="store_true",
+                    help="--data-dir holds transition files (make_transitions.py): paper-like runs that start from another case's CO2")
     ap.add_argument("--z", type=float, default=None, help="plane height [m]; default the file's plane (1.6 = paper)")
     ap.add_argument("--c-offset",type=float, default=0.0,
                     help="RANS data: 400 -> also report the paper's metric (absolute ppm); laminar data: 0")
@@ -117,8 +126,8 @@ def main():
         raise SystemExit(f"{args.out} already has checkpoints -- use a new --tag")
     dev = torch.device(args.device)
     trp, tep = split(args.data_dir, args.scenarios, args.with_s00)
-    tr = PlaneData(trp, dev, seed=0, z=args.z)
-    te = PlaneData(tep, dev, seed=0, z=args.z)
+    tr = PlaneData(trp, dev, seed=0, z=args.z, transitions=args.transitions)
+    te = PlaneData(tep, dev, seed=0, z=args.z, transitions=args.transitions)
     assert torch.equal(tr.hist_idx, te.hist_idx)
     c_scale, d_scale = c_scale_of(tr), d_scale_of(tr)
     print(f"data {args.data_dir}: {len(trp)} train / {len(tep)} test cases, {tr.xyz.shape[0]} plane points "
@@ -144,6 +153,7 @@ def main():
         sub = PlaneData.__new__(PlaneData)
         sub.__dict__.update(te.__dict__)
         sub.cases, sub.frames, sub.V, sub.N_ref, sub.t0s = [c], [te.frames[k]], [te.V[k]], [te.N_ref[k]], [te.t0s[k]]
+        sub.H = [te.H[k]] if te.H is not None else None
         eE, b, _ = evaluate(models, sub)
         print(f"    {c['name']:10s} {100 * eE:6.2f}%  {100 * b:6.2f}%")
     print("Paper (Bian & Shi 2025): l2 train 5.9 %, test 10.9 %.")

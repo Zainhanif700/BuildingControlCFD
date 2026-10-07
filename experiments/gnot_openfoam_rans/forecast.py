@@ -52,6 +52,19 @@ def load_plane(path, z=None):
             "V": d["V"].astype(np.float32), "N_ref": float(d["N_ref"]), "name": str(path).split("/")[-1]}
 
 
+def load_transition(path, z=1.6):
+    """transition file (make_transitions.py) -> as load_plane, plus H: frames (F, Np) of the flushed initial CO2
+    of another case (N_ref people); the full CO2 is (N_A/N_ref) H + (N_B/N_ref) frames."""
+    d = np.load(path)
+    zs = np.unique(d["P"][:, 2])
+    pl = np.abs(d["P"][:, 2] - zs[np.argmin(np.abs(zs - (1.6 if z is None else z)))]) < 1e-5
+    P = d["P"][pl]
+    assert np.allclose(d["t_c"], np.arange(0.0, d["t_c"][-1] + 1e-6, DT)), f"{path}: not every {DT:g} s"
+    return {"xy": P[:, :2].astype(np.float32), "z": float(P[0, 2]), "frames": d["S"][:, pl].astype(np.float32),
+            "H": d["H"][:, pl].astype(np.float32), "V": d["V"].astype(np.float32), "N_ref": float(d["N_ref"]),
+            "name": str(path).split("/")[-1], "from": str(d["from_case"])}
+
+
 class ForecastGNOT(nn.Module):
     def __init__(self, d=128, heads=4, layers=3, c_scale=1.0, d_scale=None):
         super().__init__()
@@ -121,8 +134,8 @@ def l2_rel(pred, target):
 class PlaneData:
     """All cases of a split on the device; samples (case, t0, N) with history t0-11..t0 and future
     t0+1..t0+6. N is drawn from [n_lo, n_hi] and the frames scaled by N / N_ref (exact linearity)."""
-    def __init__(self, paths, device, seed=0, z=None):
-        self.cases = [load_plane(p, z) for p in paths]
+    def __init__(self, paths, device, seed=0, z=None, transitions=False):
+        self.cases = [load_transition(p, z) if transitions else load_plane(p, z) for p in paths]
         xy0 = self.cases[0]["xy"]
         for c in self.cases:
             assert c["xy"].shape == xy0.shape and np.allclose(c["xy"], xy0), "all cases must share the grid"
@@ -131,12 +144,16 @@ class PlaneData:
         self.frames = [torch.tensor(c["frames"], device=device) for c in self.cases]
         self.V = [torch.tensor(c["V"], device=device) for c in self.cases]
         self.N_ref = [c["N_ref"] for c in self.cases]
+        self.H = [torch.tensor(c["H"], device=device) for c in self.cases] if transitions else None
         rng = np.random.default_rng(seed)
         self.hist_idx = torch.tensor(np.sort(rng.choice(len(xy0), min(N_HIST_TOKENS, len(xy0)), replace=False)), device=device)
         self.t0s = [list(range(H_IN - 1, f.shape[0] - T_OUT)) for f in self.frames]
 
-    def sample(self, k, t0, N):
+    def sample(self, k, t0, N, NA=0.0):
+        """N = people now (source), NA = people of the previous state (transition data only)"""
         f = self.frames[k] * (N / self.N_ref[k])
+        if self.H is not None:
+            f = f + self.H[k] * (NA / self.N_ref[k])
         hist = f[t0 - H_IN + 1:t0 + 1].T            # (Np, H)
         fut = f[t0 + 1:t0 + 1 + T_OUT].T            # (Np, T)
         return hist, fut
@@ -148,7 +165,8 @@ class PlaneData:
             k = int(torch.randint(len(self.cases), (1,), generator=gen))
             t0 = self.t0s[k][int(torch.randint(len(self.t0s[k]), (1,), generator=gen))]
             N = float(n_lo + (n_hi - n_lo) * torch.rand(1, generator=gen))
-            hist, fut = self.sample(k, t0, N)
+            NA = float(n_lo + (n_hi - n_lo) * torch.rand(1, generator=gen)) if self.H is not None else 0.0
+            hist, fut = self.sample(k, t0, N, NA)
             qi = torch.randint(Np, (Q,), generator=gen).to(self.dev)
             qh.append(hist[qi]); qx.append(self.xyz[qi]); tg.append(fut[qi])
             hh.append(hist[self.hist_idx]); hx.append(self.xyz[self.hist_idx])
@@ -158,9 +176,9 @@ class PlaneData:
 
 
 @torch.no_grad()
-def predict_full(model, data, k, t0, N, chunk=4096):
+def predict_full(model, data, k, t0, N, NA=0.0, chunk=4096):
     """Whole plane for one sample -> mean (Np, T), target (Np, T), history (Np, H)."""
-    hist, fut = data.sample(k, t0, N)
+    hist, fut = data.sample(k, t0, N, NA)
     hh, hx = hist[data.hist_idx].unsqueeze(0), data.xyz[data.hist_idx].unsqueeze(0)
     V = data.V[k].unsqueeze(0)
     Nt = torch.tensor([[N]], device=data.dev)
@@ -173,14 +191,21 @@ def predict_full(model, data, k, t0, N, chunk=4096):
 
 def evaluate(models, data, N=None, every=1, offset=0.0):
     """Mean l2 (eq. 12) over all (case, t0) samples of `data` for the ensemble mean of `models`, plus the
-    persistence baseline (future = last observed frame). N: fixed occupancy (default each case's N_ref).
+    persistence baseline (future = last observed frame). N: fixed occupancy (default each case's N_ref;
+    transition data: random N_A, N_B per sample, fixed seed -> the same samples for every model).
     offset: added to prediction and truth before the error -- 400 for RANS data gives the paper's metric
     (absolute ppm incl. the fresh-air 400 ppm); 0 = error of the excess CO2 (stricter)."""
     errs, base = [], []
+    rng = np.random.default_rng(1234)          # transition data: fixed random (N_A, N_B) per sample, U[10, 80]
     for k in range(len(data.cases)):
-        n = data.N_ref[k] if N is None else N
         for t0 in data.t0s[k][::every]:
-            preds = [predict_full(m, data, k, t0, n) for m in models]
+            if data.H is not None:
+                nb, na = rng.uniform(10.0, 80.0, 2)
+                n = float(nb) if N is None else N
+                na = float(na)
+            else:
+                n, na = (data.N_ref[k] if N is None else N), 0.0
+            preds = [predict_full(m, data, k, t0, n, na) for m in models]
             mean = torch.stack([p[0] for p in preds]).mean(0)
             fut, hist = preds[0][1], preds[0][2]
             if torch.linalg.norm(fut) == 0:

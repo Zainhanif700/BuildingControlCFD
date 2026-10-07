@@ -131,6 +131,37 @@ def main():
     os.rmdir(out)
     ok &= good
 
+    # 6. transition data (make_transitions.py format): sample = (N_A/N_ref) H + (N_B/N_ref) S, end to end
+    tdir = os.path.join(tmp, "tr")
+    os.makedirs(tdir)
+    for i, v in enumerate([0.2, 0.6, 1.0, 1.5]):
+        d = np.load(os.path.join(tmp, f"S{i:02d}.npz"))
+        P = d["P"].copy()
+        P[200:, 2] = 1.55                      # two planes: 1.15 and 1.55 m
+        Hs = (d["C"][-1][None, :] * np.exp(-d["t_c"][:, None] / (300 + 200 * v))).astype(np.float32)
+        np.savez_compressed(os.path.join(tdir, f"S{i:02d}.npz"), P=P, V=d["V"], N_ref=d["N_ref"], t_c=d["t_c"],
+                            H=Hs, S=d["C"], from_case=np.array("Sxx"))
+    dt_ = F.PlaneData([os.path.join(tdir, "S01.npz")], torch.device("cpu"), z=1.6, transitions=True)
+    h1, f1 = dt_.sample(0, 20, 30.0, 50.0)
+    exp_f = dt_.frames[0] * 1.5 + dt_.H[0] * 2.5
+    good = (dt_.xyz.shape[0] == len(P) - 200 and abs(float(dt_.xyz[0, 2]) - 1.55) < 1e-6
+            and torch.allclose(h1[:, -1], exp_f[20]) and torch.allclose(f1[:, 0], exp_f[21]))
+    out = os.path.join(HERE, "checkpoints", tag)
+    r = subprocess.run([sys.executable, os.path.join(HERE, "train_forecast.py"), "--data-dir", tdir, "--scenarios", scen,
+                        "--transitions", "--z", "1.6", "--c-offset", "400",
+                        "--tag", tag, "--members", "1", "--iters", "60", "--batch", "2", "--queries", "128", "--d", "32",
+                        "--layers", "1", "--log-every", "30", "--eval-every", "60", "--device", "cpu"],
+                       capture_output=True, text=True)
+    good = good and r.returncode == 0 and "FINAL" in r.stdout
+    print(f"6 transition data: N_A/N_B superposition exact, train_forecast --transitions end to end  -> {'OK' if good else 'FAIL'}")
+    if r.returncode != 0:
+        print(r.stdout[-2000:], r.stderr[-3000:])
+    if os.path.isdir(out):
+        for f_ in os.listdir(out):
+            os.remove(os.path.join(out, f_))
+        os.rmdir(out)
+    ok &= good
+
     print("\nALL OK" if ok else "\nSOME CHECKS FAILED")
     sys.exit(0 if ok else 1)
 
