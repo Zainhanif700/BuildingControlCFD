@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
-# All window settings of ../gnot_openfoam/scenarios.txt (except all windows closed), NP at a time; finished ones are skipped.
+# All window settings of scenarios.txt (except all windows closed), NP at a time; finished ones are skipped.
 # Usage: bash run_dataset_rans.sh [NP]
 set -u
 NP="${1:-4}"
 HERE="$(cd "$(dirname "$0")" && pwd)"
-SCEN="$HERE/../gnot_openfoam/scenarios.txt"
-[ -f "$SCEN" ] || { echo "missing $SCEN (run ../gnot_openfoam/scenarios.py)"; exit 1; }
+SCEN="$HERE/scenarios.txt"
+[ -f "$SCEN" ] || { echo "missing $SCEN (run scenarios.py)"; exit 1; }
 cd "$HERE"
 mkdir -p logs data
 grep -v '^#' "$SCEN" | awk '$3 != "0,0,0,0,0,0,0,0" {print $1, $3}' \

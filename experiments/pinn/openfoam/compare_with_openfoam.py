@@ -89,7 +89,7 @@ def main():
     ap.add_argument("--case", required=True)
     ap.add_argument("--checkpoint", required=True)
     ap.add_argument("--code-dir", default=os.path.dirname(HERE),
-                    help="experiments/gnot folder whose model code matches the checkpoint")
+                    help="experiments/pinn folder whose model code matches the checkpoint")
     ap.add_argument("--times", type=float, nargs="*", default=[30.0, 60.0, 120.0])
     ap.add_argument("--device", default="cpu")
     ap.add_argument("--no-co2", action="store_true", help="skip the CO2 transport (faster)")

@@ -4,7 +4,7 @@
 set -u
 CKPT="${1:?usage: bash check_v21_stage.sh <checkpoint>}"
 [ -f "$CKPT" ] || { echo "checkpoint not found: $CKPT"; exit 1; }
-[ -f staged_smoke_test.py ] || { echo "run this from experiments/gnot"; exit 1; }
+[ -f staged_smoke_test.py ] || { echo "run this from experiments/pinn"; exit 1; }
 # default CPU (never disturbs a running training); 2nd argument --gpu when the GPU is idle
 DEV=cpu; [ "${2:-}" = "--gpu" ] && DEV=cuda
 [ "$DEV" = cpu ] && export CUDA_VISIBLE_DEVICES=""

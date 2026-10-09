@@ -1,42 +1,177 @@
-# BuildingControlCFD
+# CO₂ forecasting in a real classroom with a neural operator
 
-This repository goes with the paper:
-**Data-driven operator learning for energy-efficient building control**
-[arXiv:2504.21243](https://arxiv.org/abs/2504.21243) -- Yuexin Bian, Yuanyuan Shi
+This is the code of my Master's thesis. I take the method of Bian & Shi (2025),
+*Data-driven operator learning for energy-efficient building control*
+([arXiv:2504.21243](https://arxiv.org/abs/2504.21243)), and apply it to a real classroom at our
+university: I simulate the airflow and CO₂ in the room, train a neural operator (GNOT) on the
+results, and use it to forecast the CO₂ in the room a few minutes ahead.
 
-The code has three parts: CFD airflow simulation, a neural operator model that learns from that simulation data, and a control strategy that uses the trained model.
+The repository started as a fork of the authors' code. Their original code is still here (see
+[Original paper code](#original-paper-code) at the end); my own work is in `experiments/`.
 
-<p align="center">
-  <img src="images/framework.png" alt="Framework" width="600">
-</p>
-<p align="center"><em>Figure 1. Our Framework</em></p>
+## The room
 
-<p align="center">
-  <img src="images/predict2.png" alt="1" width="600">
-</p>
-<p align="center"><em>Figure 2. Predicted indoor airflow distribution from the learned operator model.</em></p>
+The classroom is 15.53 × 9.16 × 3.15 m with 8 windows on one wall, 2 doors on the opposite wall and
+4 free-standing columns. The geometry comes from STL files of the real room
+(`experiments/pinn/geometry/`). Fresh air comes in through the open windows and leaves through the
+doors. The windows are grouped into three zones (windows 1–3, 4–6 and 7–8), and each zone is either
+closed or open with an inflow speed between 0.2 and 2.0 m/s. The people sit in a seating area and
+each person breathes out 6 L/min of air at 40,000 ppm CO₂ (the same values as in the paper); the
+outdoor air has 400 ppm.
 
-## Step 1: Clone and Install
+## Project structure
+
+```
+BuildingControlCFD/
+├── experiments/
+│   ├── gnot_openfoam_rans/   Approach 1: training with CFD data (main result)
+│   └── pinn/                 Approach 2: training without data (physics-only network)
+├── learning/  simulation/  control/  local/  scripts/   original code of the paper
+├── images/                   figures of the original README
+├── sweep_results/            results of an early parameter sweep
+└── requirements.txt
+```
+
+**`experiments/gnot_openfoam_rans/`** – the complete pipeline from the OpenFOAM simulation to the
+trained forecast model:
+
+| File | What it does |
+|---|---|
+| `common.py` | all physical settings in one place (air, turbulence, CO₂ per person, seating area) |
+| `scenarios.py`, `scenarios.txt` | the 40 window settings and the fixed train/test split |
+| `make_rans_case.py`, `run_rans_case.sh` | write and run one OpenFOAM case (k-ω SST) |
+| `run_one_rans.sh`, `run_dataset_rans.sh` | one window setting end to end / all settings in parallel |
+| `extract_rans.py` | turns an OpenFOAM case into a dataset file and computes the 30-min CO₂ on the GPU |
+| `fv_torch.py`, `fv_turb.py`, `fv_cons.py` | my finite-volume CO₂ solver (the dataset uses `fv_cons.py`) |
+| `make_transitions.py` | paper-like runs that start from the CO₂ of another window setting |
+| `forecast.py`, `train_forecast.py` | the forecast model and its training |
+| `make_lc_scenarios.py`, `run_learning_curve.sh` | learning curve (training with fewer cases) |
+| `plot_forecast.py` | figures of the predictions on the test cases |
+| `test_*.py` | tests of the CO₂ solver and of the forecast code |
+| `check_*.py`, `compare_*.py`, `scan_sct.py`, `steadiness_series.py` | the checks I used to validate the data |
+
+**`experiments/pinn/`** – the physics-only approach: model (`gnot_model.py`), training points
+(`point_sampler.py`), built-in base flow (`throughflow.py`), training (`train_gnot.py`), the checks
+against OpenFOAM (`openfoam/`) and the room geometry (`geometry/`). Some parts of it (geometry, grid,
+OpenFOAM case writer) are also used by approach 1. `milestones/` holds frozen snapshots of earlier
+versions for traceability and should not be edited.
+
+## Approach 1: training with CFD data
+
+**Simulation.** For every window setting I run OpenFOAM v2412 (`pimpleFoam`, k-ω SST with wall
+functions, the same turbulence model as the paper) on a mesh of 438,929 cells of 10 cm. A full
+30-minute OpenFOAM run would take about two days per case, so I run 10 minutes: the airflow has
+settled after about 2.5 minutes, and from then on I use its time average. The CO₂ for the full
+30 minutes is then computed on the GPU with my own finite-volume solver on this flow. The solver
+keeps the total amount of CO₂ exactly (divergence-free face velocities, flux-form advection with a
+limiter, so the CO₂ never becomes negative). The CO₂ is saved every 30 seconds.
+
+**Checks.** For every case my CO₂ was compared with the CO₂ that OpenFOAM computes itself on the
+same run. After two fixes (mass conservation, and a turbulent Schmidt number of 0.3 to make up for
+the mixing that the averaged flow leaves out) the difference is about 1–4 % in the paper's metric.
+One case was also run for the full 30 minutes in OpenFOAM, and my CO₂ stayed within about 3 % the
+whole time. The mesh passes `checkMesh`, y+ is 19–281, and the same case run twice gives identical
+results.
+
+**Paper-like data.** In the paper every run starts from the steady state of another setting. I do
+the same without new OpenFOAM runs: for each case I start from the CO₂ of another case after
+30 minutes and let the new flow carry it away. Because the CO₂ equation is linear, the numbers of
+people before and after the change can be chosen freely during training (10–80, as in the paper).
+
+**Forecast model.** As in the paper: the CO₂ map at 1.6 m height over the last 6 minutes (12 maps)
+plus the window speeds and the number of people go in, and the CO₂ map for the next 3 minutes
+comes out, with an uncertainty. Five networks (about 480k parameters each) are trained with
+different seeds and averaged.
+
+**Results.** On the 8 test settings, which the model never sees during training:
+
+| | Model (5 networks) | "CO₂ stays the same" |
+|---|---|---|
+| Test error, CO₂ above the outdoor level | 0.11 % | 0.39 % |
+| Test error, paper's metric (incl. 400 ppm) | 0.01 % | 0.05 % |
+| Bian & Shi (2025), test, paper's metric | 10.9 % | – |
+
+The model is about 4 times better than simply assuming that the CO₂ stays the same, and up to
+12 times better on the hardest test case. The numbers are much smaller than the paper's, but they
+cannot be compared directly: our open windows exchange the room air about 3–120 times per hour,
+much more than the ceiling vents in the paper, so the CO₂ of the previous setting is gone within a
+few minutes and the CO₂ changes less. The comparison with "CO₂ stays the same" is the fairer
+measure.
+
+A learning curve (training with 5, 10, 20 and 31 of the training settings) gives 0.70, 0.39, 0.30
+and 0.27 times the "stays the same" error, so the curve levels off and the 39 simulations are
+enough for this room.
+
+**Time.** One OpenFOAM case takes about 13 hours on one CPU core (8–20 hours depending on the window
+speed), the 30-minute CO₂ 0.5–2.5 hours on the GPU, the transition data about 22 hours for all
+cases, and the training of the 5 networks about 1.5 hours.
+
+## Approach 2: training without data (PINN)
+
+Here the network never sees simulation data. It learns only from the equations for airflow and CO₂
+at random points in the room, and some rules are built into it so that they always hold exactly
+(no air through the walls, the right inflow at each window, start from rest, CO₂ proportional to
+the number of people). I compared every version with an OpenFOAM solution of the same equations.
+Over 25 versions I fixed several problems, but the velocity error stayed at about 50 %: the network
+settles on a too-smooth flow that still fits the equations, a failure that is known from the
+literature. One training run takes about 17 hours on the GPU. For our room this approach is not
+accurate enough, so the thesis focuses on approach 1.
+
+## How to run approach 1
+
+I use two conda environments: `cfd` (Python with PyTorch and a GPU, see `requirements.txt`) and
+`foam` (OpenFOAM v2412 from conda-forge). The scripts call
+`~/anaconda3/envs/cfd/bin/python`; for another location set `CFD_PY` or edit the path at the top of
+the shell scripts. All commands are run from `experiments/gnot_openfoam_rans/`.
 
 ```bash
-Requires Python 3.10.
+cd experiments/gnot_openfoam_rans
 
-```bash
-git clone https://github.com/Zainhanif700/BuildingControlCFD.git
-cd BuildingControlCFD
-pip install -r requirements.txt
+# 0. tests (a few minutes)
+python3 test_fv_cons.py
+python3 test_forecast.py
+
+# 1. dataset: OpenFOAM + CO2 for all 39 window settings, 4 in parallel (about 13 h per case)
+bash run_dataset_rans.sh 4          # -> data/S*.npz, finished cases are skipped
+python3 check_dataset.py            # quick check of all files
+
+# 2. paper-like transition data (two in parallel on one GPU)
+python3 make_transitions.py --shard 0/2 &
+python3 make_transitions.py --shard 1/2 &
+wait                                # -> data_transitions/S*.npz
+
+# 3. training of the forecast model (5 networks, about 1.5 h)
+python3 train_forecast.py --data-dir data_transitions --transitions --tag rans_tr \
+    --members 5 --iters 20000 --z 1.6 --c-offset 400      # -> checkpoints/rans_tr/, errors at the end
+
+# 4. figures for the test cases
+python3 plot_forecast.py --tag rans_tr --data-dir data_transitions --transitions --z 1.6   # -> figures/
+
+# 5. learning curve (optional, about 4.5 h)
+bash run_learning_curve.sh
 ```
 
-`requirements.txt` has the exact package versions this project was built with, including `torch`/`dgl` for CUDA 11.8. If your machine has a different CUDA version, check https://github.com/HaoZhongkai/GNOT for how to install matching versions instead.
+`scenarios.txt` is part of the repository, so the train/test split is fixed; `python3 scenarios.py`
+writes the same file again. The dataset files keep the flow, so the CO₂ can be recomputed later (for
+example with the real seating plan) without new OpenFOAM runs: `python3 recompute_all.py`.
 
-## Step 2: Download the Dataset
+## Next steps
 
-This code needs two data files that are too large to store on GitHub (about 2.7GB together). Download them and put them at these exact paths inside the folder you just cloned:
+- Prepare the model for the real sensors in the classroom: start from the CO₂ at the 8 sensor
+  positions, with the window speeds from the wind sensors and the number of people from the
+  distance sensors.
+- Test the forecast on real sensor data.
+- Use the model to choose window openings that keep the CO₂ low with as little ventilation as
+  possible, as in the paper.
+- Set the pipeline up for the university's batch system.
 
-```
-learning/dataset/train_data_norm.pkl   (2,100,505,182 bytes)
-learning/dataset/test_data_norm.pkl    (607,608,040 bytes)
-```
+## Original paper code
+
+The folders `learning/`, `simulation/`, `control/`, `local/` and `scripts/` are the code of Bian &
+Shi (2025). To reproduce their results I added evaluation and plotting scripts
+(`learning/evaluate_ensemble.py`, `learning/visualize_prediction.py`, `scripts/run_evaluation.sh`)
+and my own retrained 5-model ensemble (`learning/data/checkpoints/ensemble_5/`). They need the authors' dataset
+(about 2.7 GB):
 
 ```bash
 mkdir -p learning/dataset
@@ -46,128 +181,25 @@ curl -L -o learning/dataset/test_data_norm.pkl \
   https://huggingface.co/datasets/alwaysbyx/Bear-CFD-dataset/resolve/main/processed_data/test_data_norm.pkl
 ```
 
-After downloading, check the file sizes match the numbers above:
-```bash
-ls -l learning/dataset/
-```
-If a size doesn't match, the download didn't finish properly -- delete the file and try again.
+Then `scripts/run_evaluation.sh` evaluates the included 5-model ensemble (the paper reports 5.9 %
+train and 10.9 % test error), `learning/train.py --seed <n>` trains a model,
+`simulation/transient_simulation.py` runs their simulation and `control/control_optimization.ipynb`
+the control strategy. More details are in the authors' repository
+([github.com/alwaysbyx/BuildingControlCFD](https://github.com/alwaysbyx/BuildingControlCFD)).
 
-The trained model checkpoints are already included in this repo (`local/models/`, `learning/data/checkpoints/ensemble_5/`), so you don't need to download those separately.
+## References
 
-## Step 3: Check the Results
+- Y. Bian, Y. Shi (2025). Data-driven operator learning for energy-efficient building control.
+  arXiv:2504.21243.
+- Z. Hao et al. (2023). GNOT: A general neural operator transformer for operator learning. ICML.
 
-This step does not train anything -- it just loads our already-trained models and runs them against the test data, so it's quick.
-
-```bash
-./run_evaluation.sh        # Linux / macOS
-run_evaluation.bat         # Windows
-```
-
-By default this checks our own retrained 5-model ensemble (`learning/data/checkpoints/ensemble_5/`) and prints each model's error plus the ensemble's error, on both the training and test sets. The paper reports 5.9% (train) and 10.90% (test) for the ensemble (Table 3), so you can compare directly.
-
-To check the paper authors' own checkpoints instead:
-```bash
-./run_evaluation.sh ../local/models/*.pt
-```
-
-Both commands are just a shortcut for `python learning/evaluate_ensemble.py <ckpt1.pt> ... <ckpt5.pt>`, which you can also run directly with any set of checkpoint files.
-
-## Optional: Train From Scratch
-
-Training builds a new model from the data instead of using the checkpoints already in this repo. The paper reports this takes about 16 GPU-hours in total for all 5 models (on 2x RTX 2080 Ti) -- your hardware may be faster or slower.
-
-This trains one model per run. We used seeds 2023, 2024, 2025, 2026, and 2027 for our 5-model ensemble:
-
-```bash
-cd learning
-python train.py --seed 2023
-python train.py --seed 2024
-python train.py --seed 2025
-python train.py --seed 2026
-python train.py --seed 2027
-```
-
-Then put the 5 resulting checkpoint files together in one folder.
-
-**Important:** your new checkpoints are saved as new files in `learning/data/checkpoints/`, separate from the `ensemble_5/` folder already in this repo. The commands above and below default to `ensemble_5/`, which is our result, not yours. To check or visualize your own trained model instead of ours, point the commands at your new files (run from the repo root, then `cd learning` for the last one):
-
-```bash
-ls -t learning/data/checkpoints/*.pt | head -5
-./run_evaluation.sh data/checkpoints/<your_files>.pt
-cd learning
-python visualize_prediction.py data/checkpoints/<your_file>.pt --out my_prediction.png
-```
-
-## Optional: Visualize a Prediction (Uses Our Model by Default)
-
-This produces one image showing the true CO2 levels next to the model's predicted CO2 levels for one test sample, along with the error between them -- similar to Figure 5 in the paper. By default it uses our included model (`ensemble_5`), not a model you trained yourself -- see the note above if you trained your own and want to see that instead.
-
-```bash
-cd learning
-python visualize_prediction.py data/checkpoints/ensemble_5/*.pt --out prediction.png
-```
-
-## Optional: Run the CFD Simulation
-
-We already provide simulated data for seeds 0 to 300. You only need this step if you want more data:
-```bash
-python simulation/transient_simulation.py --seed 0
-```
-
-## Optional: Control Strategy
-
-Uses the trained model to plan ventilation control, and lets you look at the results:
-```bash
-control/control_optimization.ipynb
-control/visualize.ipynb
-```
-
-## Thesis Extension: GNOT for a Real Classroom (`experiments/gnot/`)
-
-This part of the repo is a Master's thesis extension of the paper above, adapting the GNOT-based neural operator to a real classroom instead of the paper's original domain. It is a **physics-only PINN** trained purely against the Navier-Stokes and CO2 advection-diffusion equations at randomly sampled points -- no CFD simulation data is used at any point.
-
-Key differences from `learning/` (the original paper code): the model uses cross-attention over heterogeneous tokens (windows, doors, occupancy), a vector-potential/curl trick to guarantee divergence-free velocity, and trains against the real room's geometry (`experiments/gnot/geometry/*.stl`: 2 doors, 8 windows, 4 columns) instead of the paper's CFD dataset.
-
-### Layout
-
-- `gnot_model.py`, `point_sampler.py`, `train_gnot.py` -- the model, the physics-domain sampler, and the training loop. These three are the source of truth; every script below imports from them.
-- `staged_smoke_test.py` -- an 8-stage isolated component test (Fourier encoding -> query encoder -> full forward pass -> divergence-free check -> each loss term -> one combined training step). Run this before any full training run to catch bugs early:
-  ```bash
-  cd experiments/gnot
-  python3 staged_smoke_test.py
-  ```
-- `closed_window_diagnostic.py <checkpoint> [closed|open]` -- evaluates a trained checkpoint on a 40x40 grid with all windows closed (true solution: zero velocity) or open, to check for known failure modes.
-- `probe_source_co2.py <checkpoint>` -- evaluates predicted CO2 directly at the true source location, to distinguish real convergence from a coincidental peak elsewhere in the domain.
-- `visualize_gnot.py`, `visualize_gnot_slice.py`, `export_grid_for_viewer.py`, `sensor_mapper.py` -- visualization and export utilities.
-- `geometry/` -- the room's STL files and the scripts that derive physical constants (room bounds, window/door positions, column radius) directly from them.
-- `checkpoints/` -- trained model weights, organized by version tag.
-- `milestones/` -- frozen, documented snapshots of the code + a checkpoint at specific points in development, kept for thesis traceability. Each has its own README stating exactly what was confirmed fixed vs. still open at that point. **Do not edit files inside `milestones/`** -- ongoing work continues in the live files above.
-
-### Status
-
-See `milestones/v5_closed_window_fix/README.md` for the most recent documented checkpoint: the spurious closed-window velocity artifact is confirmed fixed; CO2 source localization is still an open problem, currently suspected to need a learning-rate decay schedule.
-
-## Dataset Details
-
-The full dataset (including raw simulation data, not just the two files from Step 2) is on [Hugging Face](https://huggingface.co/datasets/alwaysbyx/Bear-CFD-dataset).
-
-- Simulation tool: ANSYS FLUENT 2023R2
-- Data types: steady-state and transient flow simulations
-- Domain: indoor airflow and CO2 concentration in ventilated buildings
-
-## License and Citation
-
-The dataset and code are for research use only.
+The dataset and code of the original paper are for research use only.
 
 ```bibtex
 @article{bian2025data,
   title={Data-driven operator learning for energy-efficient building control},
-  author={Bian, Yuexin and Shi, Yuanyuan Shi},
+  author={Bian, Yuexin and Shi, Yuanyuan},
   journal={arXiv preprint arXiv:2504.21243},
   year={2025}
 }
 ```
-
-## Contact
-
-Original authors: [Email](yubian@ucsd.edu)

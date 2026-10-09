@@ -1,5 +1,5 @@
 """
-GPU (torch) version of the finite-volume CO2 solver of check_co2_with_model_flow.py; base of the RANS CO2 solvers.
+GPU (torch) version of the finite-volume CO2 solver of ../pinn/check_co2_with_model_flow.py; base of fv_turb.py and fv_cons.py.
 """
 import numpy as np
 import torch

@@ -16,7 +16,7 @@ done
 [ "$DEV" = cpu ] && export CUDA_VISIBLE_DEVICES=""
 export PYTHONUNBUFFERED=1
 NAME=$(basename "$CKPT" .pth)
-[ -f staged_smoke_test.py ] || { echo "run this from experiments/gnot"; exit 1; }
+[ -f staged_smoke_test.py ] || { echo "run this from experiments/pinn"; exit 1; }
 case "$CKPT" in *"'"*) echo "checkpoint path must not contain a quote"; exit 1 ;; esac
 VERSION=$(python3 -c "import torch,sys; print(torch.load(sys.argv[1], map_location='cpu').get('version','unknown'))" "$CKPT")
 [ -n "$VERSION" ] && [ "$VERSION" != unknown ] || { echo "could not read the version from $CKPT"; exit 1; }

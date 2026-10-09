@@ -8,7 +8,7 @@ import os
 import numpy as np
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-SCEN = os.path.join(HERE, "..", "gnot_openfoam", "scenarios.txt")
+SCEN = os.path.join(HERE, "scenarios.txt")
 
 
 def main():

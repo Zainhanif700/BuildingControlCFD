@@ -13,7 +13,7 @@ import common
 from forecast import ForecastGNOT, PlaneData, nll, evaluate
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-SCEN = os.path.join(HERE, "..", "gnot_openfoam", "scenarios.txt")
+SCEN = os.path.join(HERE, "scenarios.txt")
 
 
 def split(data_dir, scen, with_s00):

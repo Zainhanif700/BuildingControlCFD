@@ -1,15 +1,14 @@
 """
 All settings of the CFD-data approach in one place: air, turbulence, CO2 from people and the seating area.
-Geometry and solvers are imported from experiments/gnot and experiments/gnot_openfoam.
+Geometry and some solver parts are imported from experiments/pinn.
 """
 import os
 import sys
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-GNOT_DIR = os.path.normpath(os.path.join(HERE, "..", "gnot"))
+GNOT_DIR = os.path.normpath(os.path.join(HERE, "..", "pinn"))
 OPENFOAM_DIR = os.path.join(GNOT_DIR, "openfoam")
-GNOT_OF_DIR = os.path.normpath(os.path.join(HERE, "..", "gnot_openfoam"))
-for p in (GNOT_OF_DIR, OPENFOAM_DIR, GNOT_DIR):
+for p in (OPENFOAM_DIR, GNOT_DIR):
     if p not in sys.path:
         sys.path.insert(0, p)
 CASES_DIR = os.path.join(HERE, "cases")
