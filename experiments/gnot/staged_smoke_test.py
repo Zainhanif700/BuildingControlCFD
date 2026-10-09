@@ -1,41 +1,10 @@
 """
-Staged smoke test for GNOT -- runs each layer of the pipeline in isolation,
-from lowest-level to full training step, printing PASS/FAIL after each stage
-and STOPPING at the first failure.
-
-WHY THIS EXISTS: our last few bugs (backward-graph reuse, GPU OOM, two
-separate CO2-weighting collapses) were only caught by running the FULL
-30-iteration integrated smoke test and reading through the printed losses.
-That works, but when something breaks you only know "somewhere in the whole
-pipeline something is wrong" -- you still have to manually narrow it down.
-This script narrows it down FOR you: each stage tests one specific piece
-(the Fourier encoding, the query encoder, the full model forward, the
-curl-trick divergence-free property, each individual loss term, then finally
-one full combined training step), in the same order data actually flows
-through the model. If stage 3 fails, you know immediately the bug is in the
-model forward pass, not e.g. in a loss term you haven't reached yet.
-
-Run on the SERVER (needs torch + CUDA):
-    cd experiments/gnot
-    python3 staged_smoke_test.py
-
-Most stages use a TINY point count (16-64 points) purely for speed (stages 0b
-and 5a call physics_loss at its full 1000 points) -- this is
-about catching CRASHES / NaNs / shape bugs, not about training quality or
-memory-ceiling behavior (the separate memory-sweep smoke test already covers
-that, at the full POINTS_INTERIOR=1000 scale).
+Step-by-step test of the physics-only pipeline, from the sampler to a full training step; stops at the first failure.
+Usage: python3 staged_smoke_test.py
 """
 import sys
 import torch
 
-# FIX (found by audit): PyTorch defaults to allow_tf32=True for float32 matmul
-# on Ampere GPUs (e.g. the RTX A2000 this project trains on), which truncates
-# matmul precision to ~10 mantissa bits. Chained through every Linear/attention
-# matmul plus TWO rounds of second-order autograd (stage 4's divergence check),
-# this can push a numerically-fine implementation's residual above a naive
-# 1e-3 threshold -- a FALSE failure that looks like a broken curl trick but
-# isn't. Disabling TF32 here trades a little speed for exact float32 semantics,
-# which is what this script's tight numerical assertions actually assume.
 torch.backends.cuda.matmul.allow_tf32 = False
 torch.backends.cudnn.allow_tf32 = False
 
@@ -83,32 +52,20 @@ def test_sample_interior(device):
         assert_finite(tensor, name)
     assert x.shape[0] == n, f"expected {n} points, got {x.shape[0]}"
 
-    # every point must be within room bounds (the Gaussian branch rejects out-of-room
-    # draws since v16 -- verify no bug slipped a point outside)
     assert (x >= ROOM_X[0]).all() and (x <= ROOM_X[1]).all(), "x out of room bounds"
     assert (y >= ROOM_Y[0]).all() and (y <= ROOM_Y[1]).all(), "y out of room bounds"
     assert (z >= ROOM_Z[0]).all() and (z <= ROOM_Z[1]).all(), "z out of room bounds"
 
-    # no point should land inside a column (rejection sampling should have caught all of them)
     xn = x.detach().cpu().numpy().ravel()
     yn = y.detach().cpu().numpy().ravel()
     for cx, cy, r, _, _ in COLUMNS:
         inside = (xn - cx) ** 2 + (yn - cy) ** 2 <= r ** 2
         assert not inside.any(), f"{inside.sum()} points landed inside column at ({cx},{cy})"
 
-    # sanity-check the mixture actually concentrates points near the source:
-    # with SOURCE_SAMPLE_FRAC of points drawn from a Gaussian near the
-    # source, the fraction of ALL n points within 1-sigma-ish of the source
-    # should now be noticeably higher than pure uniform sampling would give
-    # (a rough, not exact, check -- this isn't testing an exact probability,
-    # just that the mixture is doing SOMETHING, not silently falling back to
-    # pure uniform sampling due to a bug).
     dist = torch.sqrt((x - SOURCE_X) ** 2 + (y - SOURCE_Y) ** 2 + (z - BREATHING_HEIGHT) ** 2)
     frac_near = (dist < CO2_SOURCE_SIGMA).float().mean().item()
     print(f"  n_source={int(round(n * SOURCE_SAMPLE_FRAC))}, n_uniform={n - int(round(n * SOURCE_SAMPLE_FRAC))}, "
           f"fraction of all {n} points within ~1 sigma of source: {frac_near:.3f}")
-    # rough uniform-sampling baseline: a sphere of radius sigma over the room's
-    # volume (ignoring z-clipping/column effects, just an order-of-magnitude check)
     room_volume = (ROOM_X[1] - ROOM_X[0]) * (ROOM_Y[1] - ROOM_Y[0]) * (ROOM_Z[1] - ROOM_Z[0])
     sphere_volume = (4.0 / 3.0) * torch.pi * CO2_SOURCE_SIGMA ** 3
     uniform_baseline = min(1.0, sphere_volume / room_volume)
@@ -118,18 +75,10 @@ def test_sample_interior(device):
             f"({uniform_baseline:.3f}) -- source-concentrated sampling may not be working"
         )
     else:
-        # v14 uniform sampling: numpy estimate for truly uniform points is 0.116 (the
-        # sphere/room ratio above ignores floor/ceiling clipping, so it is higher)
         assert 0.07 < frac_near < 0.16, (
             f"fraction near source {frac_near:.3f} is not the uniform-sampling value ~0.116 -- "
             f"sampling is not uniform")
 
-    # sanity-check fix #3 (closed/partial-closed window-scenario oversampling):
-    # verify a meaningful fraction of V rows are EXACTLY all-zero (the all-closed
-    # scenario), not just occasionally-small from ordinary uniform sampling. The
-    # old pure-uniform scheme would give ~1e-16 probability of landing on exact
-    # all-zero, so seeing a near-CLOSED_SCENARIO_FRAC fraction here directly
-    # confirms the fix is wired up, not silently bypassed.
     from point_sampler import CLOSED_SCENARIO_FRAC
     all_zero_frac = (V == 0).all(dim=1).float().mean().item()
     print(f"  fraction of {n} points with ALL windows exactly V=0: {all_zero_frac:.3f} "
@@ -139,20 +88,9 @@ def test_sample_interior(device):
         f"{CLOSED_SCENARIO_FRAC} -- closed-scenario oversampling may not be working"
     )
 
-    # STAGE 1 persistent-pool check (see point_sampler.py's module comment on
-    # POOL_REFRESH_FRAC/POOL_REFRESH_EVERY): verify the pool actually
-    # PERSISTS most points between consecutive calls (not silently still
-    # regenerating 100% fresh every call, which would defeat the whole point
-    # of Stage 1 -- per-point weights, planned for Stage 2, need a point to
-    # actually be revisited to track anything), AND verify it DOES refresh a
-    # fraction of points once POOL_REFRESH_EVERY calls have passed (not
-    # silently frozen forever, which would hurt the operator's generalization
-    # across scenarios -- the concern flagged in point_sampler.py).
     from point_sampler import (reset_interior_pools, POOL_REFRESH_FRAC, POOL_REFRESH_EVERY,
                                USE_PERSISTENT_POOL)
     if not USE_PERSISTENT_POOL:
-        # v8_nondim switches the pool off to keep v8 a single-variable test.
-        # Instead, confirm sampling really is 100% fresh every call (v5 behavior).
         xa, _, _, _, _, _ = sample_interior(200, device)
         xb, _, _, _, _, _ = sample_interior(200, device)
         same = torch.isclose(xa, xb).float().mean().item()
@@ -161,8 +99,7 @@ def test_sample_interior(device):
         assert same < 0.05, "pool is supposed to be off, but points are being reused across calls"
         return
     reset_interior_pools()
-    n_pool_test = 200  # smaller n than 1000 purely for speed; POOL_REFRESH_EVERY
-    # is a call-count, not point-count, so behavior is identical at any n
+    n_pool_test = 200
     x0, y0, z0, _, _, _ = sample_interior(n_pool_test, device)
     x1, y1, z1, _, _, _ = sample_interior(n_pool_test, device)
     unchanged = torch.isclose(x0, x1).float().mean().item()
@@ -171,20 +108,10 @@ def test_sample_interior(device):
         f"calls (expected ~1.0, no refresh due yet) -- persistent pool may not be "
         f"working, still resampling 100% fresh every call"
     )
-    # Refresh happens when pool["calls"] (incremented on every call AFTER the
-    # first, which only creates the pool) hits a multiple of
-    # POOL_REFRESH_EVERY -- i.e. on the (POOL_REFRESH_EVERY+1)-th call overall
-    # (call 1 creates with calls=0; call 2 -> calls=1; ...; call
-    # POOL_REFRESH_EVERY+1 -> calls=POOL_REFRESH_EVERY, refresh fires).
-    # x0/x1 above were calls #1 and #2, so POOL_REFRESH_EVERY-3 more calls
-    # land us at call #(POOL_REFRESH_EVERY-1); capturing the NEXT call gives
-    # call #POOL_REFRESH_EVERY (still no refresh), and the one after that is
-    # call #(POOL_REFRESH_EVERY+1) (the refresh itself). Verified numerically
-    # via a standalone script before writing this, not just reasoned about.
     for _ in range(POOL_REFRESH_EVERY - 3):
         sample_interior(n_pool_test, device)
-    x_before, _, _, _, _, _ = sample_interior(n_pool_test, device)  # call #POOL_REFRESH_EVERY, no refresh yet
-    x_after, _, _, _, _, _ = sample_interior(n_pool_test, device)   # call #(POOL_REFRESH_EVERY+1), refresh fires here
+    x_before, _, _, _, _, _ = sample_interior(n_pool_test, device)
+    x_after, _, _, _, _, _ = sample_interior(n_pool_test, device)
     frac_changed = (~torch.isclose(x_before, x_after)).float().mean().item()
     print(f"  pool persistence check: {unchanged:.3f} unchanged across 2 immediate "
           f"calls; {frac_changed:.3f} of points changed at the refresh boundary "
@@ -197,14 +124,12 @@ def test_sample_interior(device):
         f"{frac_changed:.3f} of points changed at the refresh boundary, way more than "
         f"the expected {POOL_REFRESH_FRAC} -- pool may be refreshing far too aggressively"
     )
-    reset_interior_pools()  # leave a clean slate for the rest of this test run
+    reset_interior_pools()
 
 
 @stage("0c. v16 scenario/location independence -- every window, wall face, column and interior region sees all scenario types")
 def test_scenario_location_independence(device):
-    """Guards the v16 bug fix (point_sampler.sample_scenario shuffles its rows). Before it,
-    windows 5-6 only ever saw all-closed scenarios, the x-max wall / floor / column 3 never
-    saw flow, and far-field interior points never saw closed windows."""
+    """Test that the scenario values do not depend on the point position."""
     import numpy as np
     from point_sampler import (sample_windows, sample_walls, sample_columns_surface, sample_doors,
                                sample_interior, CLOSED_SCENARIO_FRAC, SOURCE_X, SOURCE_Y,
@@ -257,11 +182,9 @@ def test_audit_fixes(device):
                                CO2_SOURCE_SIGMA, C_REF, TAU_RAMP)
     from train_gnot import windows_loss, ic_loss, POINTS_WINDOWS_PER
     torch.manual_seed(0)
-    # (c) no source-sampling pile-up on floor/ceiling (was ~5% of interior points at z = 0)
     x, y, z, t, V, N = sample_interior(4000, device)
     on_bound = ((z == ROOM_Z[0]) | (z == ROOM_Z[1])).float().mean().item()
     assert on_bound < 1e-3, f"{on_bound:.3f} of interior points sit exactly on floor/ceiling (clamping?)"
-    # (d) walls: counts proportional to net face area; nothing inside column footprints
     n = 6000
     x, y, z, t, V, N = sample_walls(n, device)
     x, y, z = (a.squeeze(1).cpu().numpy() for a in (x, y, z))
@@ -278,13 +201,11 @@ def test_audit_fixes(device):
     fc = (z == ROOM_Z[0]) | (z == ROOM_Z[1])
     for cx, cy, r, _, _ in COLUMNS:
         assert not (fc & ((x - cx) ** 2 + (y - cy) ** 2 <= r ** 2)).any(), "floor/ceiling point inside a column"
-    # (d) IC points uniform (near-source fraction ~0.116 for uniform points, ~0.45 if source-concentrated)
     x, y, z, t, V, N = sample_ic(4000, device)
     near = (torch.sqrt((x - SOURCE_X) ** 2 + (y - SOURCE_Y) ** 2 + (z - BREATHING_HEIGHT) ** 2)
             < CO2_SOURCE_SIGMA).float().mean().item()
     assert 0.07 < near < 0.16 and (t == 0).all(), f"IC points not uniform at t=0 (near-source share {near:.3f})"
 
-    # (a)/(b) loss formulas, with a stub model: zero velocity, C = C_REF everywhere, p = 1
     class Stub(torch.nn.Module):
         def forward(self, x, y, z, t, V, N):
             zero = 0.0 * (x + y + z)
@@ -295,15 +216,15 @@ def test_audit_fixes(device):
     stub = Stub()
     torch.manual_seed(123)
     L = windows_loss(stub, "cpu", 1.0).item()
-    torch.manual_seed(123)                                   # same draw as inside windows_loss
+    torch.manual_seed(123)
     xw, yw, zw, tw, Vw, Nw, idx = sample_windows(POINTS_WINDOWS_PER, "cpu")
     Vk = Vw.gather(1, idx)
     target = Vk * torch.tanh(3.0 * tw / TAU_RAMP)
     from train_gnot import V_REL_FLOOR, USE_WINDOW_NORMAL_TARGET
     if USE_WINDOW_NORMAL_TARGET:
-        vel = (target ** 2 / target.abs().clamp_min(V_REL_FLOOR) ** 2).mean().item()   # v17: relative error
+        vel = (target ** 2 / target.abs().clamp_min(V_REL_FLOOR) ** 2).mean().item()
     else:
-        vel = 0.0   # v19: no normal-velocity target (flux exact); stub has u = w = 0
+        vel = 0.0
     frac_open = (Vk > 0).float().mean().item()
     assert abs(L - (vel + frac_open)) < 1e-4, (
         f"windows_loss {L:.5f} != relative velocity term {vel:.5f} + open share {frac_open:.3f}: CO2 c=0 must "
@@ -316,9 +237,7 @@ def test_audit_fixes(device):
 
 @stage("0e. v17 flux-scaled wall BC -- leak term = (A_SOLID * u_n / Q_scale)^2 on walls and columns")
 def test_flux_scaled_walls(device):
-    """Stub model with a CONSTANT velocity (a, b, c): walls_loss must equal the no-slip part
-    a^2+b^2+c^2 (planar) + a^2+b^2+c^2 (columns) plus mean((A_SOLID*u_n/Q)^2) with u_n = a / b / c on
-    x / y / z faces and a*nx + b*ny on columns. Also checks A_SOLID and throughflow_scale."""
+    """Test of the flux-scaled wall loss with a constant-velocity stub model."""
     from point_sampler import sample_walls, sample_columns_surface, ROOM_X, ROOM_Y, COLUMNS, WINDOWS
     from train_gnot import (walls_loss, throughflow_scale, A_SOLID, Q_FLOOR, POINTS_WALLS, POINTS_COLUMNS_PER)
     assert 430 < A_SOLID < 450, f"A_SOLID = {A_SOLID:.1f} m^2, expected ~441"
@@ -326,7 +245,7 @@ def test_flux_scaled_walls(device):
     t = torch.tensor([[60.0], [60.0], [0.0]])
     q = throughflow_scale(V, t).squeeze(1).tolist()
     areas = [(w[1] - w[0]) * (w[3] - w[2]) for w in WINDOWS]
-    expect_q = [3.0 * areas[0], Q_FLOOR, 5.0 * sum(areas)]   # time-independent (no ramp), floor only if ~closed
+    expect_q = [3.0 * areas[0], Q_FLOOR, 5.0 * sum(areas)]
     assert all(abs(a - b) < 1e-3 for a, b in zip(q, expect_q)), f"throughflow_scale {q} != {expect_q}"
     a, b, c = 0.03, -0.02, 0.01
 
@@ -353,24 +272,22 @@ def test_flux_scaled_walls(device):
     flux = torch.cat([A_SOLID * un / throughflow_scale(Vw, tw), A_SOLID * unc / throughflow_scale(Vc, tc)])
     from train_gnot import velocity_scale, slip_scale, USE_WINDOW_NORMAL_TARGET
     s2 = a * a + b * b + c * c
-    slip = (s2 / slip_scale(Vw) ** 2).mean().item() + (s2 / slip_scale(Vc) ** 2).mean().item()  # v20: slip_scale
+    slip = (s2 / slip_scale(Vw) ** 2).mean().item() + (s2 / slip_scale(Vc) ** 2).mean().item()
     expected = slip + (flux ** 2).mean().item()
     assert abs(L - expected) < 1e-4 * max(1.0, expected), f"walls_loss {L:.6f} != expected {expected:.6f}"
-    # warm-up factor 0 must remove the leak term entirely (only the no-slip part remains)
     torch.manual_seed(7)
     L0 = walls_loss(Stub(), "cpu", flux_weight=0.0).item()
     assert abs(L0 - slip) < 1e-5 * max(1.0, slip), f"walls_loss with flux_weight=0 is {L0}, not the no-slip part {slip}"
-    # windows_loss velocity part (co2_weight 0)
     from train_gnot import windows_loss, POINTS_WINDOWS_PER
     from point_sampler import sample_windows, TAU_RAMP
     torch.manual_seed(11)
     Lw = windows_loss(Stub(), "cpu", 0.0, rel_weight=0.0).item()
     torch.manual_seed(11)
     _, _, _, tw_, Vw_, _, idx_ = sample_windows(POINTS_WINDOWS_PER, "cpu")
-    if USE_WINDOW_NORMAL_TARGET:   # rel_weight = 0 -> the old absolute error
+    if USE_WINDOW_NORMAL_TARGET:
         tgt = -Vw_.gather(1, idx_) * torch.tanh(3.0 * tw_ / TAU_RAMP)
         expect_w = (a * a) + ((b - tgt) ** 2).mean().item() + (c * c)
-    else:                          # v19/v20: tangential components only, relative to the slip scale
+    else:
         expect_w = ((a * a + c * c) / slip_scale(Vw_) ** 2).mean().item()
     assert abs(Lw - expect_w) < 1e-4 * max(1.0, expect_w), f"windows_loss {Lw:.6f} != expected {expect_w:.6f}"
     print(f"  A_SOLID={A_SOLID:.1f} m^2; walls_loss for a constant 0.01-0.03 m/s velocity = {L:.3f} "
@@ -379,10 +296,7 @@ def test_flux_scaled_walls(device):
 
 @stage("0f. v19 exact through-flow -- no normal velocity on ANY solid surface, exact window/door fluxes, alpha split")
 def test_throughflow_exact(device):
-    """Random-init REAL model: velocity = curl(B_p + s*phi*A). Normal velocity must vanish on walls,
-    floor, ceiling, columns, closed windows and the wall strips above the doors (up to float32
-    round-off), each open window must deliver exactly V_k*A_k (quadrature), and the doors must
-    release exactly the total inflow, split alpha : 1-alpha."""
+    """Test that the built-in base flow meets the window and door fluxes exactly."""
     import math
     from gnot_model import GNOTOperator
     from train_gnot import get_velocity_and_derivs
@@ -390,9 +304,9 @@ def test_throughflow_exact(device):
                                ROOM_X, ROOM_Y, ROOM_Z, NUM_WINDOWS)
     torch.manual_seed(3)
     model = GNOTOperator().to(device)
-    with torch.no_grad():      # review: at init alpha = 0.5 exactly, which would hide a door-order swap
-        model.alpha_head[2].bias.fill_(1.5)           # -> alpha clearly != 0.5 (~0.81 for this V under v20)
-    Vrow = torch.tensor([[2.5, 0.0, 4.0, 0.0, 1.0, 0.0, 0.0, 5.0]], device=device)   # mixed open/closed
+    with torch.no_grad():
+        model.alpha_head[2].bias.fill_(1.5)
+    Vrow = torch.tensor([[2.5, 0.0, 4.0, 0.0, 1.0, 0.0, 0.0, 5.0]], device=device)
     t60 = 60.0
 
     def vel(x, y, z, V=Vrow, t=t60):
@@ -402,7 +316,6 @@ def test_throughflow_exact(device):
                                                 V.expand(n, -1), torch.full((n, 1), 20.0, device=device))
         return u.detach(), v.detach(), w.detach()
 
-    # interior speed scale
     g = torch.Generator().manual_seed(0)
     xi = (torch.rand(2000, 1, generator=g) * (ROOM_X[1] - 2) + 1).to(device)
     yi = (torch.rand(2000, 1, generator=g) * (ROOM_Y[1] - 2) + 1).to(device)
@@ -412,19 +325,19 @@ def test_throughflow_exact(device):
     assert scale > 0.05, f"interior speed {scale:.3e} -- the through-flow is missing"
 
     worst = {}
-    x, y, z, _, _, _ = sample_walls(3000, device)                   # planar walls without openings
+    x, y, z, _, _, _ = sample_walls(3000, device)
     u, v, w = vel(x, y, z)
     on_x = (x == ROOM_X[0]) | (x == ROOM_X[1])
     on_y = (y == ROOM_Y[0]) | (y == ROOM_Y[1])
     un = torch.where(on_x, u, torch.where(on_y, v, w))
     worst["walls/floor/ceiling"] = un.abs().max().item()
-    xc, yc, zc, _, _, _ = sample_columns_surface(300, device)       # columns
+    xc, yc, zc, _, _, _ = sample_columns_surface(300, device)
     u, v, w = vel(xc, yc, zc)
     k = torch.stack([(xc - cx) ** 2 + (yc - cy) ** 2 for cx, cy, _, _, _ in COLUMNS], 0).argmin(0)
     ctr = torch.tensor([[cx, cy, r] for cx, cy, r, _, _ in COLUMNS], device=device)[k.squeeze(-1)]
     nx, ny = (xc.squeeze(-1) - ctr[:, 0]) / ctr[:, 2], (yc.squeeze(-1) - ctr[:, 1]) / ctr[:, 2]
     worst["columns"] = (u.squeeze(-1) * nx + v.squeeze(-1) * ny).abs().max().item()
-    pts = []                                                         # closed windows + strips above doors
+    pts = []
     for kk, (a, b, c, d) in enumerate(WINDOWS):
         if Vrow[0, kk] == 0:
             pts.append((torch.rand(300, 1, device=device) * (b - a) + a, torch.full((300, 1), ROOM_Y[1], device=device),
@@ -438,7 +351,7 @@ def test_throughflow_exact(device):
     for name, val in worst.items():
         assert val < 1e-3 * scale, f"normal velocity {val:.2e} m/s on {name} (interior speed {scale:.2f}) -- LEAK"
 
-    def flux(a, b, c, d, yval, m1=60, m2=30):                        # outward flux, midpoint rule
+    def flux(a, b, c, d, yval, m1=60, m2=30):
         xs = a + (torch.arange(m1, device=device) + 0.5) * (b - a) / m1
         zs = c + (torch.arange(m2, device=device) + 0.5) * (d - c) / m2
         X, Z = torch.meshgrid(xs, zs, indexing="ij")
@@ -469,7 +382,7 @@ def test_v20(device):
     from point_sampler import WINDOWS, ROOM_Y, ROOM_Z, NUM_WINDOWS
     torch.manual_seed(5)
     model = GNOTOperator().to(device)
-    V = torch.tensor([[3.0, 0.0, 2.0, 0.0, 0.0, 0.0, 0.0, 0.0]], device=device)   # W1, W3 open
+    V = torch.tensor([[3.0, 0.0, 2.0, 0.0, 0.0, 0.0, 0.0, 0.0]], device=device)
     n = 400
     from gnot_model import USE_CO2_WINDOW_FACTOR
     def pts(k, core):
@@ -487,21 +400,17 @@ def test_v20(device):
                  torch.rand(n, 1, device=device) * 2 + 0.5).abs().mean().item()
     c_open = max(C_at(*pts(0, True)).abs().max().item(), C_at(*pts(2, True)).abs().max().item())
     if USE_CO2_WINDOW_FACTOR:
-        # (a) v20: C exactly 0 on the CORE of open windows (inside the edge taper), any z, any t > 0
         assert c_ref > 0 and c_open < 1e-5 * max(c_ref, 1e-12) + 1e-9, (
             f"|C| on open-window cores {c_open:.2e} (interior mean {c_ref:.2e}): c = 0 not exact")
     else:
-        # (a) v21: factor OFF -> C on open windows is NOT forced to 0 (v19 behaviour)
         assert c_ref > 0 and c_open > 1e-3 * c_ref, (
             f"|C| on open-window cores {c_open:.2e} ~ 0 although USE_CO2_WINDOW_FACTOR is False")
-    # (b) omega = 1 on closed windows and on the wall between windows (the function itself)
-    xc, yc, zc = pts(1, False)                                         # window 2 is closed
+    xc, yc, zc = pts(1, False)
     om_closed = co2_window_factor(xc, yc, V.expand(n, -1))
-    xw = torch.full((n, 1), 3.4, device=device)                      # wall between W1 and W2
+    xw = torch.full((n, 1), 3.4, device=device)
     om_wall = co2_window_factor(xw, torch.full_like(xw, ROOM_Y[1]), V.expand(n, -1))
     assert (om_closed - 1).abs().max().item() < 1e-6 and (om_wall - 1).abs().max().item() < 1e-6, \
         "co2 window factor must be 1 on closed windows and walls"
-    # (c) door split starts at the potential-flow value; closed -> 0.5
     probe = torch.zeros(NUM_WINDOWS + 1, NUM_WINDOWS, device=device)
     for k in range(NUM_WINDOWS):
         probe[k, k] = 3.0
@@ -509,13 +418,10 @@ def test_v20(device):
     for k in range(NUM_WINDOWS):
         assert abs(a[k] - DOOR1_SHARE_PER_WINDOW[k]) < 1e-4, f"alpha(W{k + 1} only) {a[k]:.4f} != {DOOR1_SHARE_PER_WINDOW[k]}"
     assert abs(a[-1] - 0.5) < 1e-6, f"alpha(all closed) {a[-1]} != 0.5"
-    # (d) slip scale: all 3 m/s -> max(window speed 3, U_ref/3 = 3.44) (cap); W1 3 m/s -> door speed U_ref
-    #     (< window speed); closed -> floor
     from train_gnot import SLIP_MAX_RATIO
     Vs = torch.tensor([[3.0] * 8, [3.0] + [0.0] * 7, [0.0] * 8], device=device)
     s = slip_scale(Vs).squeeze(1).tolist()
     u = velocity_scale(Vs).squeeze(1).tolist()
-    # closed: min(U_ref, U_win) = 0 -> the cap U_ref/3 = 0.5/3 applies (irrelevant there: u = 0 exactly)
     assert abs(s[0] - max(3.0, u[0] / SLIP_MAX_RATIO)) < 1e-4 and abs(s[1] - u[1]) < 1e-4 \
         and abs(s[2] - max(V_REL_FLOOR, u[2] / SLIP_MAX_RATIO)) < 1e-6, f"slip_scale {s} (U_ref {u})"
     print(f"  CO2 window factor {'ON' if USE_CO2_WINDOW_FACTOR else 'OFF (v21)'}: |C| on open-window cores {c_open:.1e} "
@@ -528,14 +434,12 @@ def test_v21(device):
     import point_sampler as ps
     from train_gnot import (SINGLE_SCENARIO_V, NU_SCHEDULE, nu_at, NU, MAX_ITERS, physics_loss)
     from gnot_model import GNOTOperator
-    # (a) nu schedule: inclusive stage ends, ends at the physical NU, never increases
     for last, nu in NU_SCHEDULE:
         if last is not None:
             assert nu_at(last) == nu, f"nu_at({last}) = {nu_at(last)} != {nu} (stage end must be inclusive)"
     assert nu_at(MAX_ITERS) == NU and NU_SCHEDULE[-1][0] is None, "curriculum must end at the physical NU"
     nus = [nu_at(i) for i in range(0, MAX_ITERS + 1, 100)]
     assert all(a >= b for a, b in zip(nus, nus[1:])), "viscosity must not increase during training"
-    # (b) FIXED_V: every sampler returns exactly that V for every point; t, N stay random
     assert ps.FIXED_V is None, "point_sampler.FIXED_V must default to None (only main() sets it)"
     ps.FIXED_V = SINGLE_SCENARIO_V
     try:
@@ -553,23 +457,20 @@ def test_v21(device):
         ps.FIXED_V = None
     V_mix = ps.sample_interior(500, device)[4]
     assert (V_mix == 0).all(dim=1).any() and (V_mix > 0).all(dim=1).any(), "mix not restored after FIXED_V = None"
-    # (c) nu enters the momentum residual linearly: L(nu) is an exact quadratic in nu (tested with the
-    #     v22 B_p weighting OFF -- the weights depend on nu themselves; stage 0j tests the weighting)
     import train_gnot as tg
     torch.manual_seed(11)
     model = GNOTOperator().to(device)
     L = []
     w_flag, h_flag = tg.USE_BP_RESIDUAL_WEIGHT, tg.NS_PSEUDO_HUBER
-    tg.USE_BP_RESIDUAL_WEIGHT = tg.NS_PSEUDO_HUBER = False   # plain squared residual (quadratic in nu)
+    tg.USE_BP_RESIDUAL_WEIGHT = tg.NS_PSEUDO_HUBER = False
     try:
         for nu in (0.0, 0.05, 0.1, 0.01, None):
-            torch.manual_seed(3)          # same points every call
+            torch.manual_seed(3)
             L.append(physics_loss(model, device, nu=nu)[0].item() if nu is not None
                      else physics_loss(model, device)[0].item())
     finally:
         tg.USE_BP_RESIDUAL_WEIGHT, tg.NS_PSEUDO_HUBER = w_flag, h_flag
     L_default = L.pop()
-    # quadratic through (0, L0), (0.05, L1), (0.1, L2) evaluated at 0.01
     h = 0.05
     a, b = L[0], (4 * L[1] - L[2] - 3 * L[0]) / (2 * h)
     c = (L[2] - 2 * L[1] + L[0]) / (2 * h * h)
@@ -593,10 +494,6 @@ def test_v22(device):
     al = torch.full((n, 1), 0.55, device=device, dtype=dt)
     x = torch.rand(n, 1, device=device, dtype=dt) * (ROOM_X[1] - ROOM_X[0]) + ROOM_X[0]
     z = torch.rand(n, 1, device=device, dtype=dt) * ROOM_Z[1]
-    # (a) on the window wall (y = LY) and the door wall (y = 0) psi equals the sharp (v19-v21) psi, so the
-    #     NORMAL velocity v = -dpsi/dx there is unchanged (inflow / door outflow exact). The TANGENTIAL
-    #     u = dpsi/dy at the walls may change (door sheet smoothed inside the room) -- it was never exact
-    #     (soft no-slip / window tangential terms), so it is not tested here.
     d0 = d1 = 0.0
     for yv in (ROOM_Y[1], ROOM_Y[0]):
         xw = x.clone().requires_grad_(True)
@@ -606,15 +503,11 @@ def test_v22(device):
         d0 = max(d0, (ps_ - pl_).abs().max().item())
         d1 = max(d1, (torch.autograd.grad(ps_.sum(), xw)[0] - torch.autograd.grad(pl_.sum(), xw)[0]).abs().max().item())
     assert d0 < 1e-12 and d1 < 1e-9, f"psi / normal velocity on the window or door wall changed: {d0:.1e} / {d1:.1e}"
-    # (b) smooth cumulative profile: exactly 0 at x = 0 and exactly the total inflow at x = LX
     rt = tfl.ramp(t[:2])
     xe = torch.tensor([[ROOM_X[0]], [ROOM_X[1]]], device=device, dtype=dt)
     Fs = tfl._F_top_smooth(xe, V[:2], rt, tfl.JET_EDGE_W).squeeze(1).tolist()
     Fl = tfl._F_top(xe, V[:2], rt).squeeze(1).tolist()
     assert abs(Fs[0]) < 1e-12 and abs(Fs[1] - Fl[1]) < 1e-12, f"smooth F_top ends {Fs} vs sharp {Fl}"
-    # (c) mid-room (y = LY/2, beyond both blend zones): d2v/dx2 of v = -dpsi/dx far smaller than with the
-    #     sharp window AND door sheets (first run: window side alone gave only 1350 -> 220, the rest was
-    #     the door sheet -- hence the door-side smoothing)
     xm = x.clone().requires_grad_(True)
     ym = torch.full((n, 1), ROOM_Y[1] / 2, device=device, dtype=dt)
     lap = {}
@@ -636,7 +529,6 @@ def test_v22_weight(device):
     from gnot_model import GNOTOperator
     assert tg.NS_PSEUDO_HUBER and not tg.USE_BP_RESIDUAL_WEIGHT, "v23 expects Pseudo-Huber ON, B_p weighting OFF"
     dt = torch.float64
-    # (a) bp_velocity_laplacian against central finite differences of the B_p velocity (float64)
     torch.manual_seed(4)
     n = 16
     x = torch.rand(n, 1, dtype=dt, device=device) * 12 + 2
@@ -660,14 +552,11 @@ def test_v22_weight(device):
     err = ((fd - lap).abs().max() / lap.abs().max().clamp_min(1e-12)).item()
     assert err < 1e-3, f"lap(curl B_p) differs from finite differences by {err:.1e} (relative)"
     assert not lap.requires_grad, "bp_velocity_laplacian must be detached"
-    # float32 over the WHOLE room length (the log(cosh) version overflowed to NaN near the end walls)
     xs = torch.linspace(0.0, 15.53, 400, device=device).view(-1, 1)
     o = torch.ones_like(xs)
     lap32 = tfl.bp_velocity_laplacian(xs, 4.0 * o, 1.0 * o, 60.0 * o,
                                       torch.tensor([[1.0] + [0.0] * 7], device=device).expand(400, -1), 0.55 * o)
     assert torch.isfinite(lap32).all(), "lap(curl B_p) not finite in float32 somewhere along x"
-    # (b) v23 Pseudo-Huber: on the SAME points the logged raw loss equals the plain squared loss, and
-    #     2 (sqrt(1 + r2) - 1) <= r2 pointwise -> Huber loss <= plain loss, > 0
     torch.manual_seed(12)
     model = GNOTOperator().to(device)
     ps.FIXED_V = [1.0] + [0.0] * 7
@@ -697,7 +586,6 @@ def test_v23(device):
     u = tg.velocity_scale(Vs).squeeze(1).tolist()
     assert s[1] == 0.0, "correction scale must be exactly 0 with all windows closed"
     assert abs(max(s[0], 0.5) - u[0]) < 1e-6 and abs(s[2] - u[2]) < 1e-5, f"s {s} vs velocity_scale {u}"
-    # p = U_ref^2 * p_raw: force p_raw = 1 (zero last-layer row, bias 1) -> p = U_ref^2 at ANY t, incl. t = 0
     torch.manual_seed(0)
     model = gm.GNOTOperator().to(device)
     with torch.no_grad():
@@ -713,7 +601,6 @@ def test_v23(device):
                 _, _, _, _, p = model(x, y, z, torch.full((n, 1), tv, device=device), Vrow.expand(n, -1),
                                       torch.full((n, 1), 20.0, device=device))
             assert (p - ur ** 2).abs().max().item() < 1e-5 * ur ** 2, f"p {p[0].item()} != U_ref^2 {ur ** 2} at t={tv}"
-    # doors loss is (p / U_ref^2)^2 -> exactly 1 for p_raw = 1
     import point_sampler as ps
     ps.FIXED_V = [3.0] * 8
     try:
@@ -721,7 +608,6 @@ def test_v23(device):
     finally:
         ps.FIXED_V = None
     assert abs(Ld - 1.0) < 1e-5, f"doors loss {Ld} != 1 for p_raw = 1 (p not measured on the U_ref^2 scale)"
-    # v24: door split fixed -- alpha = potential-flow value even with a non-zero alpha_head
     from throughflow import alpha_potential
     assert not gm.LEARN_ALPHA, "v24 expects LEARN_ALPHA = False"
     with torch.no_grad():
@@ -743,7 +629,6 @@ def test_v25(device):
     assert nu_ == n - int(round(n * ps.SOURCE_SAMPLE_FRAC)) and 0 < nu_ < n
     torch.manual_seed(1)
     x, y, z, t, V, N = ps.sample_interior(n, device)
-    # uniform rows: x-spread ~ LX/sqrt(12) = 4.48 m; source rows ~ source std (1.25 m): distinguishable
     sx_u, sx_s = x[:nu_].std().item(), x[nu_:].std().item()
     assert 3.8 < sx_u < 5.2 and sx_s < 2.5, f"row order broken: x std uniform part {sx_u:.2f}, source part {sx_s:.2f}"
     from gnot_model import GNOTOperator
@@ -765,33 +650,23 @@ def test_nondim(device):
     model = GNOTOperator().to(device)
     n = 64
 
-    # (a) SATURATION: the root cause found for v1-v6 was raw t (up to 120 s) and
-    # raw N_people (up to 50) saturating ~75-90% of the first tanh layer's
-    # units. At the EXTREME ends of the input ranges, far fewer units should
-    # be saturated now. Measured on the actual first Linear layers via hooks.
     pre = {}
     h1 = model.query_encoder.proj[0].register_forward_hook(lambda m, i, o: pre.__setitem__("query", o.detach()))
     h2 = model.token_encoder.proj[0].register_forward_hook(lambda m, i, o: pre.__setitem__("token", o.detach()))
     x = (torch.rand(n, 1, device=device) * (ROOM_X[1] - ROOM_X[0])).requires_grad_(True)
     y = (torch.rand(n, 1, device=device) * (ROOM_Y[1] - ROOM_Y[0])).requires_grad_(True)
     z = (torch.rand(n, 1, device=device) * (ROOM_Z[1] - ROOM_Z[0])).requires_grad_(True)
-    t = torch.full((n, 1), T_MAX, device=device)                  # worst case: t = 120 s
-    V = torch.full((n, NUM_WINDOWS), V_MAX, device=device)        # worst case: all windows at 5 m/s
-    N_people = torch.full((n, 1), N_PEOPLE_MAX, device=device)    # worst case: 50 people
+    t = torch.full((n, 1), T_MAX, device=device)
+    V = torch.full((n, NUM_WINDOWS), V_MAX, device=device)
+    N_people = torch.full((n, 1), N_PEOPLE_MAX, device=device)
     model(x, y, z, t, V, N_people)
     h1.remove(); h2.remove()
-    # "saturated" = tanh'(pre) = 1 - tanh^2 < 0.05, the same criterion used to
-    # measure the 75-88% (t) / 82-91% (N_people) saturation in the old model.
-    # This is what actually verifies that the input SCALING is applied: with
-    # raw t=120 / N=50 these fractions were ~88% / ~91%; scaled, ~0%.
     def sat(p):
         return ((1 - torch.tanh(p) ** 2) < 0.05).float().mean().item()
     sat_q = sat(pre["query"])
-    tok = pre["token"]                 # (B, 11, D): 8 windows, 2 doors, 1 occupancy
+    tok = pre["token"]
     sat_win = sat(tok[:, :NUM_WINDOWS])
-    sat_occ = sat(tok[:, -1])          # occupancy token -- since v12 it always carries the
-    # CONSTANT value N_MAX/N_MAX = 1 (N enters only via the linear C factor), so this
-    # just checks that constant token isn't saturated; N-independence is tested in (g).
+    sat_occ = sat(tok[:, -1])
     print(f"  saturated first-layer units at t={T_MAX:.0f}s: {sat_q * 100:.1f}% (was ~88% before v8); "
           f"window tokens at V={V_MAX}: {sat_win * 100:.1f}%; constant occupancy token: "
           f"{sat_occ * 100:.1f}% (raw N=50 was ~91% before v8)")
@@ -799,30 +674,16 @@ def test_nondim(device):
     assert sat_win < 0.10, f"window tokens {sat_win:.2%} saturated -- V/position scaling not applied?"
     assert sat_occ < 0.10, f"occupancy token {sat_occ:.2%} saturated"
     in_dim = model.query_encoder.proj[0].in_features
-    expected_in = 2 * model.query_encoder.fourier.n_freq + 3  # fourier + t_hat + ramp + proximity
+    expected_in = 2 * model.query_encoder.fourier.n_freq + 3
     assert in_dim == expected_in, f"query encoder input dim {in_dim}, expected {expected_in} (ramp feature missing?)"
 
-    # (b) THE ACTUAL TRAINING LOSS is scaled. FIX (found by audit): an earlier
-    # version of this stage compared autograd dC/dt against a finite
-    # difference through the SAME model -- which always agrees whatever scaling
-    # is inside, so it proved nothing. Instead: force the model's CO2 output to
-    # be exactly zero everywhere (zero the C row of the final layer), which
-    # makes dc/dt = grad c = lap c = 0, so physics_loss's CO2 term must equal
-    # the trivial floor mean((S/S_REF)^2) ~ 0.09. If the /S_REF were missing in
-    # physics_loss this would read ~3e-6; if applied twice, thousands.
     from train_gnot import physics_loss
     zero_c = GNOTOperator().to(device)
     with torch.no_grad():
         zero_c.out_head[-1].weight[3].zero_()
         zero_c.out_head[-1].bias[3].zero_()
     _, co2_zero = physics_loss(zero_c, device)
-    # expected trivial floor (numpy, same sampling): 0.093 with N ~ U[0,50];
-    # 0.279 (= 3x) since v13 evaluates CO2 losses at N = N_MAX. Using the wrong one
-    # would mean CO2_LOSS_AT_FULL_OCCUPANCY isn't wired into physics_loss.
     from train_gnot import CO2_LOSS_AT_FULL_OCCUPANCY
-    # the trivial floor depends on WHERE points are sampled too (numpy estimates):
-    #   source-concentrated (SOURCE_SAMPLE_FRAC=0.6): 0.279 at N_MAX, 0.093 with N~U[0,50]
-    #   uniform (SOURCE_SAMPLE_FRAC=0, v14):           0.0527 at N_MAX
     from point_sampler import SOURCE_SAMPLE_FRAC as _ssf
     if _ssf == 0:
         floor_expected = 0.0527 if CO2_LOSS_AT_FULL_OCCUPANCY else 0.0527 / 3
@@ -837,49 +698,34 @@ def test_nondim(device):
         f"physics_loss CO2 term is {co2_zero.item():.3e} for a zero CO2 field -- expected ~{floor_expected:.3f}. "
         f"The /S_REF scaling in physics_loss is missing or wrong."
     )
-    # (b2) OUTPUT SCALING (found by audit: nothing else checks it). Force the
-    # raw CO2 output C_hat to exactly 1 everywhere (zero weights, bias 1); the
-    # model must then return the physical value C = C_REF * 1.
     from point_sampler import C_REF
     with torch.no_grad():
         zero_c.out_head[-1].bias[3].fill_(1.0)
         _, _, _, C_one, _ = zero_c(x.detach(), y.detach(), z.detach(),
                                    torch.full((n, 1), 60.0, device=device), V, N_people)
-    # v10: C = C_REF * (t/T_MAX) * C_hat, so at t=60 s and C_hat=1 expect C_REF*60/T_MAX
-    # v12: ... * (N/N_MAX) as well; this call uses N = N_PEOPLE_MAX, so that factor is 1
-    c_expected = C_REF * 60.0 / T_MAX * (N_people[0, 0].item() / N_PEOPLE_MAX)  # plain float (printed with :.4f below)
-    # v20: C also carries the CO2 window factor omega (= 1 away from open windows, -> 0 on them)
+    c_expected = C_REF * 60.0 / T_MAX * (N_people[0, 0].item() / N_PEOPLE_MAX)
     from throughflow import co2_window_factor
     from gnot_model import USE_CO2_WINDOW_FACTOR
-    omega = co2_window_factor(x.detach(), y.detach(), V) if USE_CO2_WINDOW_FACTOR else 1.0   # v21: OFF
+    omega = co2_window_factor(x.detach(), y.detach(), V) if USE_CO2_WINDOW_FACTOR else 1.0
     max_dev = (C_one - c_expected * omega).abs().max().item()
     print(f"  output scaling: C_hat=1, t=60s -> C={C_one.mean().item():.4f} (expected C_REF*60/T_MAX={c_expected:.4f})")
     assert max_dev < 1e-5, f"C deviates from C_REF*t/T_MAX*omega by {max_dev:.2e} -- output scaling wrong"
 
-    # (b3) v9 CO2 BOUNDARY CONDITIONS. A spatially CONSTANT CO2 field (still
-    # zero_c, now C = C_REF everywhere) has dc/dn = 0 on every boundary, so the
-    # no-flux/outflow loss must be exactly 0 -- a nonzero value would mean the
-    # term is picking up something other than the normal gradient.
     from train_gnot import co2_boundary_loss, _planar_wall_normal_derivative
     from point_sampler import sample_walls
     bc_const = co2_boundary_loss(zero_c, device, 1.0).item()
     print(f"  CO2 boundary loss for a constant CO2 field: {bc_const:.2e} (expected exactly 0)")
     assert bc_const < 1e-12, f"CO2 boundary loss is {bc_const:.2e} for a constant field -- should be 0"
-    # every planar wall point must be recognised as lying on one of the 6 faces
-    # (the normal axis is inferred by exact coordinate equality)
     xw, yw, zw, _, _, _ = sample_walls(600, device)
     _, on_face = _planar_wall_normal_derivative(xw, yw, zw, xw, yw, zw)
     frac_on = on_face.float().mean().item()
     print(f"  wall points assigned to a face: {frac_on * 100:.1f}% (expected 100%)")
     assert frac_on == 1.0, f"only {frac_on:.3%} of wall points matched a face -- normal selection broken"
-    # and for the untrained random model the term must be finite and non-zero
     bc_rand = co2_boundary_loss(model, device, 1.0).item()
     assert bc_rand == bc_rand and 0 < bc_rand < float("inf"), f"CO2 boundary loss not finite/positive: {bc_rand}"
     print(f"  CO2 boundary loss for the random-init model: {bc_rand:.4f} (finite, > 0)")
     del zero_c
 
-    # (d) CHECKPOINT GUARD: v5 (unscaled) and v8 (scaled, but no zero-flow
-    # constraint) checkpoints must both be refused; the live format accepted.
     from gnot_model import MODEL_FORMAT_KEY, MODEL_FORMAT
     for old in ({"version": "v5_closed_window_fix"}, {"version": "v8_nondim", "nondim": True},
                 {"version": "v9_zeroflow_bc", "nondim": True, "model_format": "v9_zeroflow"},
@@ -898,10 +744,6 @@ def test_nondim(device):
     check_checkpoint_compat({"version": "v9", "nondim": True, MODEL_FORMAT_KEY: MODEL_FORMAT}, "fake_new.pth")
     print(f"  checkpoint guard: rejects v5, v8, v9, v10, v12-v18 and v19-v23, accepts {MODEL_FORMAT} -- OK")
 
-    # (e) v9 HARD ZERO-FLOW: with all windows closed the velocity must be
-    # EXACTLY zero by construction (the loophole v8 exploited: a spurious slow
-    # flow balancing the CO2 source by convection), and clearly non-zero with
-    # windows open. Checked through the real curl path used in training.
     xe = (torch.rand(n, 1, device=device) * (ROOM_X[1] - ROOM_X[0])).requires_grad_(True)
     ye = (torch.rand(n, 1, device=device) * (ROOM_Y[1] - ROOM_Y[0])).requires_grad_(True)
     ze = (torch.rand(n, 1, device=device) * (ROOM_Z[1] - ROOM_Z[0])).requires_grad_(True)
@@ -918,8 +760,6 @@ def test_nondim(device):
     assert speeds["closed"] == 0.0, f"closed-window speed {speeds['closed']:.2e} is not exactly 0"
     assert speeds["open"] > 1e-6, "open-window speed is ~0 -- the s(V) factor is suppressing all flow"
 
-    # (f) v10 HARD INITIAL CONDITION: C(t=0) must be exactly 0 for ANY weights
-    # (v9 had a -0.039 offset there), and non-zero for t > 0.
     V_mix = torch.rand(n, NUM_WINDOWS, device=device) * V_MAX
     with torch.no_grad():
         _, _, _, C_t0, _ = model(xe, ye, ze, torch.zeros(n, 1, device=device), V_mix, Ne)
@@ -929,8 +769,6 @@ def test_nondim(device):
     assert C_t0.abs().max().item() == 0.0, "C(t=0) is not exactly 0 -- hard IC not applied"
     assert C_t60.abs().max().item() > 0.0, "C(t=60) is exactly 0 -- CO2 output is dead"
 
-    # (g) v12 EXACT LINEARITY IN OCCUPANCY: C must be exactly 0 for an empty room
-    # and exactly double when N doubles (same x, t, V), for ANY weights.
     t60 = torch.full((n, 1), 60.0, device=device)
     with torch.no_grad():
         _, _, _, C_n0, _ = model(xe, ye, ze, t60, V_mix, torch.zeros(n, 1, device=device))
@@ -941,7 +779,6 @@ def test_nondim(device):
           f"relative |C(20) - 2*C(10)| = {lin_dev:.2e} (must be ~0)")
     assert C_n0.abs().max().item() == 0.0, "C is not exactly 0 for an empty room"
     assert lin_dev < 1e-5, f"C does not scale linearly with N (rel. deviation {lin_dev:.2e})"
-    # ...and the FLOW must not depend on N at all (no buoyancy term in this model)
     A_10 = model(xe, ye, ze, t60, V_mix, torch.full((n, 1), 10.0, device=device))
     A_20 = model(xe, ye, ze, t60, V_mix, torch.full((n, 1), 20.0, device=device))
     u10 = model.velocity_from_potential(A_10[0], A_10[1], A_10[2], xe, ye, ze)
@@ -950,8 +787,6 @@ def test_nondim(device):
     flow_scale = max(q.abs().max().item() for q in u10 + (A_10[4],))
     print(f"  flow independent of N: max |(u,v,w,p)(N=10) - (u,v,w,p)(N=20)| = {flow_dev:.2e} "
           f"(flow scale {flow_scale:.2e}; must be ~0)")
-    # tolerance, not exact equality: identical inputs can still differ in the last bits
-    # between two GPU autograd passes; a real N leak shows up at ~1e-3 relative
     assert flow_dev <= 1e-6 * flow_scale + 1e-12, f"velocity/pressure change with N by {flow_dev:.2e} -- N leaks into the network"
 
 
@@ -966,7 +801,6 @@ def test_fourier_features(device):
     assert out.shape == (n, expected_dim), f"expected shape ({n},{expected_dim}), got {tuple(out.shape)}"
     assert_finite(out, "FourierFeatures output")
 
-    # first + second derivative w.r.t. coords must exist and be finite
     loss = out.sum()
     grad1 = torch.autograd.grad(loss, coords, create_graph=True)[0]
     assert_finite(grad1, "1st derivative of FourierFeatures output")
@@ -987,12 +821,9 @@ def test_query_encoder(device):
     z = torch.randn(n, 1, device=device, requires_grad=True)
     t = torch.rand(n, 1, device=device, requires_grad=True) * 120.0
     out = qe(x, y, z, t)
-    # FIX (found by audit): import D_MODEL instead of hardcoding 128, so this
-    # doesn't false-fail if D_MODEL is ever changed in gnot_model.py.
     assert out.shape == (n, D_MODEL), f"expected ({n},{D_MODEL}), got {tuple(out.shape)}"
     assert_finite(out, "QueryEncoder output")
 
-    # sanity-check source_proximity directly (recompute the same way QueryEncoder does)
     dist_sq = (x - qe._SOURCE_X) ** 2 + (y - qe._SOURCE_Y) ** 2 + (z - qe._SOURCE_Z) ** 2
     prox = torch.exp(-dist_sq / qe._sigma2)
     assert (prox > 0).all() and (prox <= 1.0).all(), "source_proximity out of expected (0,1] range"
@@ -1041,9 +872,6 @@ def test_curl_trick(device, model_and_inputs):
     dw_dz = torch.autograd.grad(w.sum(), z, create_graph=True, retain_graph=True)[0]
     divergence = du_dx + dv_dy + dw_dz
     max_div = divergence.abs().max().item()
-    # should be ~0 up to float32 numerical error (curl of any vector potential
-    # is exactly divergence-free analytically -- this checks the IMPLEMENTATION
-    # matches the math, not just that it runs)
     assert max_div < 1e-3, f"divergence not near-zero: max|div|={max_div:.6f} (curl trick may be broken)"
     print(f"  max|div(u,v,w)| = {max_div:.2e} (should be ~1e-6 to 1e-4, float32 noise)")
 
@@ -1089,7 +917,7 @@ def test_boundary_losses(device):
 
 
 def _training_step(model, params, optimizer, device):
-    """One iteration exactly as train_gnot.main() does it."""
+    """One training iteration, exactly as in train_gnot.main()."""
     from train_gnot import (
         physics_loss, walls_loss, windows_loss, doors_loss, ic_loss,
         compute_param_grads, GRAD_CLIP_MAX_NORM,
@@ -1111,13 +939,13 @@ def _training_step(model, params, optimizer, device):
         p.grad = total_grad.clone() if p.grad is None else p.grad + total_grad
 
     from train_gnot import WALLS_WEIGHT, SKIP_IC_LOSS
-    (WALLS_WEIGHT * walls_loss(model, device)).backward()      # v23: weighted as in main()
+    (WALLS_WEIGHT * walls_loss(model, device)).backward()
     windows_loss(model, device, co2_weight).backward()
     doors_loss(model, device).backward()
-    if not SKIP_IC_LOSS:                                         # v23: skipped in main() (identically 0)
+    if not SKIP_IC_LOSS:
         ic_loss(model, device, co2_weight).backward()
     from train_gnot import co2_boundary_loss
-    co2_boundary_loss(model, device, co2_weight).backward()  # v9: mirrors train_gnot.main()
+    co2_boundary_loss(model, device, co2_weight).backward()
 
     torch.nn.utils.clip_grad_norm_(params, GRAD_CLIP_MAX_NORM)
     optimizer.step()
@@ -1125,9 +953,7 @@ def _training_step(model, params, optimizer, device):
 
 @stage("6. Full combined training steps (configured optimizer) -- weights change, state finite, resumable")
 def test_one_training_step(device):
-    """v15: uses the CONFIGURED optimizer (train_gnot.make_optimizer). SOAP's first
-    step only initialises its preconditioner and leaves the weights unchanged
-    (by design, soap.py), so 3 steps are run and the weights checked after them."""
+    """One full training step with the configured optimiser."""
     import io
     from train_gnot import make_optimizer, OPTIMIZER
     from gnot_model import GNOTOperator
@@ -1144,7 +970,7 @@ def test_one_training_step(device):
     for p in params:
         assert_finite(p.detach(), "a model parameter after optimizer.step()")
     n_state = 0
-    for st in optimizer.state.values():   # moments (+ SOAP's preconditioner matrices) finite
+    for st in optimizer.state.values():
         for v in st.values():
             for t in (v if isinstance(v, list) else [v]):
                 if torch.is_tensor(t):
@@ -1153,7 +979,6 @@ def test_one_training_step(device):
     print(f"  optimizer={OPTIMIZER}: {n_changed}/{len(params)} parameter tensors changed after 3 steps "
           f"(expected: all of them); {n_state} state tensors finite")
 
-    # checkpoint round trip: save the optimizer state, load into a fresh optimizer, keep training
     buf = io.BytesIO()
     torch.save(optimizer.state_dict(), buf)
     buf.seek(0)
@@ -1166,7 +991,7 @@ def test_one_training_step(device):
 
 
 def _check_decay_schedule(lr_at, LR, LR_MIN, LR_DECAY_START, MAX_ITERS):
-    """Constant LR up to the decay start, monotone cosine, exact endpoints/midpoint."""
+    """Checks the learning-rate schedule (constant, then cosine decay)."""
     assert lr_at(0) == LR and lr_at(LR_DECAY_START) == LR, "LR must be constant before LR_DECAY_START"
     assert abs(lr_at(MAX_ITERS) - LR_MIN) < 1e-15, f"final LR {lr_at(MAX_ITERS)} != LR_MIN {LR_MIN}"
     vals = [lr_at(i) for i in range(LR_DECAY_START, MAX_ITERS + 1, 50)]
@@ -1181,7 +1006,7 @@ def test_lr_schedule_and_resume(device):
     import os
     from train_gnot import lr_at, LR, LR_MIN, LR_DECAY_START, MAX_ITERS, RESUME_FROM, HERE, LR_EXP_DECAY
     from gnot_model import GNOTOperator, check_checkpoint_compat
-    if LR_EXP_DECAY is not None:  # v21: exponential decay (Expert's Guide)
+    if LR_EXP_DECAY is not None:
         rate, steps = LR_EXP_DECAY
         assert lr_at(0) == LR, f"lr_at(0) = {lr_at(0)} != LR"
         assert abs(lr_at(steps) - LR * rate) < 1e-15 and abs(lr_at(10 * steps) - LR * rate ** 10) < 1e-15, \
@@ -1191,13 +1016,12 @@ def test_lr_schedule_and_resume(device):
         assert lr_at(MAX_ITERS) > 1e-6, f"final LR {lr_at(MAX_ITERS):.1e} is below 1e-6 (training would freeze)"
         print(f"  LR: {LR:g} * {rate}**(it/{steps}): {lr_at(10000):.2e} at 10k, {lr_at(20000):.2e} at 20k, "
               f"{lr_at(MAX_ITERS):.2e} at {MAX_ITERS}")
-    elif LR_DECAY_START is None:  # constant-LR configuration
+    elif LR_DECAY_START is None:
         assert all(lr_at(i) == LR for i in range(0, MAX_ITERS + 1, 500)), "LR should be constant"
         print(f"  LR: constant {LR:g} for all {MAX_ITERS} iterations (LR_DECAY_START=None)")
     else:
         _check_decay_schedule(lr_at, LR, LR_MIN, LR_DECAY_START, MAX_ITERS)
 
-    # resume path: the exact load sequence train_gnot.main() will perform
     if RESUME_FROM is None:
         print("  RESUME_FROM is None -- fresh run, nothing to resume")
         return

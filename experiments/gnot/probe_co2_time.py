@@ -1,23 +1,5 @@
 """
-CO2 TIME-SERIES probe (v8 onward): is the network learning the right CO2
-GROWTH but sitting on a wrong OFFSET?
-
-Why: the interior CO2 equation only constrains how C CHANGES (dc/dt,
-gradients, Laplacian) -- adding a constant offset to the whole field costs
-nothing there. The absolute level is pinned only by c=0 at t=0 (initial
-condition) and c=0 at the windows, both SOFT penalties. v8 at iter 5000 gave
-C(source, t=60) ~ 0.02 vs the expected ~0.138, plus negative CO2 values --
-consistent with "correct growth on top of a negative starting offset", but
-also with "growth itself too slow". This script tells the two apart.
-
-Scenario: all 8 windows closed (V=0), N_people=20, breathing height z=1.10 m.
-Closed room, so no convection; diffusion only spreads CO2 by
-sqrt(D*t) ~ 0.8 m over 120 s, small next to the source width sigma=2.5 m, so
-the physically expected value is approximately
-    C_expected(x, t) ~ N * E * t * exp(-dist^2 / sigma^2).
-
-Usage:
-    python3 probe_co2_time.py <checkpoint> [<checkpoint> ...]
+Probe: does the network learn the right CO2 growth over time, or only with a wrong offset?
 """
 import sys
 import numpy as np
@@ -30,7 +12,7 @@ from point_sampler import (NUM_WINDOWS, BREATHING_HEIGHT, ROOM_X, ROOM_Y, COLUMN
 N_PEOPLE = 20.0
 TIMES = [0.0, 10.0, 30.0, 60.0, 90.0, 120.0]
 SX, SY = (ROOM_X[0] + ROOM_X[1]) / 2, (ROOM_Y[0] + ROOM_Y[1]) / 2
-PROBES = {  # name: (x, y) at breathing height
+PROBES = {
     "source (7.76,4.58)": (SX, SY),
     "2.5 m east of source": (SX + 2.5, SY),
     "far corner (1.0,1.0)": (1.0, 1.0),
@@ -38,7 +20,7 @@ PROBES = {  # name: (x, y) at breathing height
 
 
 def eval_C(model, x, y, t, device):
-    """C at arrays x, y (breathing height), time t, closed windows, N=20."""
+    """CO2 at points on the breathing plane (closed windows, 20 people)."""
     n = len(x)
     xt = torch.tensor(np.asarray(x), dtype=torch.float32, device=device).view(-1, 1)
     yt = torch.tensor(np.asarray(y), dtype=torch.float32, device=device).view(-1, 1)
@@ -70,7 +52,6 @@ def main():
         model.eval()
         print(f"\n=== {path} (iter={ckpt.get('iter', '?')}) -- closed windows, N=20, z=1.10 m ===")
 
-        # (1) time series at a few fixed points
         print(f"{'point':24s} " + " ".join(f"t={t:>4.0f}s" for t in TIMES))
         for name, (px, py) in PROBES.items():
             vals = [eval_C(model, [px], [py], t, device)[0] for t in TIMES]
@@ -78,8 +59,6 @@ def main():
             print(f"{name:24s} " + " ".join(f"{v:+7.4f}" for v in vals) + "   <- predicted")
             print(f"{'':24s} " + " ".join(f"{e:+7.4f}" for e in exps) + "   <- expected")
 
-        # (2) growth field C(60) - C(0) on a 40x40 grid: removes any constant
-        # offset, so this shows whether the SHAPE and GROWTH are right
         xs = np.linspace(ROOM_X[0] + 0.1, ROOM_X[1] - 0.1, 40)
         ys = np.linspace(ROOM_Y[0] + 0.1, ROOM_Y[1] - 0.1, 40)
         Xg, Yg = np.meshgrid(xs, ys, indexing="ij")
@@ -101,9 +80,6 @@ def main():
         print(f"growth C(60)-C(0): min {gmin:+.4f}  max {gmax:+.4f}  "
               f"(expected max ~{expected([SX], [SY], 60.0)[0]:.3f} at the source, ~0 far away)")
         print(f"growth peak at (x,y)=({xs[pi]:.2f}, {ys[pj]:.2f}); true source ({SX:.2f}, {SY:.2f})")
-        # expected counts computed from the exact Gaussian on this same grid:
-        # half-max full width = 2*sigma*sqrt(ln 2) = 4.16 m -> 18 cells along y
-        # (0.23 m spacing), 10 cells along x (0.39 m spacing)
         print(f"growth above half-max: along y {np.sum(G[pi, :] > half)}/40, along x {np.sum(G[:, pj] > half)}/40 "
               f"(physically expected for sigma=2.5 m: 18/40 along y, 10/40 along x)")
 

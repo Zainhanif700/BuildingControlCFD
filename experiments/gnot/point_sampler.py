@@ -1,46 +1,23 @@
 """
-Point sampler for GNOT training on the REAL room geometry.
-
-All numbers below were measured directly from the STL files in
-experiments/gnot/geometry/ (see geometry/inspect_geometry.py and
-geometry/floor_plan.py for how they were extracted and verified):
-
-  Room box:      x in [0, 15.53] m, y in [0, 9.16] m, z in [0, 3.15] m
-  2 doors:       on the y=0 wall (outlet, p=0), floor to 2.11m high
-  8 windows:     on the y=9.16 wall (inflow, one V_k each), floor to ceiling
-  4 columns:     free-standing cylinders, floor to ceiling, radius ~0.285m
-
-This mirrors exactly what Alexander's train_parametric_multi_window_tanh.py
-does (same room, same 8 independent window velocities V1..V8, same 4
-columns excluded from the interior), just reimplemented here in PyTorch
-for GNOT instead of PhysicsNeMo.
+Room geometry (measured from the STL files) and the random training points for the physics-only model.
 """
 import math
 
 import torch
 import numpy as np
 
-# ---------------------------------------------------------------------------
-# Real, fixed room facts (measured from STL geometry -- never change these)
-# ---------------------------------------------------------------------------
 ROOM_X = (0.0, 15.53)
 ROOM_Y = (0.0, 9.16)
 ROOM_Z = (0.0, 3.15)
 
-# CO2 source spatial spread + height (matches Alexander's config exactly --
-# see train_gnot.py's physics constants). Lives here, not duplicated in
-# gnot_model.py or train_gnot.py, since both already import from this file --
-# a second hardcoded copy would risk silently drifting out of sync.
 CO2_SOURCE_SIGMA = 2.5
 BREATHING_HEIGHT = 1.10
 
-# (x_lo, x_hi, z_lo, z_hi) on the y = ROOM_Y[0] wall
 DOORS = [
     (1.59, 2.65, 0.0, 2.11),
     (12.32, 13.38, 0.0, 2.11),
 ]
 
-# (x_lo, x_hi, z_lo, z_hi) on the y = ROOM_Y[1] wall -- one per V_k, k=0..7
 WINDOWS = [
     (2.09, 2.70, 0.0, 3.15),
     (4.11, 4.72, 0.0, 3.15),
@@ -53,7 +30,6 @@ WINDOWS = [
 ]
 NUM_WINDOWS = len(WINDOWS)
 
-# (cx, cy, radius, z_lo, z_hi) -- free-standing floor-to-ceiling columns
 COLUMNS = [
     (13.85, 8.44, 0.285, 0.0, 3.15),
     (5.74, 0.45, 0.285, 0.0, 3.15),
@@ -61,44 +37,16 @@ COLUMNS = [
     (13.83, 0.35, 0.285, 0.0, 3.15),
 ]
 
-# Scenario ranges we sweep during physics-only training (made-up per iteration,
-# not real sensor data -- see V range = 0-5 m/s confirmed by Alexander)
 V_MIN, V_MAX = 0.0, 5.0
 N_PEOPLE_MIN, N_PEOPLE_MAX = 0.0, 50.0
 T_MIN, T_MAX = 0.0, 120.0
 
-# CO2 emission per person (matches Alexander's config). Moved here from
-# train_gnot.py (v8_nondim) so gnot_model.py can use it for output scaling
-# without a circular import -- same "single source of truth" reasoning as
-# CO2_SOURCE_SIGMA above.
 EMISSION_PER_PERSON = 1.15e-4
 
-# Window inflow ramp time constant (s): target inflow = V * tanh(3t/TAU_RAMP),
-# fully open within ~2 s. Moved here from train_gnot.py (v8_nondim) because
-# gnot_model.py now also uses it as an input feature -- see QueryEncoder.
 TAU_RAMP = 2.0
 
-# --- v8_nondim: reference scales for non-dimensionalization ---
-# ROOT CAUSE FOUND (v8): every run v1-v6 had the CO2 residual loss sitting
-# at ~3e-6 from iteration ~10 onward -- which is EXACTLY the loss a
-# constant (trivial, C=0) CO2 field gives: mean(S^2) over our own sampling
-# distribution = 3.08e-6 (computed numerically). The network never left the
-# trivial solution. Two scaling causes:
-#   (1) raw t (0-120 s) and raw N_people (0-50) fed straight into Linear ->
-#       Tanh layers saturate most units (measured: ~75% at t=60, ~88% at
-#       t=120; ~82% at N=25), so the network can barely represent CO2
-#       growing over time or scaling with occupancy. Velocity is unaffected
-#       because its inflow target saturates within ~2 s (tanh(3t/2)).
-#   (2) CO2 residuals are O(S_REF) ~ 6e-3, i.e. squared ~1e-5, while
-#       velocity residuals are O(1e-2..1e-1) -- a ~1e4 imbalance, which is
-#       also why the adaptive CO2 weight was always pinned at its ceiling.
-# Fix: standard non-dimensionalization, step 1 of Wang, Sankaran, Wang &
-# Perdikaris 2023, "An Expert's Guide to Training Physics-informed Neural
-# Networks" (arXiv:2308.08468): inputs and outputs scaled to O(1).
-S_REF = N_PEOPLE_MAX * EMISSION_PER_PERSON  # max source strength, 5.75e-3 per s
-C_REF = S_REF * T_MAX                        # upper bound on accumulated CO2, 0.69
-# (closed room, no diffusion: C <= S_max * t_max). Order-of-magnitude scale
-# only -- not a hard bound the network is clamped to.
+S_REF = N_PEOPLE_MAX * EMISSION_PER_PERSON
+C_REF = S_REF * T_MAX
 
 
 def _rand(n, lo, hi, device):
@@ -114,48 +62,12 @@ def _in_any_column(x, y):
     return inside
 
 
-# FIX #3 (from the original 3-step ranked plan -- "hard-constrain or oversample
-# the closed-window zero-velocity case"): the closed-window diagnostic
-# (all 8 windows at V=0) keeps showing non-trivial residual velocity (up to
-# ~0.3-0.6 m/s, the same order of magnitude as real forced airflow) even
-# though the TRUE physical solution for zero forcing + zero IC + no body
-# force term is exactly u=v=w=0 everywhere -- a case the network should be
-# able to learn trivially, but apparently doesn't generalize to correctly.
-#
-# ROOT CAUSE (distinct from, and more severe than, the CO2 spatial-sampling
-# problem): V has NUM_WINDOWS=8 independent dimensions, each sampled
-# uniformly in [V_MIN, V_MAX]. Under independent per-axis uniform sampling,
-# the probability that ALL 8 happen to be simultaneously near zero for the
-# same training point is roughly (epsilon/V_MAX)^8 for a small tolerance
-# epsilon -- astronomically small. Each individual window being near zero is
-# common on its own; the JOINT event "every window near zero at once" (what
-# the diagnostic actually tests) is a curse-of-dimensionality corner of an
-# 8-dimensional hypercube that plain independent uniform sampling almost
-# never reaches. So the network has essentially never been trained on
-# anything resembling the exact scenario the diagnostic evaluates.
-#
-# FIX: explicitly inject correlated all-closed and partially-closed scenarios
-# into training (mirroring the source-concentrated spatial sampling fix --
-# same idea, applied in "scenario space" instead of physical space), instead
-# of relying on independent per-axis randomness to occasionally produce one.
-CLOSED_SCENARIO_FRAC = 0.3  # fraction of points whose V is EXACTLY all-zero
-# (the exact scenario the closed-window diagnostic tests)
-PARTIAL_CLOSED_SCENARIO_FRAC = 0.2  # fraction where a random SUBSET of the 8
-# windows is zeroed (each window independently closed with 50% probability) --
-# covers the "some but not all windows closed" regime too, not just the two
-# extremes of "all open" (implicitly covered by uniform sampling) and
-# "all closed" (covered by CLOSED_SCENARIO_FRAC above).
-# Remaining 1 - 0.3 - 0.2 = 50% of points still use fully independent uniform
-# sampling, so general open-window training coverage is not reduced to zero.
+CLOSED_SCENARIO_FRAC = 0.3
+PARTIAL_CLOSED_SCENARIO_FRAC = 0.2
 
 
 def sample_scenario(n, device):
-    """Random (t, V1..V8, N_people) -- the made-up scenario values swept during
-    physics-only training, matching Alexander's 0-5 m/s / 0-50 people ranges.
-    A fraction of V configurations are deliberately all-closed or
-    partially-closed (see fix #3 comment above) instead of 100% independent
-    uniform, so the network actually sees the closed-window regime often
-    enough to learn it correctly."""
+    """Random scenario values (time, window speeds, number of people) for training."""
     t = _rand(n, T_MIN, T_MAX, device)
     N_people = _rand(n, N_PEOPLE_MIN, N_PEOPLE_MAX, device)
 
@@ -174,123 +86,31 @@ def sample_scenario(n, device):
         V_partial = V_partial * (~closed_mask).float()
         V_parts.append(V_partial)
     V = torch.cat(V_parts, dim=0)
-    # v16 BUG FIX: shuffle the scenario rows. V_parts is built in BLOCKS
-    # (uniform | all-closed | partial), and every sampler lays out its points in
-    # a FIXED spatial order (window 1..8, wall face by face, uniform-then-source
-    # interior points) -- so without this, each location always got the same
-    # scenario type. Found in v13 by check_physics_consistency.py +
-    # crosscheck_windows.py: windows 5-6 (and most of 7) only ever saw
-    # all-closed scenarios (never trained as open inflows); the x = ROOM_X[1]
-    # wall, most of the floor and column 3 never had no-slip enforced while air
-    # was flowing; far-field interior points only ever saw all-open scenarios,
-    # so the closed-room far field was never trained (where D1 found 91% of the
-    # closed-room error). Present since fix #3 (v4); affects v4-v15.
     V = V[torch.randperm(n, device=device)]
-    # v21: single-scenario mode -- every point gets the same window setting FIXED_V (t and
-    # N_people stay random). Default None = the scenario mix above. Set only by
-    # train_gnot.main() (from train_gnot.SINGLE_SCENARIO_V), so tests and checks that import this
-    # module keep the mix unless they set it themselves.
     if FIXED_V is not None:
         V = torch.tensor(FIXED_V, device=device, dtype=V.dtype).view(1, -1).expand(n, -1).clone()
 
     return t, V, N_people
 
 
-FIXED_V = None   # v21: list of NUM_WINDOWS speeds [m/s] -> single-scenario training (see sample_scenario)
+FIXED_V = None
 
 
-# Source location (room center at breathing height) -- used below for
-# source-concentrated sampling. Same formula gnot_model.py's QueryEncoder
-# computes independently for its source_proximity feature; not consolidated
-# into one import since both are just deriving from ROOM_X/ROOM_Y/
-# BREATHING_HEIGHT (already the single source of truth), so there's no
-# separate magic number here that could drift out of sync.
 SOURCE_X = (ROOM_X[0] + ROOM_X[1]) / 2
 SOURCE_Y = (ROOM_Y[0] + ROOM_Y[1]) / 2
 
-# FIX #2 (from the literature-grounded ranked plan -- Nabian et al. 2021,
-# "Efficient Training of PINNs via Importance Sampling"): with 100% uniform
-# interior sampling, very few of the POINTS_INTERIOR=1000 points per
-# iteration land near the small CO2 source (sigma=2.5m in a
-# ~15.5x9.16x3.15m room). Away from the source the source term S(x,y,z,t) is
-# essentially 0, so a trivial C~0 field already satisfies the PDE residual
-# there -- meaning most of the training signal each iteration pushes toward
-# "CO2 stays near zero everywhere," and only a small minority of points ever
-# see the region where the source term actually matters.
-#
-# DIAGNOSED DIRECTLY (not just theorized): after fix #1 (isotropic Fourier
-# features + source_proximity feature) plus correctly-working adaptive CO2
-# weighting, a partial training run (3000, then 10000 iterations) still
-# showed a CO2 field that stayed near-zero and slightly negative everywhere
-# -- no real bump structure at all. This is consistent with the network
-# simply not having seen enough near-source points yet, not with fix #1
-# being wrong.
-#
-# FIX: mix in a fraction of interior points drawn from a Gaussian centered
-# on the known source location instead of sampling 100% uniformly. This does
-# NOT change what's being trained against -- still the exact same PDE
-# residual, at whatever points get sampled -- it only changes WHERE points
-# are concentrated, giving the network many more per-iteration chances to
-# see the region the source term actually depends on.
-#
-# TUNING HISTORY (diagnosed directly via the closed-window diagnostic, not
-# just theorized): a first version used SOURCE_SAMPLE_FRAC=0.4 with the
-# concentrated points spread at std=CO2_SOURCE_SIGMA (2.5m, the source's own
-# physical width). After a 10,000-iteration partial run, CO2 was finally
-# POSITIVE (an improvement over fix #1 alone, which stayed near-zero/
-# negative), but still showed a room-wide band (elevated across 100% of the
-# x-range at one y-slice) and a very narrow dynamic range (~0.005-0.007) --
-# barely any real bump structure. Root cause: sampling with std=sigma still
-# spreads points over a wide ~2.5m-radius region -- most of them land
-# somewhere in "the source matters a bit here" territory, but few land close
-# enough to the actual peak to force the network to resolve its SHARP
-# curvature there. Fix: sample more points (higher frac) AND with a TIGHTER
-# spread (std=sigma/2), so a much larger share of the concentrated subset
-# clusters close to the true peak instead of merely somewhere within a few
-# sigma of it.
-SOURCE_SAMPLE_FRAC = 0.6  # v4b-v13 value; restored for v15 after v14's negative result.
-# v14 RESULT (negative): uniform sampling (0.0) improved the far field but
-# starved the source region -- plane L2 17.8% mean (v13: 15.9%), source error
-# -10 to -25% (v13: -5 to -7%), residual at the source -44% -> -20% of S over
-# time. Net worse, so 0.6 is back; v13 stays the reference.
-# HISTORY: 0.4 -> 0.6 were added in v4/v4b while CO2 was stuck on the trivial
-# C~0 solution. v8 found the real cause of that (missing non-dimensionalization)
-# and fixed it at the root, so the concentration is no longer needed -- and
-# diagnose_residual_map.py on v13 showed it now HURTS: the near-source region
-# (22% of the room plane) received 56% of the training CO2 loss but held only
-# 9% of the squared error, while the far field held 91% of the error with 44%
-# of the loss (a positive far-field residual = CO2 slowly 'created' where there
-# is no source). Uniform sampling makes the loss measure the room the same way
-# the error metric does (per unit volume). Uniform resampling every iteration
-# is also a strong baseline in Wu et al. 2023 (CMAME, arXiv:2207.10289).
-# (The v14 hypothesis above was tested and rejected -- see v14 RESULT.)
-SOURCE_SAMPLE_XY_STD = CO2_SOURCE_SIGMA / 2.0  # was CO2_SOURCE_SIGMA (2.5) --
-# halved so points cluster closer to the actual peak, not just somewhere
-# within the broader region where the source term is merely non-negligible.
+SOURCE_SAMPLE_FRAC = 0.6
+SOURCE_SAMPLE_XY_STD = CO2_SOURCE_SIGMA / 2.0
 
-# FIX (found by an earlier audit): using a z-spread as large as
-# CO2_SOURCE_SIGMA (or even SOURCE_SAMPLE_XY_STD) is a large fraction of the
-# room's entire height (3.15m) -- too much of it would fall outside [0, 3.15]
-# and get clamped exactly onto the floor or ceiling (a hard pile-up
-# artifact, not a smooth distribution near breathing height). X and Y don't
-# have this problem (room is 15.53m / 9.16m, both much larger than
-# SOURCE_SAMPLE_XY_STD, so clamping there stays negligible). Use a separate,
-# smaller z-spread instead, scaled to the room's actual height.
 SOURCE_SAMPLE_Z_STD = min(SOURCE_SAMPLE_XY_STD, (ROOM_Z[1] - ROOM_Z[0]) / 4.0)
 
 
 def _sample_near_source(n, device):
-    """Points drawn from an isotropic-in-(x,y) Gaussian centered on the CO2
-    source (z uses its own smaller spread -- see SOURCE_SAMPLE_Z_STD comment
-    above), REJECTING any that fall outside the room or inside a column.
-    v16 fix (audit): this used to CLAMP to the room bounds, which put the ~8%
-    of draws with z < 0 exactly ONTO the floor (~5% of all interior points,
-    a spurious pile-up on a no-slip wall). Rejection keeps a truncated
-    Gaussian instead."""
+    """Random points concentrated around the CO2 source."""
     pts = []
     remaining = n
     while remaining > 0:
-        batch = max(remaining * 2, 256)  # oversample since some get rejected
+        batch = max(remaining * 2, 256)
         x = torch.normal(SOURCE_X, SOURCE_SAMPLE_XY_STD, size=(batch, 1), device=device)
         y = torch.normal(SOURCE_Y, SOURCE_SAMPLE_XY_STD, size=(batch, 1), device=device)
         z = torch.normal(BREATHING_HEIGHT, SOURCE_SAMPLE_Z_STD, size=(batch, 1), device=device)
@@ -305,45 +125,11 @@ def _sample_near_source(n, device):
     return xyz[:, 0:1], xyz[:, 1:2], xyz[:, 2:3]
 
 
-# ---------------------------------------------------------------------------
-# STAGE 1 of the self-adaptive weighting + sampling upgrade (Chen, Howard &
-# Stinis, "Self-adaptive weighting and sampling for physics-informed neural
-# networks," arXiv:2511.05452, 2025). Context: v6_lr_decay and
-# v7_higher_co2_weight both worked with one GLOBAL scalar CO2 loss weight,
-# which either had to be capped at a value we invented ourselves (no
-# literature backing -- see train_gnot.py's CO2_WEIGHT_MAX comment) or left
-# CO2 undertrained. The cited paper instead uses a PER-POINT weight,
-# renormalized to mean=1 every update, so there's no ceiling to guess. But
-# per-point weights only make sense if a point is actually revisited across
-# iterations -- our original design resampled 100% of points fresh every
-# single iteration, so there was nothing for a per-point weight to track.
-#
-# STAGE 1 (this change): switch to a PERSISTENT POOL of n points per
-# (n, device), refreshing only a fraction of them periodically -- the cited
-# paper's own tested defaults for its adaptive-sampling component
-# (POOL_REFRESH_FRAC=0.2 of points, every POOL_REFRESH_EVERY=100 iterations).
-# This stage deliberately does NOT add per-point adaptive WEIGHTING yet
-# (planned as Stage 2, in train_gnot.py) -- the goal here is to validate in
-# isolation that switching from full per-iteration resampling to a mostly-
-# persistent pool doesn't itself regress training. This is a genuine risk
-# specific to this project: the cited paper's own benchmarks are all
-# non-parametric (one fixed PDE, one fixed set of boundary conditions), while
-# this project's network must generalize across many different window-
-# velocity/occupancy scenarios (see sample_scenario above) -- a concern the
-# paper's own experiments never tested. Validate this stage's health (no
-# regression vs. v5/v7's already-confirmed closed/open-window behavior)
-# before adding Stage 2 on top.
-USE_PERSISTENT_POOL = False  # v8_nondim: DISABLED -- the non-dimensionalization
-# fix (see S_REF/C_REF above) is being tested as a SINGLE-VARIABLE change
-# against v5's already-documented sampling behavior (100% fresh points every
-# iteration). The Stage 1 pool code is kept intact for later use (Stage 2
-# adaptive weighting would need it), just switched off. With this False,
-# sample_interior() behaves exactly as it did in v5.
-POOL_REFRESH_FRAC = 0.2    # fraction of the pool replaced at each refresh
-POOL_REFRESH_EVERY = 100   # refresh cadence, in calls to sample_interior()
-# (one call == one training iteration in train_gnot.py's main loop)
+USE_PERSISTENT_POOL = False
+POOL_REFRESH_FRAC = 0.2
+POOL_REFRESH_EVERY = 100
 
-_interior_pools = {}  # keyed by (n, device_str) -> dict of tensors + "calls"
+_interior_pools = {}
 
 
 def _sample_uniform_xyz(n, device):
@@ -353,7 +139,7 @@ def _sample_uniform_xyz(n, device):
     pts = []
     remaining = n
     while remaining > 0:
-        batch = max(remaining * 2, 256)  # oversample since some get rejected
+        batch = max(remaining * 2, 256)
         x = _rand(batch, *ROOM_X, device)
         y = _rand(batch, *ROOM_Y, device)
         z = _rand(batch, *ROOM_Z, device)
@@ -365,19 +151,15 @@ def _sample_uniform_xyz(n, device):
 
 
 def interior_uniform_count(n):
-    """v25: number of UNIFORMLY sampled points in an interior batch of n; they are the first rows
-    (train_gnot.physics_loss evaluates the NS residual on these only -- volume-weighted)."""
+    """Number of uniform points in an interior batch of n."""
     return n - int(round(n * SOURCE_SAMPLE_FRAC))
 
 
 def _generate_interior_batch(n, device):
-    """The actual point-generation logic (uniform + source-concentrated
-    spatial mixture, fix #2; plus scenario sampling, fix #3) -- factored out
-    of sample_interior() so both the initial pool build and each periodic
-    partial refresh below can reuse it identically."""
+    """Random interior points: a mix of uniform points and points near the source."""
     n_uniform = interior_uniform_count(n)
     n_source = n - n_uniform
-    xyz_uniform = _sample_uniform_xyz(n_uniform, device)   # v25: the FIRST n_uniform rows are uniform
+    xyz_uniform = _sample_uniform_xyz(n_uniform, device)
 
     if n_source > 0:
         xs, ys, zs = _sample_near_source(n_source, device)
@@ -391,28 +173,7 @@ def _generate_interior_batch(n, device):
 
 
 def interior_pool_composition(n, device="cpu"):
-    """DIAGNOSTIC ONLY -- read-only snapshot of the CURRENT persistent pool's
-    scenario/spatial composition for (n, device), without calling
-    sample_interior() (which would advance its call counter / potentially
-    trigger a refresh as a side effect of merely inspecting it).
-
-    WHY THIS EXISTS: an independent review of Stage 1 (persistent-pool
-    sampling, see module comment above) flagged a real, previously
-    unconsidered risk -- since points now persist for up to
-    POOL_REFRESH_EVERY-1 iterations instead of being re-randomized every
-    single iteration, a skewed random draw of scenario mixture (e.g. too many
-    closed-window points, or too few near-source points) could persist for a
-    long stretch instead of being averaged away immediately. That could
-    introduce a NEW low-frequency oscillation source layered on top of the
-    CO2 magnitude oscillation this project is already trying to diagnose --
-    confounding the investigation instead of isolating the resampling
-    change's own effect. This function lets a training script log the pool's
-    actual composition over time so that risk is directly OBSERVED, not just
-    hoped against.
-
-    Returns None if no pool exists yet for this (n, device) (i.e.
-    sample_interior hasn't been called with these args yet).
-    """
+    """Diagnostic: what the current point pool contains."""
     key = (n, str(device))
     pool = _interior_pools.get(key)
     if pool is None:
@@ -430,31 +191,14 @@ def interior_pool_composition(n, device="cpu"):
 
 
 def reset_interior_pools():
-    """Clears all persistent interior pools. Call this between independent
-    runs/tests (e.g. staged_smoke_test.py stages) so leftover pool state
-    from one doesn't leak into another."""
+    """Clears all persistent interior pools."""
     _interior_pools.clear()
 
 
 def sample_interior(n, device="cpu"):
-    """Random points inside the room, excluding the 4 columns (rejection
-    sampling). A fraction (SOURCE_SAMPLE_FRAC) is concentrated near the
-    known CO2 source location instead of uniform -- see fix #2 comment
-    above for why.
-
-    STAGE 1 persistent-pool version (see module comment above): maintains a
-    pool of exactly n points per (n, device) combination, refreshing only
-    POOL_REFRESH_FRAC of them every POOL_REFRESH_EVERY calls instead of
-    regenerating all n points every single call. The first call for a given
-    (n, device) still builds a full fresh pool via _generate_interior_batch,
-    so one-shot callers (tests, or training's very first iteration) see the
-    same distribution as the pre-Stage-1 code.
-
-    NOTE: since v16, sample_ic() no longer uses this function (IC points are
-    uniform, see sample_ic), so it does not share or advance this pool.
-    """
+    """Random points inside the room, excluding the 4 columns (rejection sampling)."""
     if not USE_PERSISTENT_POOL:
-        return _generate_interior_batch(n, device)  # v5 behavior: 100% fresh every call
+        return _generate_interior_batch(n, device)
 
     key = (n, str(device))
     pool = _interior_pools.get(key)
@@ -477,29 +221,13 @@ def sample_interior(n, device="cpu"):
                 pool["V"][idx] = new_V
                 pool["N_people"][idx] = new_N
 
-    # Return fresh, DETACHED leaf tensors each call. Callers (physics_loss,
-    # ic_loss, etc. in train_gnot.py) call .requires_grad_(True) on the
-    # returned x/y/z/t every iteration. Returning the pool's own stored
-    # tensors directly instead of a clone would (a) leave requires_grad=True
-    # permanently attached to the pool's storage, which then makes the
-    # in-place refresh assignment above ILLEGAL on the next refresh (PyTorch
-    # forbids in-place ops on a leaf tensor that requires grad), and (b) risk
-    # reusing a tensor still referenced by a previous iteration's autograd
-    # graph. clone().detach() avoids both.
     return (pool["x"].clone().detach(), pool["y"].clone().detach(),
             pool["z"].clone().detach(), pool["t"].clone().detach(),
             pool["V"].clone().detach(), pool["N_people"].clone().detach())
 
 
 def sample_walls(n, device="cpu"):
-    """No-slip points on the 6 planar room faces, EXCLUDING door/window cutouts
-    and the columns' footprints on floor and ceiling.
-
-    v16 fix (audit): points are now split in proportion to each face's NET
-    area, so the loss approximates a surface integral with uniform density.
-    Before, every face got n//6 points: the end walls (28.9 m^2) were sampled
-    ~5x denser than floor/ceiling (142 m^2), and floor/ceiling points inside
-    the column footprints (solid) were not rejected."""
+    """No-slip points on the walls, floor and ceiling, outside the openings and columns."""
     Lx, Ly, Lz = ROOM_X[1] - ROOM_X[0], ROOM_Y[1] - ROOM_Y[0], ROOM_Z[1] - ROOM_Z[0]
     col_area = sum(math.pi * r ** 2 for _, _, r, _, _ in COLUMNS)
 
@@ -509,7 +237,6 @@ def sample_walls(n, device="cpu"):
             bad = bad | ((x >= xlo) & (x <= xhi) & (z >= zlo) & (z <= zhi))
         return bad
 
-    # (net area, generator of candidate points (x, y, z), rejection mask function)
     faces = [
         (Lx * Lz - sum((a1 - a0) * (b1 - b0) for a0, a1, b0, b1 in DOORS),
          lambda m: (_rand(m, *ROOM_X, device), None, _rand(m, *ROOM_Z, device), ("y", ROOM_Y[0])),
@@ -528,7 +255,7 @@ def sample_walls(n, device="cpu"):
     ]
     areas = [f[0] for f in faces]
     total = sum(areas)
-    counts = [int(n * a / total) for a in areas]            # floor, then hand out the remainder
+    counts = [int(n * a / total) for a in areas]
     order = sorted(range(len(faces)), key=lambda i: n * areas[i] / total - counts[i], reverse=True)
     for i in order[: n - sum(counts)]:
         counts[i] += 1
@@ -561,15 +288,7 @@ def sample_walls(n, device="cpu"):
 
 
 def sample_columns_surface(n_per_column, device="cpu"):
-    """No-slip points on the 4 columns' curved (cylindrical) side surfaces.
-
-    FIX (found by audit): the 4 columns are solid floor-to-ceiling pillars,
-    so air must not flow through them -- but sample_interior() only ever
-    EXCLUDES points from inside the columns, it never adds points ON their
-    surface for a no-slip loss. Without this, nothing in training actually
-    stops the network from predicting flow straight through a column.
-    Parametrizes each cylinder's side wall by angle theta in [0, 2*pi) and
-    height z in [z_lo, z_hi]."""
+    """No-slip points on the 4 columns' curved (cylindrical) side surfaces."""
     all_x, all_y, all_z = [], [], []
     for cx, cy, r, zlo, zhi in COLUMNS:
         theta = _rand(n_per_column, 0.0, 2 * torch.pi, device)
@@ -597,9 +316,7 @@ def sample_doors(n, device="cpu"):
 
 
 def sample_windows(n_per_window, device="cpu"):
-    """Inflow points, split evenly across the 8 real windows. Each returned
-    point also carries WHICH window index it belongs to (window_idx), so the
-    training loop knows which of the 8 V_k values is its own inflow speed."""
+    """Inflow points, split evenly across the 8 real windows."""
     all_x, all_y, all_z, all_idx = [], [], [], []
     for k, (xlo, xhi, zlo, zhi) in enumerate(WINDOWS):
         x = _rand(n_per_window, xlo, xhi, device)
@@ -614,10 +331,7 @@ def sample_windows(n_per_window, device="cpu"):
 
 
 def sample_ic(n, device="cpu"):
-    """t=0, room at rest, everywhere inside the room (excluding columns).
-    v16 fix (audit): UNIFORM points. It used to reuse sample_interior's
-    source-concentrated mixture, so 60% of the IC points clustered around the
-    CO2 source although the initial condition holds in the whole room."""
+    """Initial-condition points (t = 0, room at rest), excluding the columns."""
     xyz = _sample_uniform_xyz(n, device)
     _, V, N_people = sample_scenario(n, device)
     x, y, z = xyz[:, 0:1], xyz[:, 1:2], xyz[:, 2:3]
@@ -626,7 +340,6 @@ def sample_ic(n, device="cpu"):
 
 
 if __name__ == "__main__":
-    # quick self-test
     device = "cpu"
     for name, fn, extra in [
         ("interior", sample_interior, (2000,)),

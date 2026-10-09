@@ -1,25 +1,5 @@
 """
-Presentation figures: what the trained GNOT predicts for several window settings.
-
-One trained model, no retraining per scenario -- each scenario is just a
-different input (window speeds V1..V8, occupancy N, time t). Figures:
-
-  1. scenario_overview.png -- one row per scenario:
-       (a) airflow at breathing height (colour = speed, lines = streamlines)
-       (b) CO2 at breathing height at the end of the horizon (shared colour scale)
-       (c) vertical cut through an open window (colour = speed, arrows = in-plane flow)
-  2. scenario_co2_timeseries.png -- CO2 at the source and room-average CO2 at
-     breathing height over time, for every scenario (the effect of ventilation).
-
-NOTE: only the closed-window case is validated against an independent reference
-(validate_closed_room.py). The open-window fields are model predictions,
-physics-consistent by construction (divergence-free flow, zero flow when closed),
-but not yet compared with CFD data.
-
-Usage:
-    python3 make_professor_figures.py [checkpoint] [--device cpu]
-default checkpoint: milestones/v13_fullocc/gnot_v13_fullocc_final.pth
-Writes figures/<version>/presentation/.
+Presentation figures of the trained physics-only model for several window settings.
 """
 import argparse
 import os
@@ -39,8 +19,8 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 DEFAULT_CKPT = os.path.join(HERE, "milestones", "v13_fullocc", "gnot_v13_fullocc_final.pth")
 
 N_PEOPLE = 20.0
-T_FLOW = 60.0      # s, flow snapshot (window ramp is complete after ~2 s)
-T_CO2 = T_MAX      # s, CO2 snapshot at the end of the horizon (120 s)
+T_FLOW = 60.0
+T_CO2 = T_MAX
 SCENARIOS = [
     ("all windows closed",           [0, 0, 0, 0, 0, 0, 0, 0]),
     ("W1 + W8 open, 2 m/s",          [2, 0, 0, 0, 0, 0, 0, 2]),
@@ -57,7 +37,7 @@ def in_any_column(x, y):
 
 
 def predict(model, device, xg, yg, zg, t, V, n_people, velocity=True, batch=1024):
-    """Model outputs at points (flat numpy arrays). Velocity needs autograd (curl trick)."""
+    """Model outputs at points (flat numpy arrays)."""
     xg, yg, zg = (np.broadcast_to(np.asarray(a, dtype=np.float32), np.shape(xg)).ravel() for a in (xg, yg, zg))
     out = {k: [] for k in ("u", "v", "w", "c")}
     for i in range(0, len(xg), batch):
@@ -93,12 +73,10 @@ def main():
     os.makedirs(out_dir, exist_ok=True)
     print(f"Checkpoint {args.checkpoint} (version={version}, iter={ckpt.get('iter', '?')}), N={N_PEOPLE:.0f}")
 
-    # horizontal plane at breathing height
     xs = np.linspace(ROOM_X[0] + 0.05, ROOM_X[1] - 0.05, 78)
     ys = np.linspace(ROOM_Y[0] + 0.05, ROOM_Y[1] - 0.05, 46)
-    X, Y = np.meshgrid(xs, ys)                       # shape (ny, nx), as streamplot wants
+    X, Y = np.meshgrid(xs, ys)
     col = in_any_column(X, Y)
-    # vertical cut (y-z plane)
     ys_v = np.linspace(ROOM_Y[0] + 0.05, ROOM_Y[1] - 0.05, 46)
     zs_v = np.linspace(ROOM_Z[0] + 0.05, ROOM_Z[1] - 0.05, 16)
     YV, ZV = np.meshgrid(ys_v, zs_v)
@@ -127,7 +105,6 @@ def main():
         print(f"  {name:32s}: max speed {np.nanmax(r['speed']):.2f} m/s, "
               f"mean CO2 at t={T_CO2:.0f}s {np.nanmean(r['c']):.4f}")
 
-    # ---- figure 1: overview ----
     s_max = max(np.nanmax(r["speed"]) for r in res) or 1.0
     s_max = max(s_max, max(np.nanmax(r["cut_speed"]) for r in res))
     c_max = max(np.nanmax(r["c"]) for r in res)
@@ -163,7 +140,6 @@ def main():
     fig.savefig(f1, dpi=130, bbox_inches="tight")
     plt.close(fig)
 
-    # ---- figure 2: CO2 over time ----
     times = np.linspace(0.0, T_MAX, 13)
     xs_c, ys_c = np.meshgrid(np.linspace(ROOM_X[0] + 0.1, ROOM_X[1] - 0.1, 40),
                              np.linspace(ROOM_Y[0] + 0.1, ROOM_Y[1] - 0.1, 24))

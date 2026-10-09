@@ -1,8 +1,5 @@
 """
-Clear top-down floor-plan view of the real room geometry, so door/window
-counts and positions can be visually verified (not just read from a murky
-3D render). Also re-does the 3D oblique view with better colors/alpha so
-walls, windows, and doors are easy to tell apart.
+Top-down floor plan of the room, to check the doors, windows and columns visually.
 """
 import os
 import numpy as np
@@ -16,9 +13,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 
 
 def get_xz_clusters(fname, gap_tol=0.03):
-    """Load an STL, weld vertices, split into connected pieces, then merge
-    pieces whose x-ranges touch/overlap (accounts for near-duplicate
-    coincident-but-not-quite-welded vertices) to get real physical openings."""
+    """Load an STL file and split it into the separate openings."""
     m = trimesh.load(os.path.join(HERE, fname), process=False)
     m.merge_vertices()
     parts = m.split(only_watertight=False)
@@ -43,31 +38,23 @@ print(f"\nWindows found: {len(window_ranges)}")
 for i, (lo, hi) in enumerate(window_ranges):
     print(f"  Window {i+1}: x = [{lo:.2f}, {hi:.2f}]  width = {hi-lo:.2f} m")
 
-# Room outline from RoomVolume
 room = mesh.Mesh.from_file(os.path.join(HERE, "RoomVolume.stl"))
 pts = room.vectors.reshape(-1, 3)
 xmin, ymin, zmin = pts.min(axis=0)
 xmax, ymax, zmax = pts.max(axis=0)
 
-# Columns: load walls, find the 4 excluded internal-obstacle cylinders by
-# looking at RoomVolume_Walls.stl clusters that are small in footprint and
-# don't touch x=xmin/xmax or y=ymin/ymax (i.e. free-standing)
 walls = trimesh.load(os.path.join(HERE, "RoomVolume_Walls.stl"), process=False)
 
-# --- Floor plan (top-down view) ---
 fig, ax = plt.subplots(figsize=(12, 7))
 
-# room outline
 ax.add_patch(patches.Rectangle((xmin, ymin), xmax - xmin, ymax - ymin,
                                 fill=False, edgecolor="black", linewidth=2))
 
-# doors on the y=ymin wall (bottom)
 for i, (lo, hi) in enumerate(door_ranges):
     ax.add_patch(patches.Rectangle((lo, ymin - 0.15), hi - lo, 0.3,
                                     facecolor="orangered", edgecolor="k"))
     ax.text((lo + hi) / 2, ymin - 0.5, f"Door {i+1}", ha="center", fontsize=9, color="orangered")
 
-# windows on the y=ymax wall (top)
 for i, (lo, hi) in enumerate(window_ranges):
     ax.add_patch(patches.Rectangle((lo, ymax - 0.15), hi - lo, 0.3,
                                     facecolor="deepskyblue", edgecolor="k"))

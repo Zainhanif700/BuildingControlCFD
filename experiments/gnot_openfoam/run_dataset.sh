@@ -1,8 +1,6 @@
 #!/usr/bin/env bash
-# All Phase-2 scenarios (scenarios.txt), NP at a time in parallel (default 4 of the 6 cores; OpenFOAM
-# runs serially per case because MPI is not usable on this server). The closed-room case needs no
-# OpenFOAM run. Re-running skips everything already extracted.
-# Usage (from experiments/gnot_openfoam, in tmux):  bash run_dataset.sh [NP]
+# All window settings of scenarios.txt for the laminar dataset, NP at a time; finished ones are skipped.
+# Usage: bash run_dataset.sh [NP]
 set -u
 NP="${1:-4}"
 HERE="$(cd "$(dirname "$0")" && pwd)"

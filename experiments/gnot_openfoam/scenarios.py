@@ -1,23 +1,12 @@
 """
-Phase-2 scenario list: 3 window zones by geometry, speeds 0 (closed) or 0.2-2.0 m/s per zone.
-
-Zones (point_sampler.WINDOWS; split at the two large gaps of 2.09 m between W3|W4 and W6|W7):
-  Z1 = W1-W3 (x 2.09-5.40 m), Z2 = W4-W6 (x 7.49-10.80 m), Z3 = W7-W8 (x 12.89-15.52 m).
-All windows of a zone get the zone's speed (like the paper's vent groups).
-
-Design (40 cases, deterministic, seed 0):
-  S00             all closed (no flow; CO2 only -> no OpenFOAM run)          train
-  S01-S09         one zone open at 0.5 / 1.0 / 2.0 m/s                        train
-  S10-S12         all zones at 0.5 / 1.0 / 2.0 m/s                           train
-  S13-S39         random: each zone closed with p = 0.3, else U(0.2, 2.0) m/s (0.05 steps),
-                  no all-closed, no duplicates; 8 of them held out as TEST cases (never trained on)
-Writes scenarios.txt: "<name> <train|test> <V1,...,V8> <z1 z2 z3>".
+The 40 window settings (3 zones, 0 or 0.2-2.0 m/s each) and the train/test split; writes scenarios.txt.
+Usage: python3 scenarios.py
 """
 import os
 
 import numpy as np
 
-import common  # noqa: F401
+import common
 from point_sampler import WINDOWS
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -35,7 +24,6 @@ def zone_to_V(z):
 
 
 def build():
-    # geometry check of the zoning: the two largest gaps between neighbouring windows separate the zones
     gaps = [WINDOWS[k + 1][0] - WINDOWS[k][1] for k in range(len(WINDOWS) - 1)]
     big = sorted(range(len(gaps)), key=lambda k: -gaps[k])[:2]
     assert sorted(big) == [2, 5], f"zones do not match the window gaps {gaps}"

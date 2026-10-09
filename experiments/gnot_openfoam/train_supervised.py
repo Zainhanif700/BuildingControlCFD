@@ -1,17 +1,5 @@
 """
-Supervised GNOT on OpenFOAM data (Track 2). Loss = relative MSE of velocity + relative MSE of CO2 on
-random (point, time) samples of the extracted datasets (extract_case.py). No PDE residuals.
-
-Phase 1 (pipeline check, ONE case): some dataset times are held out (--holdout-times) and reported
-separately -- a first, weak generalisation signal (interpolation in time). Fitting the training times
-well only shows that the pipeline works; generalisation to new window settings needs held-out CASES
-(Phase 2, --test-data).
-
-Metrics (same definitions as experiments/gnot/openfoam/compare_with_openfoam.py): relative L2 of the
-velocity vector (volume / breathing plane), relative L2 of CO2 (plane / volume), CO2 mass ratio.
-
-Usage (training env, from experiments/gnot_openfoam):
-  PYTHONUNBUFFERED=1 python3 train_supervised.py --data data/W1_1ms_dx0.1.npz --tag p1 2>&1 | tee logs/p1.log
+Supervised training of GNOT on the laminar OpenFOAM data.
 """
 import argparse
 import math
@@ -27,9 +15,7 @@ from model import SupervisedGNOT
 
 
 def load(path, dev, store="auto"):
-    """store: device for the data tensors ("auto": the training device for small sets). Phase-1 files
-    carry one time axis 't'; Phase-2 files 't_u' (OpenFOAM velocity, frozen after its last time) and
-    't_c' (CO2). Velocity targets at CO2 times: U at the same time, or the last U (frozen flow)."""
+    """Load the dataset files onto the device."""
     d = np.load(path)
     ds = {k: d[k] for k in d.files}
     ds["name"] = os.path.basename(path)
@@ -43,10 +29,10 @@ def load(path, dev, store="auto"):
             assert hits, f"{ds['name']}: CO2 time {t} has no velocity snapshot"
             umap.append(hits[0])
         else:
-            umap.append(len(t_u) - 1)                     # frozen flow after the OpenFOAM horizon
-    ds["t"] = ds["t_c"]                                   # sample / report on the CO2 time axis
+            umap.append(len(t_u) - 1)
+    ds["t"] = ds["t_c"]
     sdev = store if store != "auto" else dev
-    ds["U_d"] = torch.tensor(ds["U"][umap], dtype=torch.float32, device=sdev)   # aligned with t_c
+    ds["U_d"] = torch.tensor(ds["U"][umap], dtype=torch.float32, device=sdev)
     for k in ("P", "C", "t", "V"):
         ds[k + "_d"] = torch.tensor(ds[k], dtype=torch.float32, device=sdev)
     ds["plane_d"] = torch.tensor(ds["plane"], device=sdev)
@@ -140,7 +126,6 @@ def main():
     tr_idx = [[i for i, t in enumerate(ds["t"]) if float(t) not in hold] for ds in train]
     for ds, ti in zip(train, tr_idx):
         assert ti, f"{ds['name']}: no training times left"
-    # loss scales: mean squared target over the training samples (-> relative MSE, both terms O(1))
     u2 = np.mean([float((ds["U_d"][ti] ** 2).sum(-1).mean()) for ds, ti in zip(train, tr_idx)])
     c2 = np.mean([float((ds["C_d"][ti] ** 2).mean()) for ds, ti in zip(train, tr_idx)])
     print(f"train: {[ds['name'] for ds in train]} (times {[float(ds['t'][i]) for i in tr_idx[0]]}); "
@@ -151,14 +136,14 @@ def main():
     model = SupervisedGNOT(t_horizon=max(t_horizon, 120.0)).to(dev)
     print(f"time horizon {model.t_horizon:g} s")
     opt = torch.optim.Adam(model.parameters(), lr=args.lr)
-    lr_at = lambda it: args.lr * 0.9 ** (it / 2000)       # same schedule as Track 1 (Expert's Guide)
+    lr_at = lambda it: args.lr * 0.9 ** (it / 2000)
     t0 = time.time()
     for it in range(args.iters + 1):
         for gpar in opt.param_groups:
             gpar["lr"] = lr_at(it)
-        k = int(torch.randint(len(train), (1,)).item())    # one case per step
+        k = int(torch.randint(len(train), (1,)).item())
         ds = train[k]
-        sdev = ds["P_d"].device                           # where the data live (GPU or CPU RAM)
+        sdev = ds["P_d"].device
         ti = torch.tensor(tr_idx[k], device=sdev)[torch.randint(len(tr_idx[k]), (args.batch,), device=sdev)]
         pi = torch.randint(ds["P_d"].shape[0], (args.batch,), device=sdev)
         Q = ds["P_d"][pi].to(dev)
@@ -177,12 +162,10 @@ def main():
             print(f"[{it:6d}/{args.iters}] loss {loss.item():.4e} (u {L_u.item():.3e}, C {L_c.item():.3e}) "
                   f"lr {lr_at(it):.2e} | {(it + 1) / (time.time() - t0):.1f} it/s", flush=True)
         if it % args.eval_every == 0 and it > 0 or it == args.iters:
-            # checkpoint FIRST, so a failing evaluation can never lose the training
             torch.save({"iter": it, "model_state": model.state_dict(), "args": vars(args), "t_horizon": model.t_horizon,
                         "scales": (u2, c2), "train": args.data, "holdout_times": sorted(hold)},
                        os.path.join(out_dir, f"sup_{args.tag}_iter{it}.pth"))
             print(f"  eval at iter {it}:")
-            # all test cases; of the training cases only the first 3 (evaluation of 30+ full fields is slow)
             report(model, [(d, "train") for d in train[:3]] + [(d, "TEST case") for d in test], dev, hold)
     print("done")
 

@@ -1,19 +1,5 @@
 """
-Diagnosis: what does the NETWORK add to the flow?  u_model = curl(B_p) + u_corr, with
-u_corr = curl(s(V) * ramp(t) * phi * A_net). The OpenFOAM comparison showed the trained v19 is no
-closer to OpenFOAM than curl(B_p) alone (74% vs 71% velocity error for W1 1 m/s), i.e. u_corr adds
-nothing useful. Two possible reasons, which this separates:
-  (a) u_corr points roughly the RIGHT way but is far too SMALL  -> scaling (e.g. s(V) = RMS(V)/V_MAX
-      is only 0.07 for one window at 1 m/s), fix the scaling;
-  (b) u_corr is not aligned with what is needed                -> the loss / training does not push
-      the flow towards the Navier-Stokes solution (weights, residual balance), fix the loss.
-Measured with the needed change  d = u_OF - curl(B_p):
-  size ratio   |u_corr| / |d|                     (rms over the room)
-  alignment    <u_corr, d> / (|u_corr| |d|)        (cosine, +1 = exactly the right direction)
-  achieved     <u_corr, d> / |d|^2                 (share of the needed change actually supplied)
-
-Usage (training env):
-  python3 diagnose_flow_correction.py --case cases/W1_1ms_dx0.1 --checkpoint <pth> [--code-dir <gnot dir>]
+Diagnostic: what does the network add to the built-in base flow?
 """
 import argparse
 import os
@@ -51,13 +37,13 @@ def main():
     ck = os.path.abspath(os.path.expanduser(args.checkpoint))
     ckpt = torch.load(ck, map_location=dev)
     check_checkpoint_compat(ckpt, ck)
-    nu_case, nu_ckpt = float(meta.get("nu", "0.01")), float(ckpt.get("nu", 0.01))   # v21 curriculum
+    nu_case, nu_ckpt = float(meta.get("nu", "0.01")), float(ckpt.get("nu", 0.01))
     if abs(nu_case - nu_ckpt) > 1e-12:
         raise SystemExit(f"viscosity mismatch: checkpoint nu = {nu_ckpt:g}, OpenFOAM case nu = {nu_case:g}")
     model = GNOTOperator().to(dev)
     model.load_state_dict(ckpt["model_state"])
     model.eval()
-    from gnot_model import door_jet_speed          # v23: correction scale = door jet speed
+    from gnot_model import door_jet_speed
     s = float(door_jet_speed(torch.tensor([V])).item())
     print(f"{ck} (version={ckpt.get('version')}); scenario {meta['name']} V={V}; correction scale s(V) = {s:.3f} m/s")
 

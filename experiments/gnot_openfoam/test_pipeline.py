@@ -1,11 +1,5 @@
 """
-Pipeline test for Track 2 (run before any real training; ~1-2 min on GPU, a few min on CPU):
-  1. SupervisedGNOT: u = 0 exactly with all windows closed, C(t=0) = 0, C exactly linear in N,
-     outputs finite; gradients reach the backbone.
-  2. Metrics: rel() / metrics() give 0 for a perfect prediction and the right value for a known error.
-  3. Training loop on a SYNTHETIC dataset (known smooth fields, saved like extract_case.py does):
-     train_supervised.main() runs end to end, writes checkpoints, and the loss falls clearly.
-Usage (from experiments/gnot_openfoam):  python3 test_pipeline.py
+Tests of the laminar data pipeline before training (model properties, data, one training step).
 """
 import os
 import shutil
@@ -82,7 +76,7 @@ def main():
         synthetic_dataset(data)
         ds = ts.load(data, dev)
 
-        class Oracle(torch.nn.Module):   # returns the dataset values -> metrics must be 0
+        class Oracle(torch.nn.Module):
             def forward(self, x, y, z, t, V, N):
                 ti = int(np.argmin(np.abs(ds["t"] - float(t[0]))))
                 i0 = oracle_offset[0]
@@ -94,7 +88,6 @@ def main():
         check("2c metrics of a perfect prediction are 0", all(abs(v) < 1e-7 for k, v in mm.items() if k != "mass")
               and abs(mm["mass"] - 1) < 1e-6, str(mm))
 
-        # 3. end-to-end training on the synthetic data (small, fast)
         common.CKPT_DIR = os.path.join(tmp, "ckpt")
         ts.CKPT_DIR = common.CKPT_DIR
         import io
@@ -116,8 +109,6 @@ def main():
         check("3c checkpoint written", os.path.isfile(os.path.join(common.CKPT_DIR, "t", "sup_t_iter400.pth")))
         check("3d held-out times reported", "held-out time" in log)
 
-        # 4. the same with the data kept in CPU RAM (--data-on-cpu, as for the 40-case run) and a
-        #    held-out TEST case: the evaluation path must handle data and model on different devices
         buf = io.StringIO()
         sys.argv = ["train_supervised.py", "--data", data, "--test-data", data, "--tag", "t_cpu", "--iters", "200",
                     "--batch", "512", "--eval-every", "200", "--device", dev, "--data-on-cpu"]

@@ -1,27 +1,5 @@
 """
-v20: potential-flow door split per window (used by throughflow.py as the base door split).
-
-For each window k, solve the potential-flow problem
-    lap(theta) = 0 in the air (columns are solid),
-    d theta/dn = -1 on window k (unit inflow), 0 on all other surfaces (walls, floor,
-    ceiling, columns, other windows), theta = 0 on both doors (outlets at equal pressure),
-u = grad(theta), and record r_k = (outflow through door 1) / (total outflow).
-The through-flow of a scenario then splits as
-    alpha_pot(V) = sum_k V_k A_k r_k / sum_k V_k A_k        (share leaving by door 1).
-
-Why: in v19 the split alpha was a free learned scalar and barely moved in 5000 iterations
-(0.47 / 0.50 / 0.53 for W1-only / W8-only / all open, although W1 sits right across from
-door 1). Potential flow (inviscid, irrotational) gives a physically sensible split from the
-geometry; the model keeps a learned correction on top (gnot_model.door_split).
-
-Numerics: cell-centred finite volumes on a uniform grid, matrix-free 7-point operator,
-Dirichlet doors via the half-cell ghost value, Jacobi-preconditioned conjugate gradients
-(pure numpy). Openings are represented by the cells whose centre lies inside them, so their
-discrete areas depend on dx (at dx = 0.1 door 2 is 10% larger than door 1); use a spacing that
-resolves both doors equally -- dx = 0.12 (used in throughflow.py). Across dx = 0.075-0.2 the
-shares scatter by about +-0.006.
-
-Usage: python3 compute_door_split.py [--dx 0.2] [--tol 1e-9]
+Potential-flow split of each window's air between the two doors (used by throughflow.py).
 """
 import argparse
 import time
@@ -41,8 +19,7 @@ def build(dx):
     fluid2 = np.ones(X.shape, bool)
     for cx, cy, r, _, _ in COLUMNS:
         fluid2 &= (X - cx) ** 2 + (Y - cy) ** 2 > r ** 2
-    fluid = np.repeat(fluid2[:, :, None], n[2], axis=2)                  # columns floor-to-ceiling
-    # door faces: y = 0 face of the j = 0 cells inside a door rectangle
+    fluid = np.repeat(fluid2[:, :, None], n[2], axis=2)
     door = np.zeros((len(DOORS), n[0], n[2]), bool)
     for d, (a, b, z0, z1) in enumerate(DOORS):
         door[d] = ((c[0] >= a) & (c[0] <= b))[:, None] & ((c[2] >= z0) & (c[2] <= z1))[None, :]
@@ -55,10 +32,10 @@ def build(dx):
 
 
 def make_operator(n, h, fluid, door_any):
-    """A theta = -(sum of face fluxes)/volume (SPD thanks to the Dirichlet doors)."""
+    """Finite-volume Laplace operator for the potential-flow problem."""
     open_ = [fluid[:-1] & fluid[1:], fluid[:, :-1] & fluid[:, 1:], fluid[:, :, :-1] & fluid[:, :, 1:]]
     dir_coef = np.zeros(fluid.shape)
-    dir_coef[:, 0, :] = 2.0 * door_any / h[1] ** 2                     # (0 - theta)/(h/2) / h
+    dir_coef[:, 0, :] = 2.0 * door_any / h[1] ** 2
 
     def A(th):
         out = dir_coef * th
@@ -113,14 +90,11 @@ def main():
     ratios = []
     for k in range(len(WINDOWS)):
         t0 = time.time()
-        # FV balance for a window cell: sum_interior (th_nb - th)/h^2 + (d th/dn)/h = 0 with
-        # d th/dn = -1 (unit inflow)  ->  -A th - 1/h = 0  ->  A th = -1/h
         b = np.zeros(fluid.shape)
         b[:, -1, :] = -win[k].astype(float) / h[1]
         th, its = pcg(A, b, diag, args.tol)
-        # outward flux through each door: d th/dn (n = -y) = -(th_cell - 0)/(h/2)
         fd = [np.sum(-2.0 * th[:, 0, :][door[d]] / h[1]) * h[0] * h[2] for d in range(len(DOORS))]
-        fin = np.sum(win[k]) * h[0] * h[2]              # inflow (unit speed x discrete window area)
+        fin = np.sum(win[k]) * h[0] * h[2]
         ratios.append(fd[0] / (fd[0] + fd[1]))
         print(f"window {k + 1}: door outflow {fd[0]:.4f} + {fd[1]:.4f} = {fd[0] + fd[1]:.4f} "
               f"(inflow {fin:.4f}, balance {100 * (fd[0] + fd[1] - fin) / fin:+.2f}%) -> r_{k + 1} = {ratios[-1]:.4f} "

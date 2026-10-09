@@ -1,6 +1,6 @@
-"""Overlay of the STL room geometry (floor plan at z = 1.5 m + zooms of the window and door walls)
-with the simplified geometry used by the model and the OpenFOAM case (point_sampler.py).
-Pure numpy/matplotlib (binary STL parser). Run: python3 check_geometry_overlay.py -> geometry_overlay.png"""
+"""
+Plots the STL room geometry over the simplified geometry used by the model and the OpenFOAM case.
+"""
 import numpy as np, struct, sys, types
 import matplotlib; matplotlib.use("Agg"); import matplotlib.pyplot as plt, matplotlib.patches as mp
 sys.modules.setdefault('torch', types.ModuleType('torch'))
@@ -30,7 +30,6 @@ def slice_y(v, y0):
     return segs
 room=read_stl("RoomVolume.stl"); walls=read_stl("RoomVolume_Walls.stl"); win=read_stl("Windows.stl"); door=read_stl("Doors.stl")
 fig=plt.figure(figsize=(16,15))
-# ---- floor plan at z=1.5
 ax=fig.add_subplot(3,1,1)
 for s in slice_z(walls,1.5): ax.plot(*zip(*s),color="k",lw=0.6)
 for s in slice_z(win,1.5): ax.plot(*zip(*s),color="tab:blue",lw=1.0)
@@ -43,7 +42,6 @@ ax.set_aspect("equal"); ax.set_xlim(-0.3,15.9); ax.set_ylim(-0.4,9.5)
 ax.set_title("Floor plan at z = 1.5 m.  BLACK = STL walls (RoomVolume_Walls.stl), BLUE = Windows.stl, ORANGE = Doors.stl (z=1.0)\n"
              "RED dashed = what the model / OpenFOAM case uses (point_sampler.py)")
 ax.set_xlabel("x [m]"); ax.set_ylabel("y [m]")
-# ---- zooms: window wall and door wall
 for k,(ylo,yhi,title) in enumerate(((8.4,9.4,"zoom: window wall (y = 8.4 .. 9.4 m)"),(-0.3,1.0,"zoom: door wall (y = -0.3 .. 1.0 m)"))):
     ax=fig.add_subplot(3,1,2+k)
     for s in slice_z(walls,1.5): ax.plot(*zip(*s),color="k",lw=0.7)

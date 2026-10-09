@@ -1,16 +1,5 @@
 """
-Clear top-down (2D) slice visualization of a trained GNOT checkpoint.
-
-The 3D quiver/scatter in visualize_gnot.py is hard to read precisely
-(perspective, occlusion). This instead takes a horizontal slice at a fixed
-height and plots a clean top-down view -- same style as geometry/floor_plan.py
--- so it's unambiguous whether the model learned sensible physics:
-  - velocity arrows should point INTO the room at open windows, be near-zero
-    at closed windows/walls, and curve around the columns (never through them)
-  - CO2 should be highest near the room center at breathing height (where the
-    occupancy source is) and lowest near the open windows (clean air in)
-
-Usage: python3 visualize_gnot_slice.py
+Top-down slice of a trained model's prediction at a fixed height.
 """
 import os
 import numpy as np
@@ -21,11 +10,7 @@ import matplotlib.patches as patches
 from gnot_model import GNOTOperator, check_checkpoint_compat
 from point_sampler import ROOM_X, ROOM_Y, ROOM_Z, WINDOWS, DOORS, COLUMNS, NUM_WINDOWS, BREATHING_HEIGHT
 
-# EDIT THIS to switch which trained version you're visualizing.
-#   "v1_smooth_co2" -- original run, KNOWN BAD CO2 (room-wide smooth gradient,
-#                      confirmed physically impossible by the closed-window test)
-#   "v2_co2_fix"    -- multi-octave Fourier features + adaptive CO2 loss weight
-VERSION = "v12_linear_n"  # older-format checkpoints are refused by check_checkpoint_compat
+VERSION = "v12_linear_n"
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 CKPT_PATH = os.path.join(HERE, "checkpoints", VERSION, f"gnot_{VERSION}_final.pth")
@@ -33,12 +18,12 @@ FIG_DIR = os.path.join(HERE, "figures", VERSION)
 os.makedirs(FIG_DIR, exist_ok=True)
 
 SCENARIO = {
-    "V": [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],  # all windows closed -- isolates the CO2 source
+    "V": [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
     "N_people": 20.0,
     "t": 60.0,
 }
-SLICE_Z = BREATHING_HEIGHT  # single source of truth lives in point_sampler.py now
-GRID_N = 40      # resolution of the 2D slice (GRID_N x GRID_N)
+SLICE_Z = BREATHING_HEIGHT
+GRID_N = 40
 
 
 def in_any_column(x, y):
@@ -65,7 +50,7 @@ def main():
     device = "cuda" if torch.cuda.is_available() else "cpu"
     model = GNOTOperator().to(device)
     ckpt = torch.load(CKPT_PATH, map_location=device)
-    check_checkpoint_compat(ckpt, CKPT_PATH)  # v8_nondim: refuse pre-v8 checkpoints
+    check_checkpoint_compat(ckpt, CKPT_PATH)
     model.load_state_dict(ckpt["model_state"])
     model.eval()
     print(f"Loaded checkpoint from iter {ckpt.get('iter', '?')}")
@@ -74,7 +59,7 @@ def main():
     ys = np.linspace(ROOM_Y[0] + 0.1, ROOM_Y[1] - 0.1, GRID_N)
     Xg, Yg = np.meshgrid(xs, ys, indexing="ij")
     xg, yg = Xg.ravel(), Yg.ravel()
-    inside_column = in_any_column(xg, yg)  # mask, don't drop (keep grid regular for imshow)
+    inside_column = in_any_column(xg, yg)
 
     n = xg.shape[0]
     x = torch.tensor(xg, dtype=torch.float32, device=device).view(-1, 1).requires_grad_(True)
@@ -97,7 +82,6 @@ def main():
 
     win_str = ", ".join(f"W{i+1}={vv:.1f}" for i, vv in enumerate(SCENARIO["V"]))
 
-    # --- velocity quiver (arrow length = ACTUAL speed this time, not normalized) ---
     fig, ax = plt.subplots(figsize=(12, 7))
     draw_floor_plan(ax)
     ax.quiver(xg, yg, u, v, speed, cmap="viridis", scale=8, width=0.003)
@@ -110,7 +94,6 @@ def main():
     plt.savefig(out1, dpi=150, bbox_inches="tight")
     print(f"Saved: {out1}")
 
-    # --- CO2 heatmap ---
     fig2, ax2 = plt.subplots(figsize=(12, 7))
     Cgrid = c.reshape(GRID_N, GRID_N)
     im = ax2.pcolormesh(Xg, Yg, Cgrid, shading="auto", cmap="YlOrRd")

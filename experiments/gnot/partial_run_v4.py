@@ -1,18 +1,5 @@
 """
-Partial (10,000-iteration) training run for v4_source_sampling -- combines
-fix #1 (isotropic Fourier features + source_proximity, see gnot_model.py)
-and fix #2 (source-concentrated interior sampling, see point_sampler.py).
-
-Kept as a committed script (not a pasted inline python3 -c command) because
-repeated heredoc/inline pastes over this SSH+tmux setup were getting
-corrupted mid-paste. Run directly:
-
-    tmux new -s partial_v4
-    cd experiments/gnot
-    python3 partial_run_v4.py
-
-Same 10,000-iteration budget as the fix-#1-only partial run, so the two are
-a fair apples-to-apples comparison.
+Partial training run (10,000 iterations) for version v4.
 """
 import os
 import torch
@@ -26,26 +13,11 @@ from train_gnot import (
 
 N_ITERS = 10000
 LOG_EVERY = 200
-CKPT_EVERY = 2000  # FIX (found by audit): this script previously only saved a
-# checkpoint once, at the very end -- if the process crashed or the server/
-# tmux session died before finishing, ALL progress would be lost with nothing
-# recoverable. train_gnot.py's own main() already does periodic checkpointing
-# (CKPT_EVERY=1000); this script didn't, purely because it started as a quick
-# one-off test script. Fixed to match that safer pattern.
-VERSION = "v5_closed_window_fix"  # v4b (source-sampling tuning alone) still showed
-# a wrong/inconsistent CO2 peak and non-trivial closed-window velocity; this adds
-# fix #3 (correlated closed/partial-closed window-scenario oversampling in
-# point_sampler.py's sample_scenario) on top of fixes #1+#2. Distinct version tag
-# so v4/v4b results are preserved for comparison.
+CKPT_EVERY = 2000
+VERSION = "v5_closed_window_fix"
 
 
 def main():
-    # v8_nondim GUARD (found by independent audit): this is a HISTORICAL
-    # experiment script. It imports the LIVE model/losses, which since v8 are
-    # non-dimensionalized, but it still saves into an old version's checkpoint
-    # folder without the v8 "nondim" tag -- running it would silently OVERWRITE
-    # that version's documented checkpoints with incompatible weights. The
-    # original, frozen copy lives in milestones/v5_closed_window_fix/.
     raise SystemExit(
         "partial_run_v4.py is a superseded pre-v8 experiment script and is disabled. "
         "Use train_gnot.py (v8_nondim) for new runs, or the frozen copy in "
@@ -117,4 +89,4 @@ def _original_main():
 
 
 if __name__ == "__main__":
-    main()  # always exits -- see guard above
+    main()

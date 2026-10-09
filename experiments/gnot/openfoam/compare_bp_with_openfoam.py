@@ -1,21 +1,5 @@
 """
-NO-TRAINING test of the through-flow field B_p (throughflow.py) against OpenFOAM.
-
-The model's velocity is curl(B_p + s*phi*A_net). This script evaluates curl(B_p) ALONE (network
-correction = 0) for several B_p variants and compares each with the OpenFOAM flow:
-  sharp        -- v19-v21 construction (psi blended linearly, sharp window profile through the room)
-  smooth_<e>   -- v22: same, but a smooth tanh-edged jet profile (edge length e) inside the room
-  jet_<d>      -- v21 candidate: straight jets from the windows, turning layer of depth d at the
-                  door wall (d = 1, 2, 3 m)
-each with the door split alpha from potential flow (as v20 starts) and with OpenFOAM's measured
-split (isolates the path effect from the split effect). If a B_p variant ALONE is already much
-closer to OpenFOAM than the trained v19 model (74% volume / 67% plane velocity error for
-W1 1 m/s), it is a better starting point for training -- decided before spending GPU hours.
-Also run on a second scenario (e.g. all 1 m/s) before choosing, to avoid tuning to one case.
-
-Usage (training env with torch):  python3 compare_bp_with_openfoam.py --case cases/W1_1ms_dx0.1 [--device cuda]
-(v22: also prints B_p's own viscous momentum term per variant -- part (1).)
-Writes openfoam/results/<case>__bp_variants/.
+Test without training: the built-in base flow (throughflow.py) alone compared with OpenFOAM.
 """
 import argparse
 import os
@@ -104,17 +88,16 @@ def main():
                    for e in args.edges for ew, ed in eps_sets]
                 + [(f"jet_{d:g}m", "jet", d, False, None, e0) for d in args.depths])
 
-    def use_eps(ew, ed):   # opening edge widths are module globals of throughflow (read at call time)
+    def use_eps(ew, ed):
         assert ew <= 0.3 and ed <= 0.5, "edge wider than half the opening"
         tfl.EPS_WINDOW, tfl.EPS_DOOR = ew, ed
         tfl._DOOR_HN = tfl.DOOR_HEIGHT - ed / 2
-    # ---- (1) B_p's own VISCOUS momentum term on the training distribution (what dominated v21's loss)
     import point_sampler as ps
     import train_gnot as tg
     nu = args.nu if args.nu is not None else float(meta.get("nu", "0.01"))
     ps.FIXED_V = V
     torch.manual_seed(0)
-    pts = [ps.sample_interior(2000, dev) for _ in range(5)]          # same points for every variant
+    pts = [ps.sample_interior(2000, dev) for _ in range(5)]
     ps.FIXED_V = None
 
     def gz(f, v):
@@ -165,7 +148,7 @@ def main():
         a_of = d1 / (d1 + d2)
         for name, blend, depth, smooth, edge, (ew, ed) in variants:
             use_eps(ew, ed)
-            for a_lab, alpha in (("pot", a_pot),):     # v22: OpenFOAM-split rows dropped (alpha is learned)
+            for a_lab, alpha in (("pot", a_pot),):
                 U = bp_velocity(t, alpha, blend, depth, smooth, edge)
                 e_v = np.sqrt(np.nansum((U[fl] - U_of[fl]) ** 2) / np.nansum(U_of[fl] ** 2))
                 pl = fl[:, :, kz]

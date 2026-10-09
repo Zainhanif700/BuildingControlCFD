@@ -1,33 +1,22 @@
 """
-The FV CO2 solver of experiments/gnot/check_co2_with_model_flow.py (Grid.rhs + SSP-RK3 in solve_co2),
-ported LINE BY LINE to torch so that 30-minute transports run on the GPU (numpy on one CPU core:
-~0.17 s per step at dx = 0.1 -> 3-6 h per case for 1800 s). Same grid, masks, boundary rules,
-source, upwind-2nd-order advection, time step rule and velocity interpolation; the Grid object
-(masks, source) is taken from the numpy module itself, so geometry cannot drift.
-Beyond the last velocity snapshot the flow is FROZEN (velocity_at clamps, as in the numpy code).
-
-verify(): runs both solvers on the same snapshots and reports the max relative difference.
+GPU (torch) version of the finite-volume CO2 solver of check_co2_with_model_flow.py; base of the RANS CO2 solvers.
 """
 import numpy as np
 import torch
 
-import common  # noqa: F401
+import common
 import check_co2_with_model_flow as L2
 from train_gnot import DIFFUSIVITY
 
 
 def _shift(a, axis, s):
-    """b[i] = a[i+s] along axis. L2.shift fills out-of-range entries with NaN; here they WRAP around
-    (torch.roll, one pass instead of fill + copy). Identical results: every use is masked -- neighbour()
-    replaces them by c (nb_ok is False at the boundary), and the 2nd-order branches are selected only
-    where nb_ok(+-1) & nb_ok(+-2) hold (torch.where never lets the unselected branch through)."""
+    """b[i] = a[i + s] along axis (wraps around; every use is masked)."""
     return torch.roll(a, shifts=-s, dims=axis)
 
 
 class TorchFV:
     def __init__(self, g, device="cuda", dtype=torch.float32):
-        """dtype: float32 (default for the dataset, ~2x faster, results ~1e-6 relative from float64 --
-        checked by verify()); float64 reproduces the numpy solver to round-off (~1e-14)."""
+        """dtype float32 for the dataset (float64 reproduces the numpy solver to round-off)."""
         self.g, self.dev, self.dt_ = g, device, dtype
         T = lambda a: torch.tensor(np.asarray(a), device=device)
         self.fluid = T(g.fluid)
@@ -62,8 +51,7 @@ class TorchFV:
         return (DIFFUSIVITY * lap - adv + self.S) * self.fluid_f
 
     def solve(self, snap_times, snaps, out_times, log_every=None):
-        """snaps: list of [u, v, w] numpy arrays (grid shape) at snap_times; returns {t: c (numpy)}.
-        Time step rule identical to L2.solve_co2."""
+        """CO2 over time for the given velocity snapshots (linear in between, frozen after the last)."""
         g = self.g
         umax = max(np.max(np.abs(s[0])) / g.h[0] + np.max(np.abs(s[1])) / g.h[1] + np.max(np.abs(s[2])) / g.h[2]
                    for s in snaps)
@@ -73,8 +61,8 @@ class TorchFV:
         S = [[torch.tensor(a, device=self.dev, dtype=self.dt_) for a in s] for s in snaps]
         ts = list(snap_times)
 
-        def vel(t):     # = L2.velocity_at (linear in time, clamped -> frozen after the last snapshot)
-            if t >= ts[-1]:        # frozen: a would clamp to 1 -> exactly the last snapshot (no arithmetic)
+        def vel(t):
+            if t >= ts[-1]:
                 return S[-1]
             j = int(np.searchsorted(ts, t, side="right")) - 1
             j = min(max(j, 0), len(ts) - 2)
@@ -99,8 +87,7 @@ class TorchFV:
 
 
 def verify(g, snap_times, snaps, t_check=(30.0, 60.0), device="cuda"):
-    """numpy vs torch float64 and torch float32 on the same inputs: max |c_torch - c_numpy| / max |c_numpy|
-    at t_check (the times include the frozen-flow branch when t_check exceeds the last snapshot)."""
+    """Compares the numpy and torch solvers on the same input."""
     import time
     L2.T_SNAP = list(snap_times)
     L2.T_OUT = tuple(t_check)

@@ -1,9 +1,5 @@
 """
-Load the real room geometry (STL files from Alexander's dt_pinn_training repo)
-and check that it makes sense before we build GNOT's point sampler around it.
-
-Prints bounding box of each part, and saves a 3D figure showing all four
-parts together (room volume, walls, windows, doors) with different colors.
+Loads the room STL files, prints their bounding boxes and saves a 3D figure.
 """
 import os
 import numpy as np
@@ -46,7 +42,6 @@ for name, (fname, color, alpha) in PARTS.items():
 
 print(f"OVERALL bounding box: min={all_min}, max={all_max}, size={all_max - all_min}")
 
-# --- 3D visualization ---
 fig = plt.figure(figsize=(11, 9))
 ax = fig.add_subplot(111, projection="3d")
 
@@ -59,7 +54,6 @@ ax.set_ylabel("Y (m)")
 ax.set_zlabel("Z (m)")
 ax.set_title("Real room geometry (from Alexander's repo)\ngray=room volume, brown=walls, blue=windows, red=doors")
 
-# equal aspect ratio
 max_range = (all_max - all_min).max() / 2.0
 mid = (all_max + all_min) / 2.0
 ax.set_xlim(mid[0] - max_range, mid[0] + max_range)

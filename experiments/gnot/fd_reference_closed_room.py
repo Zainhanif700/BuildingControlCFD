@@ -1,26 +1,5 @@
 """
-Independent FINITE-DIFFERENCE reference solution for the CLOSED-WINDOW case,
-to validate the PINN against something that is not a neural network.
-
-Why this is a valid reference: with all windows closed the exact velocity is
-zero (no forcing), so CO2 obeys pure diffusion with a source,
-    dc/dt = D lap(c) + S,   S = N * E * exp(-dist^2 / sigma^2),   c(t=0) = 0,
-with no-flux on walls, floor, ceiling and columns, and zero-gradient at the
-doors (= no-flux when u = 0). That is solved here with a standard
-second-order finite-volume/finite-difference scheme and explicit Euler time
-stepping on a cell-centred grid -- same physical constants as training.
-
-Two treatments of the (closed) windows:
-  noflux    -- physically correct: a closed window is a wall.
-  dirichlet -- c = 0 at the window openings: what the PINN is currently
-               trained with (windows_loss applies c=0 regardless of V).
-Comparing the two measures how much that modelling choice matters.
-
-Usage:
-    python3 fd_reference_closed_room.py [--dx 0.1] [--ckpt <pinn checkpoint> ...]
-Run once with --dx 0.1 and once with --dx 0.05: if the two agree, the
-reference is grid-converged. Pure numpy (the optional PINN comparison needs
-torch and a checkpoint in the LIVE model format).
+Finite-difference reference for the closed room (no flow, CO2 only), to validate the network against a non-network solution.
 """
 import argparse
 import math
@@ -38,11 +17,7 @@ PROBES = {"source (7.76,4.58)": (SX, SY), "2.5 m east of source": (SX + 2.5, SY)
 
 
 def _fill_solid(c, fluid, sweeps=30):
-    """Copy of c with the solid (column) cells filled by the mean of already-known
-    neighbours, repeated inwards. v16 fix (audit): interp() uses 8 surrounding cells, and
-    solid cells held 0, which pulled interpolated values down next to the columns (at the
-    default dx=0.1 only ~1 breathing-grid point, 0.002% of the plane L2; up to 27% locally
-    at dx=0.2). Only used for OUTPUT fields; the solver itself is unchanged."""
+    """Copy of c with the solid (column) cells filled by the mean of already-known neighbours, repeated inwards."""
     c = c.copy()
     known = fluid.copy()
     for _ in range(sweeps):
@@ -73,26 +48,24 @@ def solve(dx_target, windows, n_people=N_PEOPLE):
     X, Y, Z = np.meshgrid(xc, yc, zc, indexing="ij")
 
     fluid = np.ones((nx, ny, nz), dtype=bool)
-    for cx, cy, r, _, _ in COLUMNS:          # floor-to-ceiling solid columns
+    for cx, cy, r, _, _ in COLUMNS:
         fluid &= (X - cx) ** 2 + (Y - cy) ** 2 > r ** 2
     S = n_people * EMISSION_PER_PERSON * np.exp(
         -((X - SX) ** 2 + (Y - SY) ** 2 + (Z - BREATHING_HEIGHT) ** 2) / CO2_SOURCE_SIGMA ** 2) * fluid
 
-    # open faces between neighbouring FLUID cells (no flux into solids / through walls)
     ox = fluid[:-1] & fluid[1:]
     oy = fluid[:, :-1] & fluid[:, 1:]
     oz = fluid[:, :, :-1] & fluid[:, :, 1:]
-    # window openings on the y = ROOM_Y[1] wall (windows span floor to ceiling)
     win = np.zeros(nx, dtype=bool)
     for xlo, xhi, _, _ in WINDOWS:
         win |= (xc >= xlo) & (xc <= xhi)
-    win_cells = win[:, None] & fluid[:, -1, :]            # (nx, nz)
+    win_cells = win[:, None] & fluid[:, -1, :]
 
     dt_max = 0.9 / (2 * DIFFUSIVITY * (1 / dx ** 2 + 1 / dy ** 2 + 1 / dz ** 2))
     n_sub = math.ceil(10.0 / dt_max)
-    dt = 10.0 / n_sub                                     # divides every output time exactly
+    dt = 10.0 / n_sub
     c = np.zeros((nx, ny, nz))
-    out, t = {0.0: c.copy()}, 0.0   # c = 0 everywhere at t = 0: nothing to fill
+    out, t = {0.0: c.copy()}, 0.0
     D = DIFFUSIVITY
     while t < TIMES[-1] - 1e-9:
         for _ in range(n_sub):
@@ -103,7 +76,7 @@ def solve(dx_target, windows, n_people=N_PEOPLE):
             lap[:, :-1] += fy; lap[:, 1:] -= fy
             fz = (c[:, :, 1:] - c[:, :, :-1]) * oz / dz ** 2
             lap[:, :, :-1] += fz; lap[:, :, 1:] -= fz
-            if windows == "dirichlet":                    # c = 0 on the window face (distance dy/2)
+            if windows == "dirichlet":
                 lap[:, -1, :] -= 2.0 * c[:, -1, :] * win_cells / dy ** 2
             c = (c + dt * (D * lap + S)) * fluid
         t = round(t + 10.0, 6)

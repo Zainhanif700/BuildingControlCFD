@@ -1,41 +1,6 @@
 """
-LEVEL 2 open-window check: is the model's CO2 consistent with the model's OWN airflow?
-
-For each window setting, the GNOT velocity field is sampled on a finite-volume
-grid (at snapshot times, linear in between), and the CO2 equation
-    dc/dt + u.grad(c) = D lap(c) + S,     c(t=0) = 0
-is solved independently with a standard finite-volume scheme and the SAME
-boundary conditions as training:
-    walls, floor, ceiling, columns, CLOSED windows : no flux (zero gradient)
-    OPEN windows                                   : clean inflow, c = 0
-    doors                                          : zero-gradient outflow
-Then the GNOT CO2 is compared with this solution (relative L2 on the breathing
-plane and over the whole room, at t = 60 and 120 s).
-
-What it shows: whether the CO2 half of the model is right FOR THE FLOW THE MODEL
-PREDICTS. It does NOT check the flow itself (that needs level 1, an independent
-Navier-Stokes solver). A small error here + a flow that passes level 3 = good
-evidence; a large error = the CO2 transport is not consistent with the flow.
-
-Numerics: cell-centred grid (columns = solid cells), advective form u.grad(c)
-with second-order upwind differences (first order next to boundaries/solids),
-7-point Laplacian with the boundary conditions above, SSP-RK3 time stepping,
-dt from the advective (CFL 0.5) and diffusive limits. The advective form is used
-because the sampled velocity is not exactly divergence-free on the grid (a
-conservative form would then create spurious CO2); velocity components through
-solid boundaries are ignored by the zero-gradient ghost values.
-
-SELF-TEST: the 'closed' scenario has zero velocity, so this solver reduces to the
-closed-room finite-difference reference -- its breathing-plane error at t = 60 s
-must match validate_closed_room.py (z = 1.10 m, t = 60 s) to within ~1%.
-GRID CHECK: run once with --dx 0.2 (default) and once with --dx 0.1 on a few
-scenarios; the reference is trustworthy where the two agree.
-
-Usage:
-    python3 check_co2_with_model_flow.py [checkpoint] [--dx 0.2] [--scenarios closed "W8 3m/s" ...]
-Writes figures/<version>/physics_checks/level2_co2_consistency_dx<dx>.csv
-GRID CHECK RESULT (v13, 2026-09-27): dx 0.2 vs 0.1 agree within 0.2 percentage points in every
-error column and within 0.012 in the mass ratio -> dx = 0.2 is grid-converged for this purpose.
+Check 2: is the model's CO2 consistent with the model's own airflow? A finite-volume CO2 solve on the predicted flow is compared with the model's CO2.
+Usage: python3 check_co2_with_model_flow.py [checkpoint] [--dx 0.2]
 """
 import argparse
 import csv
@@ -63,7 +28,7 @@ SX, SY = (ROOM_X[0] + ROOM_X[1]) / 2, (ROOM_Y[0] + ROOM_Y[1]) / 2
 
 
 def shift(a, axis, s):
-    """b[i] = a[i+s] along axis; out-of-range entries are NaN."""
+    """b[i] = a[i + s] along axis, NaN outside."""
     b = np.full_like(a, np.nan, dtype=float)
     src, dst = [slice(None)] * 3, [slice(None)] * 3
     if s > 0:
@@ -88,10 +53,8 @@ class Grid:
             self.fluid &= (X - cx) ** 2 + (Y - cy) ** 2 > r ** 2
         self.S = N_PEOPLE * EMISSION_PER_PERSON * np.exp(
             -((X - SX) ** 2 + (Y - SY) ** 2 + (Z - BREATHING_HEIGHT) ** 2) / CO2_SOURCE_SIGMA ** 2) * self.fluid
-        # neighbour availability: nb_ok[(axis, s)] = neighbour at offset s exists and is fluid
         f = self.fluid.astype(float)
         self.nb_ok = {(a, s): (shift(f, a, s) == 1.0) for a in range(3) for s in (-2, -1, 1, 2)}
-        # open-window cells on the y = ROOM_Y[1] wall (top y layer): Dirichlet c = 0 there
         xc = self.c1d[0]
         win = np.zeros(self.n[0], dtype=bool)
         for k, (xlo, xhi, _, _) in enumerate(WINDOWS):
@@ -102,9 +65,7 @@ class Grid:
         self.grid_tuple = (ROOM_X[0], ROOM_Y[0], ROOM_Z[0], *self.h, *self.n)
 
     def neighbour(self, c, axis, s):
-        """Value at offset s (|s| = 1) with the boundary rules: fluid neighbour -> its value;
-        solid / wall / door / closed window -> c itself (zero gradient); open window -> -c
-        (so the face value is 0)."""
+        """Neighbour value with the boundary rules (walls: no flux, open window: c = 0)."""
         nb = shift(c, axis, s)
         out = np.where(self.nb_ok[(axis, s)], nb, c)
         if axis == 1 and s == 1:
@@ -167,7 +128,7 @@ def solve_co2(g, snaps):
             u0 = velocity_at(snaps, t)
             u1 = velocity_at(snaps, t + step)
             uh = velocity_at(snaps, t + 0.5 * step)
-            k1 = c + step * g.rhs(c, *u0)                                    # SSP-RK3
+            k1 = c + step * g.rhs(c, *u0)
             k2 = 0.75 * c + 0.25 * (k1 + step * g.rhs(k1, *u1))
             c = c / 3.0 + 2.0 / 3.0 * (k2 + step * g.rhs(k2, *uh))
             t += step
@@ -231,7 +192,6 @@ def main():
                 "ref_min": float(ref_vol.min()), "dt": dt, "steps": n_steps})
         print(f"  {name:12s} done ({time.time() - t0:5.1f} s, dt={dt:.4f} s, {n_steps} steps)", flush=True)
 
-    # dx in the name, so a grid-check run does not overwrite the main table
     csv_path = os.path.join(out_dir, f"level2_co2_consistency_dx{args.dx:g}.csv")
     with open(csv_path, "w", newline="") as fh:
         wr = csv.DictWriter(fh, fieldnames=list(rows[0].keys()))

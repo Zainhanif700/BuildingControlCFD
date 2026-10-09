@@ -1,15 +1,5 @@
 """
-Derives EVERY geometry constant used in point_sampler.py directly from the
-STL files, in one place, so none of it is untraceable hardcoding.
-
-This closes a gap found in an audit: the earlier floor_plan.py only computed
-X-ranges for doors/windows (used to confirm "2 doors, 8 windows" visually),
-and the 4 columns' centers/radii were found via one-off commands typed
-directly in a terminal session, never saved to a committed script. Anyone
-re-deriving these numbers from scratch (e.g. a thesis committee, or you in
-six months) should be able to run this ONE script and get everything.
-
-Run: python3 derive_all_constants.py
+Derives every geometry number in point_sampler.py directly from the STL files.
 """
 import os
 import trimesh
@@ -19,8 +9,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 
 
 def get_full_bbox_clusters(fname, gap_tol=0.03):
-    """Full (x,z) bounding box per physical opening (door or window),
-    not just the x-range floor_plan.py originally computed."""
+    """Full bounding box of each door and window in the STL file."""
     m = trimesh.load(os.path.join(HERE, fname), process=False)
     m.merge_vertices()
     parts = m.split(only_watertight=False)
@@ -68,9 +57,6 @@ print("=" * 70)
 walls_pv = pv.read(os.path.join(HERE, "RoomVolume_Walls.stl"))
 bodies = walls_pv.split_bodies()
 
-# Identify the outer wall shell by VOLUME (largest by far), not by assuming
-# split_bodies() always returns it first -- that ordering isn't guaranteed
-# to be stable across pyvista versions or re-exports of the STL.
 volumes = [body.extract_surface().volume for body in bodies]
 shell_idx = int(max(range(len(bodies)), key=lambda i: volumes[i]))
 print(f"Found {len(bodies)} bodies total (body {shell_idx} = outer wall shell, by volume, "
@@ -86,9 +72,7 @@ for i, body in enumerate(bodies):
               f"volume {volumes[i]:.1f}) -- not a column")
         continue
     is_column = bx < 1.0 and by < 1.0 and bz > 2.0
-    # radius computed independently every time -- no special-casing toward
-    # an expected answer, so this is a genuine check against point_sampler.py
-    radius = max(bx, by) / 2.0 + 0.002  # small fudge for mesh wall thickness
+    radius = max(bx, by) / 2.0 + 0.002
     kind = "COLUMN" if is_column else "OTHER OBSTACLE (not a slender column -- check manually)"
     if is_column:
         n_columns += 1

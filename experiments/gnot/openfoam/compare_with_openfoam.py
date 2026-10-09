@@ -1,24 +1,6 @@
 """
-LEVEL 1 comparison: physics-informed GNOT vs an independent OpenFOAM solution of the SAME
-equations (case made by make_openfoam_case.py, run by run_openfoam_case.sh).
-
-Compares, for one window scenario:
-  1. AIRFLOW  -- relative L2 error of the velocity (whole room and breathing plane z ~ 1.1 m)
-                 at the chosen times; speed maps side by side.
-  2. DOORS    -- OpenFOAM flow rate through each door and its split vs the model's alpha.
-  3. CO2      -- CO2 transported through the OPENFOAM flow with the verified finite-volume
-                 solver of check_co2_with_model_flow.py (same source, D, BCs; OpenFOAM's
-                 conda build has no compiler for a coded Gaussian source), compared with the
-                 model's CO2. A network-free reference for the open-window CO2.
-Both sides use the identical cell layout (make_openfoam_case.py uses Grid's n = round(L/dx)).
-
-Usage (training env, i.e. with torch):
-  python3 compare_with_openfoam.py --case cases/W1_1ms_dx0.1 --checkpoint <model .pth>
-  # checkpoint of an OLDER model version: point --code-dir at that version's code, e.g.
-  python3 compare_with_openfoam.py --case cases/W1_1ms_dx0.1 \
-      --checkpoint ~/BuildingControlCFD/experiments/gnot/checkpoints/v19_throughflow/gnot_v19_throughflow_final.pth \
-      --code-dir ~/gnot_v19/experiments/gnot
-Writes openfoam/results/<case>__<version>/ (log table, csv, figures).
+Check 1: the physics-only model against an OpenFOAM solution of the same equations (airflow, door split, CO2).
+Usage: python3 compare_with_openfoam.py --case cases/W1_1ms_dx0.1 --checkpoint <model .pth>
 """
 import argparse
 import csv
@@ -31,16 +13,15 @@ import numpy as np
 HERE = os.path.dirname(os.path.abspath(__file__))
 
 
-# ------------------------------------------------------------------ OpenFOAM ascii readers
 def _read_list_block(text, key, ncomp):
-    """Parse 'key nonuniform List<...> N ( ... )' (or 'uniform v') -> (N, ncomp) array."""
+    """Parse an OpenFOAM 'nonuniform List' block into an array."""
     m = re.search(key + r"\s+nonuniform\s+List<\w+>\s*(\d+)\s*\(", text)
     if m is None:
         return None
     n = int(m.group(1))
     body = text[m.end():]
-    end = body.find("\n)")                     # long lists: one entry per line, closing ')' on its own line
-    if end < 0 or n <= 10:                     # short lists are written inline: N(a b c) / N((a b c) (d e f))
+    end = body.find("\n)")
+    if end < 0 or n <= 10:
         depth, end = 1, None
         for i, ch in enumerate(body):
             depth += (ch == "(") - (ch == ")")
@@ -63,8 +44,7 @@ def _open_field(path):
 
 
 def read_internal(path, ncomp, n_cells=None):
-    """internalField as (N, ncomp); a 'uniform' field (e.g. the initial state at rest in 0/)
-    is expanded to n_cells rows."""
+    """Read the internalField of an OpenFOAM field file as an (N, ncomp) array."""
     with _open_field(path) as f:
         text = f.read()
     arr = _read_list_block(text, "internalField", ncomp)
@@ -138,13 +118,11 @@ def main():
     model.load_state_dict(ckpt["model_state"])
     model.eval()
     version = ckpt.get("version", "unknown")
-    # v21: the viscosity of the checkpoint (curriculum stage) must match the OpenFOAM case
     nu_case = float(meta.get("nu", "0.01"))
-    nu_ckpt = float(ckpt.get("nu", 0.01))          # pre-v21 checkpoints: always nu = 0.01
+    nu_ckpt = float(ckpt.get("nu", 0.01))
     if abs(nu_case - nu_ckpt) > 1e-12:
         raise SystemExit(f"viscosity mismatch: checkpoint trained at nu = {nu_ckpt:g}, OpenFOAM case has "
                          f"nu = {nu_case:g} -- use the case made with --nu {nu_ckpt:g}")
-    # iteration in the folder name (v21 compares several checkpoints of one version)
     out_dir = os.path.join(HERE, "results", f"{os.path.basename(case)}__{version}_iter{ckpt.get('iter', 'x')}")
     os.makedirs(out_dir, exist_ok=True)
     log = open(os.path.join(out_dir, "comparison.log"), "w")
@@ -155,7 +133,6 @@ def main():
     say(f"OpenFOAM case {case}\n  scenario {name}: V = {V}, dx = {dx}\nmodel {ckpt_path} "
         f"(version={version}, iter={ckpt.get('iter', '?')}), code from {code_dir}")
 
-    # ---- grid mapping: OpenFOAM cells -> (i, j, k) of the shared layout
     g = L2.Grid(dx, V)
     C = read_internal(os.path.join(case, "0", "C"), 3)
     idx = [np.clip(np.floor((C[:, a] - (ROOM_X[0], ROOM_Y[0], 0.0)[a]) / g.h[a]).astype(int), 0, g.n[a] - 1)
@@ -177,7 +154,6 @@ def main():
     P = np.stack([g.X[g.fluid], g.Y[g.fluid], g.Z[g.fluid]], 1)
     kz = int(np.argmin(np.abs(g.c1d[2] - BREATHING_HEIGHT)))
 
-    # ---- 1 + 2: airflow and doors
     rows = []
     say("\nAIRFLOW: model vs OpenFOAM (relative L2 of the velocity vector)")
     say(f"{'t [s]':>6s} | {'volume':>7s} {'plane':>7s} | {'|u| OF':>7s} {'|u| model':>9s} | "
@@ -217,7 +193,6 @@ def main():
         plane_maps[t] = (np.linalg.norm(U_of[:, :, kz], axis=-1), np.linalg.norm(U_m[:, :, kz], axis=-1),
                          U_of[:, :, kz], U_m[:, :, kz])
 
-    # ---- 3: CO2 through the OpenFOAM flow (network-free reference) vs model CO2
     if not args.no_co2:
         say("\nCO2: model vs finite-volume CO2 transported by the OPENFOAM flow (N = 20)")
         snaps, times = [], []
@@ -225,10 +200,10 @@ def main():
             Ug = to_grid(read_internal(os.path.join(case, d, "U"), 3, len(C)))
             snaps.append([np.nan_to_num(Ug[..., a]) * g.fluid for a in range(3)])
             times.append(t)
-        if times[0] > 0:                                   # at rest before the first save
+        if times[0] > 0:
             snaps.insert(0, [np.zeros(g.X.shape)] * 3)
             times.insert(0, 0.0)
-        L2.T_SNAP = times                                  # velocity_at() interpolates on these
+        L2.T_SNAP = times
         L2.T_OUT = tuple(t for t in args.times if t <= times[-1])
         ref, dt_used, nsteps = L2.solve_co2(g, snaps)
         say(f"  FV transport: {nsteps} steps, dt = {dt_used:.4f} s, {len(times)} OpenFOAM snapshots")
@@ -254,7 +229,6 @@ def main():
             wr.writeheader()
             wr.writerows(rows)
 
-    # ---- figures: breathing plane at the last compared time
     if plane_maps:
         t = max(plane_maps)
         mp = plane_maps[t]

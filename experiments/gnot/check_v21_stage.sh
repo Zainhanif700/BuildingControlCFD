@@ -1,16 +1,6 @@
 #!/usr/bin/env bash
-# v21_single: check one checkpoint against the OpenFOAM case with the SAME viscosity.
-# (The closed-room checks of post_training_checks.sh are not meaningful for v21: it is trained on
-#  one scenario only, window 1 at 1 m/s.)
-#
-#   1. compare_with_openfoam.py      velocity error (volume / breathing plane), door split, CO2
-#   2. diagnose_flow_correction.py   size / alignment / achieved share of the needed correction
-#
-# The case is chosen from the checkpoint's own nu: 0.01 -> cases/W1_1ms_dx0.1,
-# otherwise cases/W1_1ms_dx0.1_nu<nu> (made with make_openfoam_case.py --nu <nu>).
-# Usage (from experiments/gnot, training env; CPU so a running training is not disturbed):
-#   bash check_v21_stage.sh checkpoints/v21_single/gnot_v21_single_iter10000.pth [--gpu]
-# Log: logs/checks/v21_<checkpoint name>.log
+# Checks one v21 checkpoint against the OpenFOAM case with the same viscosity.
+# Usage: bash check_v21_stage.sh <checkpoint> [--gpu]
 set -u
 CKPT="${1:?usage: bash check_v21_stage.sh <checkpoint>}"
 [ -f "$CKPT" ] || { echo "checkpoint not found: $CKPT"; exit 1; }

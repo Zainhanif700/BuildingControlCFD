@@ -1,17 +1,5 @@
 """
-Export a trained GNOT checkpoint's predictions (over a 3D grid, for a chosen
-scenario) plus the real room geometry to a single JSON file, for the
-interactive 3D viewer (viewer.html).
-
-This is deliberately checkpoint-agnostic: point it at ANY saved checkpoint
-(an intermediate one like gnot_v2_co2_fix_iter4000.pth while training is
-still running, or the final one once it's done) and it produces the same
-JSON shape, so the viewer never needs to change -- just re-run this and drop
-in the new file.
-
-Usage:
-    python3 export_grid_for_viewer.py --checkpoint checkpoints/v2_co2_fix/gnot_v2_co2_fix_iter4000.pth --out viewer_data.json
-    python3 export_grid_for_viewer.py --checkpoint checkpoints/v2_co2_fix/gnot_v2_co2_fix_final.pth --out viewer_data.json --windows 5.0,0,0,0,0,0,0,5.0 --n-people 20 --t 60
+Exports a model's predictions on a 3D grid plus the room geometry to JSON for the 3D viewer.
 """
 import argparse
 import json
@@ -62,7 +50,7 @@ def main():
     device = "cuda" if torch.cuda.is_available() else "cpu"
     model = GNOTOperator().to(device)
     ckpt = torch.load(args.checkpoint, map_location=device)
-    check_checkpoint_compat(ckpt, args.checkpoint)  # v8_nondim: refuse pre-v8 checkpoints
+    check_checkpoint_compat(ckpt, args.checkpoint)
     model.load_state_dict(ckpt["model_state"])
     model.eval()
     ckpt_iter = ckpt.get("iter", "?")

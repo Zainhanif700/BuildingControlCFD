@@ -1,29 +1,5 @@
 """
-Closed-window ROBUSTNESS validation of a trained PINN against the
-finite-difference reference (fd_reference_closed_room.py), across several
-occupancies, heights and times -- plus two figures for presentations.
-
-The closed-room problem (u = 0, pure diffusion + source, c(t=0) = 0) is LINEAR
-in the source, and the source is proportional to N_people. So ONE reference
-solve at N = 1 gives the exact reference for every N by scaling: c_N = N * c_1.
-The network is evaluated separately at each N. Before v12 this tested its
-ability to generalize across occupancy (learned only from physics). From v12 on
-the model is EXACTLY linear in N by construction, so all relative errors are
-identical across N -- compare the common error level against earlier versions'
-best case instead.
-
-Cases: N_people in {5, 20, 50} x height z in {0.5, 1.10, 2.0} m x t in
-{30, 60, 120} s (27 cases). For each: CO2 at the source column (x, y of the
-source, at that height) and the relative L2 error over the full 40x40
-horizontal plane at that height.
-
-Outputs (in figures/<checkpoint version>/):
-  closed_room_validation.csv          -- the full table
-  closed_room_maps_N20_z1.10_t60.png  -- reference | PINN | PINN - reference
-  closed_room_timeseries_source.png   -- CO2 at the source vs time, N = 5/20/50
-
-Usage:
-    python3 validate_closed_room.py <checkpoint> [--dx 0.1]
+Closed-room validation of a trained model against the finite-difference reference, for several occupancies and times.
 """
 import argparse
 import os
@@ -115,7 +91,6 @@ def main():
                header="N_people,z_m,t_s,fd_source,pinn_source,source_rel_err,plane_rel_L2", comments="")
     print(f"\nTable written to {csv}")
 
-    # ---- figure 1: reference | PINN | difference, N=20, breathing height, t=60 s
     N, z, t = 20.0, BREATHING_HEIGHT, 60.0
     ref = (N * interp(out1[t], grid, xg, yg, np.full_like(xg, z))).astype(float)
     p = pinn_on(model, device, xg, yg, t, z=z, n_people=N)
@@ -143,7 +118,6 @@ def main():
     fig.savefig(f1, dpi=150, bbox_inches="tight")
     plt.close(fig)
 
-    # ---- figure 2: CO2 at the source vs time for N = 5, 20, 50
     t_fine = np.arange(0.0, 120.0 + 1e-9, 2.0)
     t_ref = sorted(out1.keys())
     fig, ax = plt.subplots(figsize=(7.5, 4.8))

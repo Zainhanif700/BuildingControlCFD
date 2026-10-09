@@ -1,20 +1,5 @@
 """
-Extract one OpenFOAM case into a compact training dataset (npz):
-  * velocity U from OpenFOAM at every saved time that is a multiple of 10 s (t_u), fluid cells of the
-    shared FV grid; after the last OpenFOAM time the flow is taken as FROZEN (steady);
-  * CO2 C at t_c (every 10 s to 120 s, then every 30 s to --t-co2), transported through the OpenFOAM
-    flow by the verified FV scheme of experiments/gnot/check_co2_with_model_flow.py, at N_REF people
-    (C is exactly linear in N). --fv torch runs the same scheme on the GPU (fv_torch.py, checked
-    against numpy with --verify-fv); --fv numpy is the original code (slow for 30 min).
-  * steadiness: relative change of U between the last two OpenFOAM saves 30 s apart (stored, printed)
-    -- the frozen-flow CO2 beyond the OpenFOAM horizon is only valid if this is small.
-Grid / cell mapping / readers are those of compare_with_openfoam.py (imported, not copied).
-
-Usage (training env, from experiments/gnot_openfoam):
-  python3 extract_case.py --case ../gnot/openfoam/cases/W1_1ms_dx0.1                 # Phase 1 (120 s)
-  python3 extract_case.py --case cases/S07_dx0.1 --t-co2 1800 --fv torch --name S07   # Phase 2
-  python3 extract_case.py --closed --name S00 --t-co2 1800 --fv torch                 # all windows closed
-  python3 extract_case.py --case ../gnot/openfoam/cases/W1_1ms_dx0.1 --verify-fv      # torch vs numpy
+Turns one laminar OpenFOAM case into a training file (velocity snapshots and CO2 on the shared grid).
 """
 import argparse
 import os
@@ -39,7 +24,7 @@ def extract(case=None, out_dir=DATA_DIR, t_co2=120.0, fv="numpy", name=None, clo
     from point_sampler import ROOM_X, ROOM_Y, BREATHING_HEIGHT, NUM_WINDOWS
     assert abs(L2.N_PEOPLE - N_REF) < 1e-12, "FV solver occupancy must equal common.N_REF"
 
-    if case is None:                                         # all windows closed: u = 0, no OpenFOAM run
+    if case is None:
         V, dx, nu = [0.0] * NUM_WINDOWS, closed_dx, 0.01
         g = L2.Grid(dx, V)
         zero = [np.zeros(g.X.shape)] * 3
@@ -67,7 +52,7 @@ def extract(case=None, out_dir=DATA_DIR, t_co2=120.0, fv="numpy", name=None, clo
             Ug = np.nan_to_num(Ug) * g.fluid[..., None]
             snaps.append([Ug[..., a] for a in range(3)])
             stimes.append(t)
-        if stimes[0] > 0:                  # at rest before the first save (as in compare_with_openfoam)
+        if stimes[0] > 0:
             snaps.insert(0, [np.zeros(g.X.shape)] * 3)
             stimes.insert(0, 0.0)
         t_last = stimes[-1]
@@ -84,7 +69,7 @@ def extract(case=None, out_dir=DATA_DIR, t_co2=120.0, fv="numpy", name=None, clo
     if verify:
         import fv_torch
         dev = device
-        t_chk = (60.0, stimes[-1] + 20.0)   # the 2nd time lies past the last snapshot -> frozen-flow branch tested
+        t_chk = (60.0, stimes[-1] + 20.0)
         r = fv_torch.verify(g, stimes, snaps, t_check=t_chk, device=dev)
         print("  torch FV vs numpy FV (max relative difference; seconds per step):")
         for k, v in r.items():

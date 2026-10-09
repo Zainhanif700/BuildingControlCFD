@@ -1,20 +1,5 @@
 """
-Where does the momentum (NS) loss come from?  v21 at nu = 0.1 logs NS losses of 25 ... 1700 that
-jump from one iteration to the next (guide_w 1e2 - 7e3). Suspicion: a few points with a huge residual
-dominate, e.g. next to the edges of the openings, where the analytic through-flow B_p has sharp
-gradients (window/door taper 0.1-0.2 m) -> large viscous term nu*lap(u), and where the network
-correction cannot help (it is multiplied by phi = 0 on the walls).
-
-This evaluates the per-point residual on the TRAINING distribution (sample_interior, with the
-checkpoint's own scenario) and reports:
-  * mean normalised residual^2 at the checkpoint's nu and at nu = 0.01 (same points, same model);
-  * share of the total carried by the top 1% / 0.1% points (heavy tail -> the jumpy loss);
-  * where the top 1% are: distance to the nearest opening (window 1 / doors), early time t < 3 s;
-  * how much of their residual is the viscous term nu*lap(u).
-Self-check: the mean over the first batch is compared with train_gnot.physics_loss on the SAME points.
-
-Usage (training env, CPU so a running training is not disturbed; ~5-10 min):
-  CUDA_VISIBLE_DEVICES="" python3 diagnose_ns_residual.py checkpoints/v21_single/gnot_v21_single_iter3000.pth
+Diagnostic: where does the momentum (Navier-Stokes) loss come from?
 """
 import argparse
 import math
@@ -27,8 +12,7 @@ from gnot_model import GNOTOperator, check_checkpoint_compat
 
 
 def residual_parts(model, x, y, z, t, V, N):
-    """Same formulas as train_gnot.physics_loss (momentum part): returns per-point
-    R0 = du/dt + (u.grad)u + grad p / rho  and  lap(u), each (n, 3), plus ns_scale (n, 1)."""
+    """The terms of the momentum residual (same formulas as in training)."""
     g = tg.grad
     u, v, w, c, p = tg.get_velocity_and_derivs(model, x, y, z, t, V, N)
     R0, LAP = [], []
@@ -42,8 +26,7 @@ def residual_parts(model, x, y, z, t, V, N):
 
 
 def dist_to_openings(x, y, z):
-    """Distance [m] from each point to the nearest open window (only those open in FIXED_V) or door
-    rectangle (windows on y = LY, doors on y = 0)."""
+    """Distance from each point to the nearest open window or door."""
     rects = [(a, b, c, d, ps.ROOM_Y[1]) for k, (a, b, c, d) in enumerate(ps.WINDOWS) if ps.FIXED_V[k] > 0]
     rects += [(a, b, c, d, ps.ROOM_Y[0]) for (a, b, c, d) in ps.DOORS]
     out = None
@@ -79,7 +62,7 @@ def main():
         for q in (x, y, z, t):
             q.requires_grad_(True)
         R0, LAP, sc = residual_parts(model, x, y, z, t, V, N)
-        if b == 0:   # self-check against the training loss on the SAME points
+        if b == 0:
             pts = (x.detach(), y.detach(), z.detach(), t.detach(), V, N)
             orig = tg.sample_interior
             tg.sample_interior = lambda n, device: tuple(q.clone() for q in pts)
@@ -88,7 +71,7 @@ def main():
             finally:
                 tg.sample_interior = orig
             n_sel = ps.interior_uniform_count(R0.shape[0]) if getattr(tg, "NS_UNIFORM_POINTS_ONLY", False) else R0.shape[0]
-            r2_here = (((R0 - nu_ck * LAP) / sc) ** 2).sum(1)[:n_sel]          # v25: NS on uniform rows only
+            r2_here = (((R0 - nu_ck * LAP) / sc) ** 2).sum(1)[:n_sel]
             L_here = (2.0 * (torch.sqrt(1.0 + r2_here) - 1.0)).mean().item() if getattr(tg, "NS_PSEUDO_HUBER", False) \
                 else r2_here.mean().item()
             print(f"self-check: physics_loss {L_train:.6g} vs per-point mean {L_here:.6g} "
@@ -124,7 +107,6 @@ def main():
     near = d < 0.3
     print(f"share of the total residual^2 from points within 0.3 m of an opening "
           f"({near.float().mean().item():.1%} of the points): {e_ck[near].sum().item() / e_ck.sum().item():.1%}")
-    # --- v2: WHERE are the top-1% points, and is their viscous term B_p's own or the network's? ---
     from throughflow import through_flow_potential, COLUMN_BLEND, DOOR_STRIP
     xt, yt, zt, t_t = (q[top].clone().requires_grad_(True) for q in (x, y, z, t))
     Vt = torch.tensor([ps.FIXED_V], dtype=xt.dtype).expand(xt.shape[0], -1)
@@ -132,18 +114,17 @@ def main():
         alpha = model.door_split(t_t.detach(), Vt)
     chi, psi = through_flow_potential(xt, yt, zt, t_t, Vt, alpha)
 
-    def g(f, v):   # like tg.grad, but 0 where f does not depend on v (psi has no z-dependence)
+    def g(f, v):
         if not f.requires_grad:
             return torch.zeros_like(v)
         r = torch.autograd.grad(f, v, grad_outputs=torch.ones_like(f), create_graph=True, allow_unused=True)[0]
         return torch.zeros_like(v) if r is None else r
-    ub = (g(psi, yt), g(chi, zt) - g(psi, xt), -g(chi, yt))       # curl of B_p = (chi, 0, psi)
+    ub = (g(psi, yt), g(chi, zt) - g(psi, xt), -g(chi, yt))
     lap_bp = torch.cat([g(g(c, xt), xt) + g(g(c, yt), yt) + g(g(c, zt), zt) for c in ub], 1).detach()
     visc_tot = ((nu_ck * LAP[top] / sc[top]) ** 2).sum(1)
     visc_bp = ((nu_ck * lap_bp / sc[top]) ** 2).sum(1)
     print(f"\ntop 1%: viscous term of B_p ALONE / viscous term of the full model = "
           f"{(visc_bp.sum() / visc_tot.sum()).item():.2f}  (~1: B_p's own curvature; << 1 or >> 1: the network part)")
-    # location classes (first match wins), weighted by the residual^2 they carry
     xd, yd, zd = x[top].squeeze(1), y[top].squeeze(1), z[top].squeeze(1)
     col = torch.stack([torch.sqrt((xd - cx) ** 2 + (yd - cy) ** 2) - r - rb
                        for (cx, cy, r, _, _), rb in zip(ps.COLUMNS, COLUMN_BLEND)], 1).min(1).values

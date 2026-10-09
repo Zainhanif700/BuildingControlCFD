@@ -1,12 +1,5 @@
 """
-Grid check of the OpenFOAM reference itself: same scenario on two grids (e.g. dx 0.1 and 0.15 m).
-The coarse velocity is interpolated (trilinear, cell-centred) onto the fine cell centres and the
-relative L2 difference is reported (whole room and breathing plane), plus both door splits.
-If fine and coarse agree well, the fine solution is a trustworthy reference; the difference is a
-rough upper bound of the fine solution's own discretisation error.
-
-Usage (any env with numpy):
-  python3 compare_openfoam_grids.py --fine cases/W1_1ms_dx0.1 --coarse cases/W1_1ms_dx0.15
+Grid check of the OpenFOAM reference: the same case on two grids.
 """
 import argparse
 import os
@@ -35,7 +28,7 @@ def main():
     args = ap.parse_args()
     try:
         from point_sampler import ROOM_X, ROOM_Y, ROOM_Z, BREATHING_HEIGHT
-    except ImportError:   # geometry without torch (numbers as in point_sampler.py)
+    except ImportError:
         ROOM_X, ROOM_Y, ROOM_Z, BREATHING_HEIGHT = (0.0, 15.53), (0.0, 9.16), (0.0, 3.15), 1.10
     from compare_with_openfoam import read_internal, read_patch_sum
     fine, coarse = (os.path.abspath(os.path.expanduser(p)) for p in (args.fine, args.coarse))
@@ -56,7 +49,6 @@ def main():
         Uc = read_internal(os.path.join(coarse, tc[t], "U"), 3, len(Cc))
         G = np.full(tuple(nc) + (3,), np.nan)
         G[ic[0], ic[1], ic[2]] = Uc
-        # fill column (solid) cells from their neighbours so the interpolation is not pulled to 0
         for _ in range(4):
             nan = np.isnan(G[..., 0])
             if not nan.any():
@@ -71,7 +63,6 @@ def main():
                     cnt[ok] += 1
             fill = nan & (cnt > 0)
             G[fill] = acc[fill] / cnt[fill][:, None]
-        # trilinear interpolation of the coarse field at the fine cell centres
         f = [np.clip((Cf[:, a] - lo[a]) / hc[a] - 0.5, 0, nc[a] - 1) for a in range(3)]
         i0 = [np.minimum(np.floor(fa).astype(int), nc[a] - 2) for a, fa in enumerate(f)]
         wgt = [fa - ia for fa, ia in zip(f, i0)]

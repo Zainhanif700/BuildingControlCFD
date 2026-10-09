@@ -1,26 +1,6 @@
 #!/usr/bin/env bash
-# Runs EVERY check on one checkpoint, closed AND open windows, and writes one log.
-#
-#   1. code smoke test (staged_smoke_test.py)            -- is the code itself consistent?
-#   2. closed-room validation vs finite-difference ref   -- accuracy where a reference exists
-#   3. residual diagnosis D1 (closed room)               -- where the remaining error comes from
-#   4. window-BC cross-check                             -- inflow right for every window setting?
-#   5. level-3 physics consistency, open + closed        -- air balance, leakage, CO2 budget,
-#                                                           PDE residuals over a window sweep
-#   6. level-2 CO2 check                                 -- model CO2 vs an independent FV CO2
-#                                                           solve driven by the model's own flow
-#
-# Usage (from experiments/gnot):
-#   bash post_training_checks.sh checkpoints/v16_fixes/gnot_v16_fixes_final.pth          # on CPU
-#   bash post_training_checks.sh checkpoints/v16_fixes/gnot_v16_fixes_iter5000.pth       # mid-run
-#   bash post_training_checks.sh <checkpoint> --gpu      # only when no training is running
-#   bash post_training_checks.sh <iterN checkpoint> --skip-smoke   # mid-run: the smoke test checks
-#        the CODE, not the checkpoint, so once per code version is enough (saves 5-15 min on CPU)
-#   bash post_training_checks.sh <iterN checkpoint> --skip-smoke --quick  # + skip level 2 (~20 min total)
-#
-# Results: checks_<checkpoint name>.log, figures in figures/<version>/ (for an iterN
-# checkpoint they are moved to figures/<version>_iterN/ so the final run never mixes with them).
-# The log fills line by line (unbuffered), so progress can be followed with tail -f.
+# Runs all checks on one physics-only checkpoint (smoke test, closed room, windows, physics, CO2) into one log.
+# Usage: bash post_training_checks.sh <checkpoint> [--gpu] [--skip-smoke] [--quick]
 set -u
 CKPT="${1:?usage: bash post_training_checks.sh <checkpoint> [--gpu] [--skip-smoke]}"
 [ -f "$CKPT" ] || { echo "checkpoint not found: $CKPT"; exit 1; }

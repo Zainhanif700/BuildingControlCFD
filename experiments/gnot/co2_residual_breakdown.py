@@ -1,27 +1,5 @@
 """
-CO2 residual BREAKDOWN (v8 onward): HOW is the network satisfying the CO2
-equation, and in WHICH scenarios?
-
-    residual = dc/dt + u.grad(c) - D lap(c) - S
-
-v8 puzzle this answers: the overall CO2(scaled) training loss is ~8x below
-the trivial floor, yet probe_co2_time.py shows that with closed windows the
-predicted CO2 barely grows over time (~3% of the physical rate). So the
-equation is being satisfied SOMEWHERE -- this shows where, and by which term:
-  - closed windows: the physics says dc/dt must balance S (no airflow);
-  - open windows:   convection u.grad(c) can balance S with tiny gradients.
-
-Evaluated on the SAME spatial point distribution as training
-(_generate_interior_batch: 40% uniform + 60% concentrated near the source),
-with the same random t and N_people, but the window setting overridden per
-scenario. Uses train_gnot.py's own grad/get_velocity_and_derivs and
-constants, so the formula is identical to the training loss.
-
-Small batches (default 200 points per scenario) so it can run on the same GPU
-while a training run is using most of the memory.
-
-Usage:
-    python3 co2_residual_breakdown.py <checkpoint> [n_points]
+Breaks the CO2 equation residual into its terms, to see how the network satisfies it in each scenario.
 """
 import sys
 import torch
@@ -38,7 +16,6 @@ def breakdown(model, device, n, scenario):
         V = torch.zeros_like(V)
     elif scenario == "open":
         V = torch.full_like(V, V_MAX)
-    # "training mix": keep sample_scenario's own V (30% closed, 20% partial, 50% uniform)
     x.requires_grad_(True); y.requires_grad_(True); z.requires_grad_(True); t.requires_grad_(True)
 
     u, v, w, c, p = get_velocity_and_derivs(model, x, y, z, t, V, N_people)
@@ -50,7 +27,7 @@ def breakdown(model, device, n, scenario):
     diff = DIFFUSIVITY * lap_c
     res = dc_dt + conv - diff - S
 
-    def rms(q):  # RMS in units of S_REF, same scaling as the training loss
+    def rms(q):
         return (q.detach() / S_REF).pow(2).mean().sqrt().item()
 
     speed = torch.sqrt(u ** 2 + v ** 2 + w ** 2).detach()

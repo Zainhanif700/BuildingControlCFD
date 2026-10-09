@@ -1,7 +1,6 @@
 #!/usr/bin/env bash
-# Mesh + run one OpenFOAM case made by make_openfoam_case.py.
-# Usage (conda env "foam" active):  bash run_openfoam_case.sh cases/W1_1ms_dx0.1 [n_procs]
-#   --mesh-only as 3rd argument: stop after the mesh (to inspect checkMesh first)
+# Mesh and run one laminar OpenFOAM reference case (conda env "foam" active).
+# Usage: bash run_openfoam_case.sh cases/W1_1ms_dx0.1 [n_procs] [--mesh-only]
 set -eu
 CASE="${1:?usage: bash run_openfoam_case.sh <case dir> [n_procs] [--mesh-only]}"
 NP="${2:-4}"

@@ -1,35 +1,6 @@
 """
-Closed-window CO2/velocity diagnostic -- takes ANY checkpoint path as an
-argument, so it's reusable across versions (v3_isotropic_ff, v4_source_sampling,
-future ones) without editing the script each time.
-
-Scenario: all 8 windows closed (V=0 everywhere), 20 people, t=60s. With no
-inflow forcing at all, velocity should be near-zero everywhere (any large
-speed here is the still-unfixed "spurious closed-window velocity" artifact,
-fix #3, not yet attempted). CO2 should show a compact, localized bump near
-the room center at breathing height -- NOT a room-wide band (the original
-bug) and not a flat near-zero field (the "undertrained" symptom seen on the
-fix-#1-only checkpoint).
-
-This is fast: one forward pass over a 40x40 grid (1600 points), no training,
-seconds on GPU even without one.
-
-Two scenarios (pass as a second CLI argument, defaults to "closed"):
-  closed -- all 8 windows at V=0. True physical solution for velocity is
-            exactly u=v=w=0 everywhere (zero forcing, zero IC, no body-force
-            term) -- any large speed here is the "spurious closed-window
-            velocity" bug (fix #3). CO2 should show a compact, localized
-            bump near the room center at breathing height.
-  open   -- all 8 windows at V=V_MAX (5 m/s), the "normal airflow" regime.
-            Added as a companion check after fix #3 (correlated closed/
-            partial-closed scenario oversampling in point_sampler.py) --
-            since that fix reduces the fraction of purely-uniform-sampled
-            training points from 100% to 50%, this checks the open-window
-            regime hasn't regressed as a side effect. Expect clearly
-            non-zero, inflow-directed velocity here (unlike the closed case).
-
-Usage:
-    python3 closed_window_diagnostic.py <checkpoint_path> [closed|open]
+Diagnostic for the closed-window case (all windows shut): CO2 and velocity of any checkpoint.
+Usage: python3 closed_window_diagnostic.py <checkpoint>
 """
 import sys
 import torch
@@ -59,7 +30,7 @@ def main():
     device = "cuda" if torch.cuda.is_available() else "cpu"
     model = GNOTOperator().to(device)
     ckpt = torch.load(ckpt_path, map_location=device)
-    check_checkpoint_compat(ckpt, ckpt_path)  # v8_nondim: refuse pre-v8 checkpoints
+    check_checkpoint_compat(ckpt, ckpt_path)
     model.load_state_dict(ckpt["model_state"])
     model.eval()
     print(f"Loaded checkpoint: {ckpt_path} (iter={ckpt.get('iter', '?')}, "
@@ -94,10 +65,10 @@ def main():
     Cgrid = c.reshape(40, 40)
     peak_idx = np.nanargmax(Cgrid)
     pi, pj = np.unravel_index(peak_idx, Cgrid.shape)
-    row = Cgrid[pi, :]  # fixed x, varying y
-    col = Cgrid[:, pj]  # fixed y, varying x
+    row = Cgrid[pi, :]
+    col = Cgrid[:, pj]
     cmax, cmin = np.nanmax(Cgrid), np.nanmin(Cgrid)
-    half_max = cmin + (cmax - cmin) / 2  # relative to the field's own range, not assuming a 0 baseline
+    half_max = cmin + (cmax - cmin) / 2
 
     print(f"\nCO2 min/max/mean: {np.nanmin(c):.6f} / {np.nanmax(c):.6f} / {np.nanmean(c):.6f}")
     if scenario == "closed":

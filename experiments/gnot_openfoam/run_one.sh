@@ -1,8 +1,6 @@
 #!/usr/bin/env bash
-# One Phase-2 scenario end to end: OpenFOAM case (dx 0.1, 180 s, fields every 10 s) -> run (1 core)
-# -> extract (OpenFOAM U + 30-min FV CO2 on the GPU) -> delete the case folder (KEEP_CASES=1 keeps it).
-# Usage (from experiments/gnot_openfoam):  bash run_one.sh <name> <V1,...,V8>
-# Skips a scenario whose data/<name>.npz already exists (safe to re-run after an interruption).
+# One window setting end to end for the laminar dataset: case, OpenFOAM run, extraction, delete the case.
+# Usage: bash run_one.sh <name> <V1,...,V8>
 set -u
 NAME="${1:?usage: run_one.sh <name> <V1,...,V8>}"
 V="${2:?usage: run_one.sh <name> <V1,...,V8>}"

@@ -1,43 +1,6 @@
 """
-LEVEL 3 open-window check: physics consistency of a trained GNOT for ANY window
-setting, WITHOUT a reference solution.
-
-These checks cannot prove the model is accurate (that needs an independent
-solver, level 1), but a failure proves a solution is physically wrong. They are
-evaluated with deterministic quadrature on the room's surfaces and volume,
-for a sweep of window settings (fixed cases + random ones from the training
-distribution), at N = 20 people.
-
-1. AIR BALANCE at time t (volumetric flux, m^3/s; outward normal):
-     Q_target  = sum_k V_k tanh(3t/TAU_RAMP) * A_k   (what the window BC prescribes)
-     Q_in      = air the model actually brings in through the windows
-     Q_doors   = air leaving through the doors
-     leak_net / leak_gross = net / gross flux through walls, floor, ceiling and
-                 columns -- must be ~0 (no-slip, impermeable).
-     closure   = sum of ALL boundary fluxes. The velocity is divergence-free by
-                 construction (curl trick), so this is ~0 up to quadrature error;
-                 it checks the quadrature itself.
-     wall slip = RMS velocity on solid surfaces / mean prescribed window speed.
-     win err   = RMS deviation from the prescribed window velocity / V_k.
-2. CO2 BUDGET at time t:  d/dt (total CO2) = emission - outflow, i.e.
-     dM/dt + F_out - E = 0,   F_out = surface integral of (c u.n - D dc/dn).
-     imbalance = (dM/dt + F_out - E) / E: the share of the emitted CO2 that the
-     model creates (+) or destroys (-). By the divergence theorem this equals the
-     volume integral of the CO2 residual, so it is the GLOBAL version of the
-     D1 residual diagnosis.
-3. PDE RESIDUALS at fresh random interior points (uniform in space, t in
-   [0, 120] s), relative to the size of the terms of each equation:
-     rel_NS  = rms|r_momentum| / rms(|du/dt|, |u.grad u|, |grad p|, |nu lap u|)
-     rel_CO2 = rms(r_c) / rms(|dc/dt|, |u.grad c|, |D lap c|, |S|)
-   0 = equation satisfied exactly, ~1 = residual as large as the terms.
-   The closed-window row is the CALIBRATION: that case is validated (plane L2
-   ~16% for v13), so open-window rows with a similar residual level are, as
-   far as the equations can tell, of similar quality.
-
-Usage:
-    python3 check_physics_consistency.py [checkpoint] [--device cpu] [--n-res 1000] [--n-random 5]
-default checkpoint: milestones/v13_fullocc/gnot_v13_fullocc_final.pth
-Writes figures/<version>/physics_checks/level3_consistency.csv
+Check 3: physics checks of a trained model without a reference (mass balance, boundary conditions, CO2 growth).
+Usage: python3 check_physics_consistency.py [checkpoint]
 """
 import argparse
 import csv
@@ -79,16 +42,11 @@ def scenarios(n_random, seed=0):
         ("all 1m/s", [1.0] * NUM_WINDOWS),
         ("all 3m/s", [3.0] * NUM_WINDOWS),
         ("all 5m/s", [5.0] * NUM_WINDOWS),
-        # low speeds (audit suspicion S2: flow SHAPE at small V may be poorly represented
-        # because of the s(V) = RMS(V)/V_MAX factor; compare win err with the 1-5 m/s rows)
         ("W1 0.2m/s", only(W1=0.2)),
         ("all 0.2m/s", [0.2] * NUM_WINDOWS),
     ]
     rng = np.random.default_rng(seed)
     for i in range(n_random):
-        # v16 fix (audit): like the open-window part of the TRAINING mix -- alternately
-        # uniform 0..V_MAX on every window ('u') and a random subset closed ('p'); the
-        # all-closed part of the mix is the 'closed' row already
         V = rng.uniform(0.0, V_MAX, NUM_WINDOWS)
         if i % 2 == 1:
             V = V * (rng.random(NUM_WINDOWS) >= 0.5)
@@ -98,7 +56,6 @@ def scenarios(n_random, seed=0):
     return out
 
 
-# ---------------------------------------------------------------- geometry
 def in_any_column(x, y):
     inside = np.zeros(np.shape(x), dtype=bool)
     for cx, cy, r, _, _ in COLUMNS:
@@ -113,7 +70,7 @@ def _grid1d(lo, hi, h):
 
 
 def plane_patch(axis, value, r1, r2, h1, h2, normal):
-    """Midpoint-rule patch on the plane coord[axis] = value; r1/r2 span the other two axes in order."""
+    """Midpoint-rule patch on the plane coord[axis] = value"""
     a, da = _grid1d(*r1, h1)
     b, db = _grid1d(*r2, h2)
     A, B = (m.ravel() for m in np.meshgrid(a, b, indexing="ij"))
@@ -124,7 +81,7 @@ def plane_patch(axis, value, r1, r2, h1, h2, normal):
 
 
 def build_surfaces():
-    """List of (kind, index, P, dA, n) with n the OUTWARD normal of the air domain."""
+    """Surface patches with outward normals (walls, windows, doors, columns)."""
     S = []
     for k, (xlo, xhi, zlo, zhi) in enumerate(WINDOWS):
         S.append(("window", k) + plane_patch(1, ROOM_Y[1], (xlo, xhi), (zlo, zhi), 0.05, 0.1, (0, 1, 0)))
@@ -135,34 +92,32 @@ def build_surfaces():
         S.append(("wall", -1, P[keep], dA[keep], n[keep]))
 
     def wall_with_openings(yval, normal, openings):
-        """v16 fix (audit): wall patches that tile EXACTLY around the openings (x-gaps at
-        full height, plus strips above/below each opening), instead of masking a grid by
-        cell-midpoint membership (which double-counted or dropped ~0.1 m strips)."""
+        """Wall patches that tile exactly around the window and door openings."""
         ops = sorted(openings)
         edges = [ROOM_X[0]] + [e for o in ops for e in (o[0], o[1])] + [ROOM_X[1]]
-        for a, b in zip(edges[0::2], edges[1::2]):                  # gaps between openings
+        for a, b in zip(edges[0::2], edges[1::2]):
             if b - a > 1e-9:
                 P, dA, n = plane_patch(1, yval, (a, b), ROOM_Z, 0.1, 0.1, normal)
                 wall(P, dA, n, np.ones(len(P), bool))
-        for xlo, xhi, zlo, zhi in ops:                             # above / below an opening
+        for xlo, xhi, zlo, zhi in ops:
             for z0, z1 in ((ROOM_Z[0], zlo), (zhi, ROOM_Z[1])):
                 if z1 - z0 > 1e-9:
                     P, dA, n = plane_patch(1, yval, (xlo, xhi), (z0, z1), 0.05, 0.1, normal)
                     wall(P, dA, n, np.ones(len(P), bool))
-    wall_with_openings(ROOM_Y[1], (0, 1, 0), WINDOWS)                                # window wall
-    wall_with_openings(ROOM_Y[0], (0, -1, 0), DOORS)                                 # door wall
-    for val, sgn in ((ROOM_X[0], -1), (ROOM_X[1], 1)):                               # end walls
+    wall_with_openings(ROOM_Y[1], (0, 1, 0), WINDOWS)
+    wall_with_openings(ROOM_Y[0], (0, -1, 0), DOORS)
+    for val, sgn in ((ROOM_X[0], -1), (ROOM_X[1], 1)):
         P, dA, n = plane_patch(0, val, ROOM_Y, ROOM_Z, 0.1, 0.1, (sgn, 0, 0))
         wall(P, dA, n, np.ones(len(P), bool))
-    for val, sgn in ((ROOM_Z[0], -1), (ROOM_Z[1], 1)):                               # floor, ceiling
+    for val, sgn in ((ROOM_Z[0], -1), (ROOM_Z[1], 1)):
         P, dA, n = plane_patch(2, val, ROOM_X, ROOM_Y, 0.2, 0.2, (0, 0, sgn))
         wall(P, dA, n, ~in_any_column(P[:, 0], P[:, 1]))
-    for k, (cx, cy, r, zlo, zhi) in enumerate(COLUMNS):                              # column sides
+    for k, (cx, cy, r, zlo, zhi) in enumerate(COLUMNS):
         th, dth = _grid1d(0.0, 2 * np.pi, 2 * np.pi / 48)
         zz, dz = _grid1d(zlo, zhi, 0.1)
         TH, ZZ = (m.ravel() for m in np.meshgrid(th, zz, indexing="ij"))
         P = np.stack([cx + r * np.cos(TH), cy + r * np.sin(TH), ZZ], 1)
-        n = np.stack([-np.cos(TH), -np.sin(TH), np.zeros_like(TH)], 1)               # air -> column
+        n = np.stack([-np.cos(TH), -np.sin(TH), np.zeros_like(TH)], 1)
         S.append(("column", k, P, np.full(len(P), r * dth * dz), n))
     return S
 
@@ -181,9 +136,8 @@ def source(P, n_people):
     return n_people * EMISSION_PER_PERSON * np.exp(-d2 / SIGMA ** 2)
 
 
-# ---------------------------------------------------------------- model evaluation
 def evaluate(model, dev, P, t, V, n_people, grad_c=False, dcdt=False, batch=2048):
-    """u, v, w, c, p (+ grad c, dc/dt) at points P (n,3), first-order autograd only."""
+    """Velocity, CO2, pressure and the CO2 derivatives at the points P."""
     keys = ["u", "v", "w", "c", "p"] + (["cx", "cy", "cz"] if grad_c else []) + (["ct"] if dcdt else [])
     out = {k: [] for k in keys}
     for i in range(0, len(P), batch):
@@ -208,7 +162,7 @@ def evaluate(model, dev, P, t, V, n_people, grad_c=False, dcdt=False, batch=2048
 
 
 def residuals(model, dev, V, n_people, n_pts, rng, batch=100):
-    """Relative NS and CO2 residuals at fresh uniform interior points (same equations as train_gnot.physics_loss)."""
+    """Relative Navier-Stokes and CO2 residuals at random interior points."""
     pts = []
     while sum(len(a) for a in pts) < n_pts:
         Q = np.stack([rng.uniform(*ROOM_X, n_pts), rng.uniform(*ROOM_Y, n_pts), rng.uniform(*ROOM_Z, n_pts)], 1)
@@ -225,7 +179,7 @@ def residuals(model, dev, V, n_people, n_pts, rng, batch=100):
         NN = torch.full((n, 1), float(n_people), device=dev)
         A1, A2, A3, c, p = model(x, y, z, t, VV, NN)
         u, v, w = model.velocity_from_potential(A1, A2, A3, x, y, z)
-        def gz(f, s):   # df/ds, or zeros if f does not depend on s
+        def gz(f, s):
             if not f.requires_grad:
                 return torch.zeros_like(f)
             r = torch.autograd.grad(f, s, grad_outputs=torch.ones_like(f), create_graph=True, allow_unused=True)[0]
@@ -248,13 +202,10 @@ def residuals(model, dev, V, n_people, n_pts, rng, batch=100):
         acc["dn"] += dn2.sum().item()
         acc["rc"] += (rc ** 2).sum().item()
         acc["dc"] += (ct ** 2 + convc ** 2 + (DIFFUSIVITY * lapc) ** 2 + S ** 2).sum().item()
-    # closed windows: the flow is exactly zero, so the momentum residual is just grad p and the
-    # ratio would be 1 by definition -- not meaningful, reported as '-'
     rel_ns = math.sqrt(acc["rn"] / acc["dn"]) if max(V) > 0 and acc["dn"] > 1e-30 else float("nan")
     return rel_ns, math.sqrt(acc["rc"] / acc["dc"])
 
 
-# ---------------------------------------------------------------- checks
 def surface_budget(model, dev, surfaces, t, V, n_people):
     ramp = math.tanh(3.0 * t / TAU_RAMP)
     r = {"Q_target": sum(V[k] * ramp * (x1 - x0) * (z1 - z0) for k, (x0, x1, z0, z1) in enumerate(WINDOWS))}
@@ -268,8 +219,6 @@ def surface_budget(model, dev, surfaces, t, V, n_people):
         dcdn = f["cx"] * nrm[:, 0] + f["cy"] * nrm[:, 1] + f["cz"] * nrm[:, 2]
         flux = np.sum(un * dA)
         closure += flux
-        # v16 fix (audit): a CLOSED window is a wall -- its flux counts as leakage and its
-        # velocity as wall slip (before, it was hidden inside Q_in)
         solid = kind in ("wall", "column") or (kind == "window" and V[k] == 0)
         F["wall" if solid else kind] += np.sum((f["c"] * un - DIFFUSIVITY * dcdn) * dA)
         if kind == "window" and not solid:
@@ -308,7 +257,7 @@ def main():
     ap.add_argument("--n-res", type=int, default=1000, help="interior points for the residual check (0 = skip)")
     ap.add_argument("--n-random", type=int, default=5, help="random window settings added to the fixed ones")
     args = ap.parse_args()
-    torch.set_num_threads(max(1, os.cpu_count() // 2))   # leave some CPU for the training process
+    torch.set_num_threads(max(1, os.cpu_count() // 2))
 
     dev = args.device
     ckpt = torch.load(args.checkpoint, map_location=dev)

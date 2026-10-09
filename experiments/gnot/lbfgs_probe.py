@@ -1,33 +1,5 @@
 """
-DIAGNOSTIC D2: is the remaining error an OPTIMIZER limit?
-
-Fine-tunes an existing checkpoint with L-BFGS (a quasi-Newton, second-order
-method) on ONE FIXED batch of training points, and tracks three things:
-  (a) the loss on that fixed batch,
-  (b) the loss on a different, held-out batch (fresh points),
-  (c) the real error against the finite-difference reference
-      (closed windows, 20 people, breathing height, t = 60 s).
-Why: PINN losses are ill-conditioned; Adam can stall on them while a
-second-order method keeps descending (Rathore et al. 2024, ICML,
-arXiv:2402.01868: Adam+L-BFGS lowered errors several-fold vs Adam alone).
-L-BFGS needs a deterministic loss, hence the fixed batch.
-
-How to read the result (decides v14):
-  (a) AND (b) drop a lot (>= ~3x) and (c) falls -> OPTIMIZER-limited:
-      a better optimizer (SOAP, Wang et al. 2025, arXiv:2502.00604) is the fix.
-  only (a) drops, (b) and (c) don't -> the network just fits these particular
-      points: a SAMPLING / generalization limit, not the optimizer.
-  nothing drops -> a representation / formulation floor: stop tuning.
-
-The batch is fixed by re-seeding PyTorch's RNG to the same value before every
-evaluation, so the unchanged training samplers and loss functions of
-train_gnot.py produce exactly the same points each time. The persistent point
-pool must be OFF (it is: point_sampler.USE_PERSISTENT_POOL = False).
-
-Usage:
-    python3 lbfgs_probe.py <checkpoint> [--steps 150]
-Each outer step runs up to 20 L-BFGS iterations (~20-25 s); 150 steps ~ 1 h.
-Saves checkpoints/<version>_lbfgs_probe/ (best and final), not a new version.
+Diagnostic: is the remaining error an optimiser limit? Fine-tunes a checkpoint with L-BFGS on a fixed batch.
 """
 import argparse
 import os
@@ -42,15 +14,13 @@ from point_sampler import BREATHING_HEIGHT, USE_PERSISTENT_POOL
 from train_gnot import (physics_loss, walls_loss, windows_loss, doors_loss, ic_loss,
                         co2_boundary_loss, HERE)
 
-FIXED_SEED = 1234        # the training batch L-BFGS optimizes on
-HELDOUT_SEEDS = [7, 99]  # fresh batches, never optimized on
+FIXED_SEED = 1234
+HELDOUT_SEEDS = [7, 99]
 N_PEOPLE, T_EVAL = 20.0, 60.0
 
 
 def total_loss(model, device, seed, backward):
-    """The CURRENT train_gnot loss functions (co2_weight = 1; since v17 incl. the flux-scaled wall
-    term and the relative window error at full weight), on the batch defined by `seed`.
-    Each term is backward()-ed right away (like train_gnot.main) to keep memory low."""
+    """The current training loss, used by the L-BFGS probe."""
     torch.manual_seed(seed)
     parts = {}
     L_ns, L_co2 = physics_loss(model, device)
@@ -92,7 +62,6 @@ def main():
     out_dir = os.path.join(HERE, "checkpoints", f"{version}_lbfgs_probe")
     os.makedirs(out_dir, exist_ok=True)
 
-    # finite-difference reference for the real-error check (N=1 solve, scaled)
     xs, ys, xg, yg, inside = breathing_grid()
     m = ~inside
     out1, grid, _ = solve(0.1, "noflux", n_people=1.0)

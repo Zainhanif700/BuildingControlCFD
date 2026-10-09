@@ -1,27 +1,5 @@
 """
-DIAGNOSTIC D1: is the remaining closed-room error driven by the PDE residual,
-and WHERE does that residual sit relative to where the training loss looks?
-
-Physics behind it: with all windows closed the flow is exactly zero (hard
-constraint), so the CO2 equation is linear: c_t - D lap(c) = S. If the model
-satisfies c_t - D lap(c) - S = r (its residual), the error e = c_model - c_true
-obeys e_t - D lap(e) = r with e(0) = 0. The diffusion length over 60 s is only
-sqrt(2*D*60) ~ 0.8 m (source width sigma = 2.5 m), so locally
-    e(x, 60 s)  ~  integral_0^60 r(x, t) dt.
-This script evaluates the model's residual on the 40x40 breathing-height grid
-at 13 times, integrates it, and compares the PREDICTED error map with the
-ACTUAL error against the finite-difference reference.
-
-It also splits both the error and the training loss into a NEAR-source region
-(S >= 20% of its peak, i.e. within ~3.2 m of the source) and the FAR field.
-The training loss "sees" each point in proportion to how often it is sampled
-(40% uniform + 60% Gaussian around the source, std sigma/2). If the far field
-holds most of the error but only a small share of the loss, the remaining error
-is a weighting/sampling mismatch that no optimizer will fix.
-
-Usage:
-    python3 diagnose_residual_map.py <checkpoint> [--dx 0.1]
-Writes figures/<version>/residual_diagnosis_N20_z1.10_t60.png
+Diagnostic: where in the room does the PDE residual sit in the closed-room case?
 """
 import argparse
 import os
@@ -42,13 +20,12 @@ from validate_closed_room import room_outline
 HERE = os.path.dirname(os.path.abspath(__file__))
 N_PEOPLE = 20.0
 T_END = 60.0
-TIMES = np.linspace(0.0, T_END, 13)   # 5 s steps for the time integral
-NEAR_FRAC = 0.2                       # "near" = S >= 20% of its peak
+TIMES = np.linspace(0.0, T_END, 13)
+NEAR_FRAC = 0.2
 
 
 def residual_on(model, device, xg, yg, z, t, n_people, batch=400):
-    """CO2 residual r = dc/dt + u.grad(c) - D lap(c) - S (physical units, per s),
-    closed windows, evaluated in batches (second-order autograd is memory-heavy)."""
+    """CO2 residual in the closed room, evaluated in batches."""
     out = []
     for i in range(0, len(xg), batch):
         n = len(xg[i:i + batch])
@@ -86,34 +63,26 @@ def main():
     m = ~inside
     z = BREATHING_HEIGHT
 
-    # residual at each time; integrate over time (trapezoid)
-    R = np.stack([residual_on(model, device, xg, yg, z, t, N_PEOPLE) for t in TIMES])  # (T, P)
-    dt = np.diff(TIMES)[:, None]                     # explicit trapezoid rule (np.trapz is
-    e_pred = np.sum(0.5 * (R[1:] + R[:-1]) * dt, 0)  # deprecated in newer NumPy)
+    R = np.stack([residual_on(model, device, xg, yg, z, t, N_PEOPLE) for t in TIMES])
+    dt = np.diff(TIMES)[:, None]
+    e_pred = np.sum(0.5 * (R[1:] + R[:-1]) * dt, 0)
 
     out1, grid, _ = solve(args.dx, "noflux", n_people=1.0)
     ref = N_PEOPLE * interp(out1[T_END], grid, xg, yg, np.full_like(xg, z)).astype(float)
     pinn = pinn_on(model, device, xg, yg, T_END, z=z, n_people=N_PEOPLE).astype(float)
     e_act = pinn - ref
 
-    # region split
     S0 = N_PEOPLE * EMISSION_PER_PERSON
-    S_plane = S0 * np.exp(-((xg - SX) ** 2 + (yg - SY) ** 2) / SIGMA ** 2)   # z = source height
+    S_plane = S0 * np.exp(-((xg - SX) ** 2 + (yg - SY) ** 2) / SIGMA ** 2)
     near = (S_plane >= NEAR_FRAC * S0) & m
     far = (~near) & m
-    # training sampling density (3D) at the points of this plane: uniform part + Gaussian part.
-    # v16 fix (audit): include the z-marginal. The uniform part is 1/(A*Lz) and the Gaussian
-    # part carries G_z(z) (std SOURCE_SAMPLE_Z_STD); the old 2D formula under-weighted the
-    # Gaussian share by ~1.6x at z = 1.10 m. (Truncation of the Gaussian at the room bounds
-    # and column exclusion are ignored: ~9% of the Gaussian draws are rejected, mostly z < 0,
-    # so the Gaussian density here is ~9% too low -- small next to the 1.6x corrected above.)
     area = (ROOM_X[1] - ROOM_X[0]) * (ROOM_Y[1] - ROOM_Y[0])
     Lz = ROOM_Z[1] - ROOM_Z[0]
     s2 = SOURCE_SAMPLE_XY_STD ** 2
     gz = np.exp(-(z - BREATHING_HEIGHT) ** 2 / (2 * SOURCE_SAMPLE_Z_STD ** 2)) / (np.sqrt(2 * np.pi) * SOURCE_SAMPLE_Z_STD)
     dens = (1 - SOURCE_SAMPLE_FRAC) / (area * Lz) + SOURCE_SAMPLE_FRAC * gz * np.exp(
         -((xg - SX) ** 2 + (yg - SY) ** 2) / (2 * s2)) / (2 * np.pi * s2)
-    r_loss = (R / S_REF) ** 2 * dens          # what the training loss 'sees', per point and time
+    r_loss = (R / S_REF) ** 2 * dens
     loss_near = r_loss[:, near].sum()
     loss_far = r_loss[:, far].sum()
     err2_near = np.sum(e_act[near] ** 2)
