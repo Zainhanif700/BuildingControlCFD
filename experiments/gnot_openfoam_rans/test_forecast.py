@@ -1,12 +1,6 @@
 """
-Checks of forecast.py / train_forecast.py on small SYNTHETIC datasets (no real data needed, ~1-2 min CPU):
- 1. frame selection: laminar-style t_c (0..120 every 10 s, then every 30 s) and RANS-style t_c give the
-    same 61 frames on the 30-s grid
- 2. samples: history = 12 frames ending at t0, future = the next 6; scaling by N / N_ref is exact
- 3. model: output shapes, finite NLL; persistence error of a constant field = 0; oracle l2 = 0
- 4. a short training lowers the NLL clearly (the model can learn)
- 5. train_forecast.py end to end (2 members, few iterations) on a synthetic split file
-Usage (training env, from experiments/gnot_openfoam_rans):  python3 test_forecast.py
+Tests of the forecast code on small synthetic data (about 1-2 min on the CPU).
+Usage: python3 test_forecast.py
 """
 import os
 import subprocess
@@ -16,7 +10,7 @@ import tempfile
 import numpy as np
 import torch
 
-import common  # noqa: F401
+import common
 import forecast as F
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -44,18 +38,16 @@ def main():
     tmp = tempfile.mkdtemp()
     ok = True
 
-    # 1. frame selection
     C_l, t_l = synth(os.path.join(tmp, "L.npz"), [0.5] * 8, laminar=True)
     C_r, t_r = synth(os.path.join(tmp, "R.npz"), [0.5] * 8)
     a, b = F.load_plane(os.path.join(tmp, "L.npz")), F.load_plane(os.path.join(tmp, "R.npz"))
     e1 = np.abs(a["frames"] - b["frames"]).max()
-    c2 = F.load_plane(os.path.join(tmp, "R.npz"), z=1.9)          # nearest stored height: 2.05 m, 200 points
+    c2 = F.load_plane(os.path.join(tmp, "R.npz"), z=1.9)
     good = (a["frames"].shape == (61, b["xy"].shape[0]) and e1 == 0 and abs(a["z"] - 1.15) < 1e-6
             and c2["frames"].shape == (61, 200) and abs(c2["z"] - 2.05) < 1e-6)
     print(f"1 frames: laminar {a['frames'].shape} RANS {b['frames'].shape}, max diff {e1:g}  -> {'OK' if good else 'FAIL'}")
     ok &= good
 
-    # 2. samples
     d = F.PlaneData([os.path.join(tmp, "R.npz")], torch.device("cpu"))
     h, f = d.sample(0, 20, 20.0)
     h2, f2 = d.sample(0, 20, 60.0)
@@ -67,7 +59,6 @@ def main():
           f"N-scaling exact  -> {'OK' if good else 'FAIL'}")
     ok &= good
 
-    # 3. model
     m = F.ForecastGNOT(d=64, layers=2, c_scale=500.0)
     gen = torch.Generator().manual_seed(0)
     qx, qh, hx, hh, V, N, tg = d.batch(3, 128, gen)
@@ -79,7 +70,6 @@ def main():
     print(f"3 model: mean {tuple(mean.shape)}, NLL {float(L):.3f}, oracle l2 0  -> {'OK' if good else 'FAIL'}")
     ok &= good
 
-    # 4. short training
     paths = []
     for i, v in enumerate([0.2, 0.6, 1.0, 1.5]):
         p = os.path.join(tmp, f"S{i:02d}.npz")
@@ -104,7 +94,6 @@ def main():
           f"(persistence {100 * base:.2f}%, {n} samples); with +400 offset {100 * eo:.2f}%  ->{'OK' if good else 'FAIL'}")
     ok &= good
 
-    # 5. end to end
     scen = os.path.join(tmp, "scen.txt")
     with open(scen, "w") as fh:
         fh.write("# name split V\n")
@@ -131,13 +120,12 @@ def main():
     os.rmdir(out)
     ok &= good
 
-    # 6. transition data (make_transitions.py format): sample = (N_A/N_ref) H + (N_B/N_ref) S, end to end
     tdir = os.path.join(tmp, "tr")
     os.makedirs(tdir)
     for i, v in enumerate([0.2, 0.6, 1.0, 1.5]):
         d = np.load(os.path.join(tmp, f"S{i:02d}.npz"))
         P = d["P"].copy()
-        P[200:, 2] = 1.55                      # two planes: 1.15 and 1.55 m
+        P[200:, 2] = 1.55
         Hs = (d["C"][-1][None, :] * np.exp(-d["t_c"][:, None] / (300 + 200 * v))).astype(np.float32)
         np.savez_compressed(os.path.join(tdir, f"S{i:02d}.npz"), P=P, V=d["V"], N_ref=d["N_ref"], t_c=d["t_c"],
                             H=Hs, S=d["C"], from_case=np.array("Sxx"))

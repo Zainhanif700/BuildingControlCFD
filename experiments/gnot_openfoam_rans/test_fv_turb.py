@@ -1,11 +1,6 @@
 """
-Tests of fv_turb.py that need no OpenFOAM run (seconds, CPU or GPU):
-  1. constant D, nut = 0: TurbFV must reproduce TorchFV (the verified solver) to round-off;
-  2. closed room, no flow, RANDOM variable D: total CO2 must equal the injected amount exactly
-     (the flux form is conservative; no-flux walls);
-  3. the seating source: total emission = N x PPM_M3S_PER_PERSON, only inside the seating box.
-The physical cross-check against OpenFOAM's own turbulent CO2 transport is in compare_rans_pilot.py.
-Usage (from experiments/gnot_openfoam_rans):  python3 test_fv_turb.py
+Test of fv_turb.py: with constant mixing it must give the same CO2 as the laminar solver.
+Usage: python3 test_fv_turb.py
 """
 import sys
 
@@ -32,9 +27,8 @@ def main():
     dt = torch.float64
     rng = np.random.default_rng(0)
     V = [1.0, 0, 0, 0, 0, 0, 0, 0.5]
-    g = L2.Grid(0.5, V)                      # coarse grid -> fast
+    g = L2.Grid(0.5, V)
     sh = g.X.shape
-    # a smooth, arbitrary flow (not divergence-free -- only the discrete operators are compared)
     u = 0.3 * np.sin(g.Y / 3.0) * g.fluid
     v = -0.2 * np.cos(g.X / 4.0) * g.fluid
     w = 0.05 * np.sin(g.Z) * g.fluid
@@ -47,9 +41,7 @@ def main():
     err = max(np.max(np.abs(got[t] - ref[t])) / np.max(np.abs(ref[t])) for t in ref)
     check("1 constant D reproduces fv_torch", err < 1e-12, f"(max rel. difference {err:.1e})")
 
-    # 2. conservation with variable D, closed room, no flow
-    gc = L2.Grid(0.25, [0.0] * 8)            # 0.25 m: one cell layer (z = 1.09 m) lies in the seating height 1.0-1.2 m
-    #                                          (at 0.5 m no cell centre falls into it -> empty source)
+    gc = L2.Grid(0.25, [0.0] * 8)
     nut = rng.uniform(0.0, 0.05, gc.X.shape) * gc.fluid
     z = np.zeros(gc.X.shape)
     S = seat_source(gc, 20.0)
@@ -63,7 +55,6 @@ def main():
           f"(CO2 in room {m_got:.6g} vs injected {m_exp:.6g} ppm m^3)")
     check("2b variable D actually spreads CO2 differently", float(np.std(out[T_END][gc.fluid])) > 0)
 
-    # 3. seating source
     m = S > 0
     (x0, x1), (y0, y1), (z0, z1) = common.SEAT_BOX
     inside = (gc.X[m] >= x0).all() and (gc.X[m] <= x1).all() and (gc.Z[m] >= z0).all() and (gc.Z[m] <= z1).all()

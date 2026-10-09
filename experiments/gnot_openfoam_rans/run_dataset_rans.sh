@@ -1,10 +1,6 @@
 #!/usr/bin/env bash
-# All RANS scenarios: the SAME 40 window settings as the laminar dataset (../gnot_openfoam/scenarios.txt,
-# same train/test split), NP at a time (default 4 of 6 cores). S00 (all windows closed) is left out:
-# without any air flow there is no turbulent mixing, and molecular diffusion alone is not a realistic
-# model of a closed occupied room (people, heat) -- stated as a limitation.
-# Re-running skips everything already extracted.
-# Usage (from experiments/gnot_openfoam_rans, in tmux):  bash run_dataset_rans.sh [NP]
+# All window settings of ../gnot_openfoam/scenarios.txt (except all windows closed), NP at a time; finished ones are skipped.
+# Usage: bash run_dataset_rans.sh [NP]
 set -u
 NP="${1:-4}"
 HERE="$(cd "$(dirname "$0")" && pwd)"

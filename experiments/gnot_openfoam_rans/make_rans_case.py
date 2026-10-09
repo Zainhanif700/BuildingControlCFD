@@ -1,19 +1,6 @@
 """
-OpenFOAM case with k-omega SST turbulence (Bian & Shi 2025 use k-omega SST in ANSYS Fluent).
-
-Builds the case with the SAME generator as all laminar cases (experiments/gnot/openfoam/
-make_openfoam_case.py: geometry, mesh, window ramp + flux matching, doors p = 0), then changes only:
-  * constant/transportProperties: nu = NU_AIR (1.5e-5), turbulenceProperties: RAS kOmegaSST
-  * 0.orig/k, omega, nut: open windows fixed k = 1.5 (I V)^2, omega = sqrt(k) / (C_mu^0.25 L);
-    walls / columns / CLOSED windows wall functions (closed windows become wall patches);
-    doors inletOutlet with quiet-room values
-  * fvSchemes / fvSolution entries for k, omega (+ wallDist for SST), and for the CO2 scalar s
-  * CO2 cross-check inside OpenFOAM (scalarTransport function object): s = excess CO2 in ppm,
-    diffusivity D_CO2 + nut / Sc_t, source from N_REF seated people in the seating box (cellZone
-    'seats', volumetric, uniform) -- used to VERIFY fv_turb.py, not as the dataset CO2
-  * yPlus written at every save (wall-function check)
-Usage (training env, from experiments/gnot_openfoam_rans):
-  python3 make_rans_case.py --V 1,0,0,0,0,0,0,0 --name W1_1ms_rans
+Writes one OpenFOAM case with k-omega SST turbulence and the seated people as CO2 source.
+Usage: python3 make_rans_case.py --V 1,0,0,0,0,0,0,0 --name W1_1ms_rans
 """
 import argparse
 import math
@@ -27,8 +14,7 @@ from common import (NU_AIR, D_CO2, SC_T, TURB_INTENSITY, TURB_LENGTH, C_MU, K_AM
 
 
 def seat_cells(dx):
-    """Number of grid cells whose centre lies in SEAT_BOX (same rule as OpenFOAM boxToCell) and their
-    total volume -> the specific source rate is identical in OpenFOAM and in fv_turb.py."""
+    """Number and volume of the seating cells (the same as in OpenFOAM)."""
     import numpy as np
     import check_co2_with_model_flow as L2
     g = L2.Grid(dx, [0.0] * 8)
@@ -56,7 +42,6 @@ def main():
     args = ap.parse_args()
     V = [float(v) for v in args.V.split(",")]
 
-    # 1. the laminar generator, unchanged
     import make_openfoam_case as moc
     argv = sys.argv
     sys.argv = ["make_openfoam_case.py", "--V", args.V, "--name", args.name, "--dx", str(args.dx),
@@ -65,19 +50,17 @@ def main():
         moc.main()
     finally:
         sys.argv = argv
-    tag = args.name.replace(" ", "_").replace("/", "").replace("+", "p").replace(".", "p")   # as make_openfoam_case
+    tag = args.name.replace(" ", "_").replace("/", "").replace("+", "p").replace(".", "p")
     case = os.path.join(args.out, f"{tag}_dx{args.dx:g}")
     W = lambda rel, cls, obj, body: moc.write(os.path.join(case, rel), cls, obj, body)
     rd = lambda rel: open(os.path.join(case, rel)).read()
     wr = lambda rel, s: open(os.path.join(case, rel), "w").write(s)
 
-    # 2. physics
     W("constant/transportProperties", "dictionary", "transportProperties",
       f"\ntransportModel  Newtonian;\nnu              {NU_AIR:g};\n")
     W("constant/turbulenceProperties", "dictionary", "turbulenceProperties",
       "\nsimulationType  RAS;\nRAS\n{\n    RASModel        kOmegaSST;\n    turbulence      on;\n    printCoeffs     on;\n}\n")
 
-    # 3. closed windows are walls (wall functions need wall-type patches)
     cp = rd("system/createPatchDict")
     for k, v in enumerate(V):
         if v == 0:
@@ -85,7 +68,6 @@ def main():
             assert n == 1, f"window{k + 1} not found in createPatchDict"
     wr("system/createPatchDict", cp)
 
-    # 4. turbulence fields
     def kw(v):
         k = 1.5 * (TURB_INTENSITY * v) ** 2
         return k, math.sqrt(k) / (C_MU ** 0.25 * TURB_LENGTH)
@@ -102,7 +84,7 @@ def main():
             bk.append(f"    {p} {{ type fixedValue; value uniform {kk:.6g}; }}")
             bo.append(f"    {p} {{ type fixedValue; value uniform {oo:.6g}; }}")
             bn.append(f"    {p} {{ type calculated; value uniform 0; }}")
-            bs.append(f"    {p} {{ type fixedValue; value uniform 0; }}")          # fresh air: excess 0
+            bs.append(f"    {p} {{ type fixedValue; value uniform 0; }}")
         else:
             bk.append(f"    {p} {{ type kqRWallFunction; value uniform {K_AMBIENT:g}; }}")
             bo.append(f"    {p} {{ type omegaWallFunction; value uniform {OMEGA_AMBIENT:g}; }}")
@@ -120,7 +102,6 @@ def main():
     W("0.orig/nut", "volScalarField", "nut", fld("[0 2 -1 0 0 0 0]", "0", bn))
     W("0.orig/s", "volScalarField", "s", fld("[0 0 0 0 0 0 0]", "0", bs))
 
-    # 5. schemes / solvers
     fs = rd("system/fvSchemes")
     fs = fs.replace("    div((nuEff*dev2(T(grad(U))))) Gauss linear;",
                     "    div((nuEff*dev2(T(grad(U))))) Gauss linear;\n    div(phi,k)      bounded Gauss upwind;\n"
@@ -134,7 +115,6 @@ def main():
     assert "(U|k|omega|s)" in fv, "fvSolution layout changed -- update make_rans_case.py"
     wr("system/fvSolution", fv)
 
-    # 6. seating cellZone + CO2 cross-check + yPlus
     (x0, x1), (y0, y1), (z0, z1) = SEAT_BOX
     W("system/topoSetDict.seats", "dictionary", "topoSetDict", f"""
 actions
@@ -144,7 +124,7 @@ actions
 );
 """)
     n_seat, v_seat = seat_cells(args.dx)
-    rate = N_REF * PPM_M3S_PER_PERSON / v_seat          # ppm/s inside the seating zone
+    rate = N_REF * PPM_M3S_PER_PERSON / v_seat
     cd = rd("system/controlDict")
     cd += f"""
 functions
@@ -190,10 +170,7 @@ functions
 
 
 def write_steady(W, iters):
-    """Steady RANS: simpleFoam with SIMPLEC (consistent), 2nd-order upwind for U, 1st-order for k/omega
-    (robust), relaxation U 0.9 / k, omega 0.7; stops early when all initial residuals are below
-    residualControl. The window inflow table is evaluated at 'time' = iteration (full speed after ~5).
-    No scalarTransport here: a steady scalar run would not be the 30-min transient CO2 (that is fv_turb)."""
+    """Settings for a steady RANS run (simpleFoam), used only in a pilot test."""
     W("system/controlDict", "dictionary", "controlDict", f"""
 application     simpleFoam;
 startFrom       startTime;

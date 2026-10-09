@@ -1,9 +1,6 @@
 """
-Recompute the CO2 of all extracted files with the chosen solver and Sc_t (from the stored flow, no
-OpenFOAM). Files already done with these settings are skipped, so it can be re-run any time (e.g. again
-when the dataset has produced more files). One file at a time, ~30 min each on the GPU.
-Usage (training env, from experiments/gnot_openfoam_rans):
-  python3 recompute_all.py            (defaults: common.DATA_CO2_SOLVER, common.SC_T_DATA)
+Recomputes the CO2 of all dataset files from the stored flow (skips files that are already up to date).
+Usage: python3 recompute_all.py
 """
 import argparse
 import glob
@@ -30,7 +27,7 @@ def main():
         try:
             d = np.load(f)
             d.files
-        except Exception as e:      # e.g. a file still being written by a running extraction
+        except Exception as e:
             print(f"  {os.path.basename(f)}: not readable now ({e.__class__.__name__}) -- skipped, run again later")
             continue
         done = ("co2_solver" in d.files and str(d["co2_solver"]) == args.solver

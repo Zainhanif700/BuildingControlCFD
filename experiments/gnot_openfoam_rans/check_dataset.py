@@ -1,9 +1,6 @@
 """
-Quick health check of the extracted RANS dataset files (data/S*.npz), no OpenFOAM needed:
-  - all keys there, C has 61 frames 0..1800 s every 30 s, finite, not negative (small undershoot ok)
-  - CO2 grows over time and levels off (room mean excess at 5/10/20/30 min, plane 1.1 m and 1.6 m)
-  - flow: mean speed, fluctuation; check numbers from extraction (B2 vs OpenFOAM at 600 s)
-Usage (training env, from experiments/gnot_openfoam_rans):  python3 check_dataset.py
+Quick check of all dataset files in data/: complete, CO2 positive and rising, plus the check numbers against OpenFOAM.
+Usage: python3 check_dataset.py
 """
 import glob
 import os
@@ -33,7 +30,7 @@ def main():
         if not np.isfinite(C).all():
             issues.append("NaN/inf in C")
         negmass = float(-C[-1][C[-1] < 0].sum() / max(C[-1][C[-1] > 0].sum(), 1e-30))
-        if negmass > 0.005:      # small undershoots of the unlimited 2nd-order scheme are expected (<0.1 %)
+        if negmass > 0.005:
             issues.append(f"negative CO2 mass {100 * negmass:.2f} % (min {C.min():.2f})")
         m = C.mean(1)
         at = lambda s: m[int(round(s / 30))]

@@ -1,14 +1,5 @@
 """
-CO2 transport with TURBULENT mixing: the verified FV scheme of experiments/gnot_openfoam/fv_torch.py
-(same grid, masks, boundary rules, 2nd-order upwind advection, SSP-RK3, frozen flow after the last
-snapshot), with a spatially varying diffusivity
-
-    D(x, t) = D_CO2 + nu_t(x, t) / Sc_t        (nu_t from the OpenFOAM k-omega SST run)
-
-in conservative flux form: face diffusivity = mean of the two cells; at walls / closed windows /
-doors the face flux is zero (zero gradient, as before); at open-window faces C = 0 with the cell's
-own D. With constant D it reduces to fv_torch exactly (test_fv_turb.py). The source is given
-explicitly (seated people, common.SEAT_BOX), in ppm/s; the field is the excess over outdoor air.
+First CO2 solver with turbulent mixing (D = D_CO2 + nut / Sc_t); fv_cons.py builds on it.
 """
 import numpy as np
 import torch
@@ -44,8 +35,7 @@ class TurbFV(TorchFV):
         return (div - adv + self.S) * self.fluid_f
 
     def solve(self, snap_times, snaps, out_times, c0=None, log_every=None):
-        """snaps: list of [u, v, w, nut] numpy arrays (grid shape) at snap_times; returns {t: c}.
-        c0: initial field (grid shape), default 0. Time step as fv_torch, with max(D) for diffusion."""
+        """CO2 over time for the given flow snapshots (linear in between, frozen after the last)."""
         g = self.g
         umax = max(np.max(np.abs(s[0])) / g.h[0] + np.max(np.abs(s[1])) / g.h[1] + np.max(np.abs(s[2])) / g.h[2]
                    for s in snaps)
@@ -58,7 +48,7 @@ class TurbFV(TorchFV):
              for s in snaps]
         ts = list(snap_times)
 
-        def fields(t):   # u, v, w, D -- linear in time, frozen after the last snapshot (as fv_torch)
+        def fields(t):
             if t >= ts[-1]:
                 return S[-1]
             j = int(np.searchsorted(ts, t, side="right")) - 1
@@ -84,8 +74,7 @@ class TurbFV(TorchFV):
 
 
 def seat_source(g, n_people):
-    """Excess-CO2 source [ppm/s] on the grid: n_people x PPM_M3S_PER_PERSON spread uniformly over the
-    fluid cells whose centre lies in SEAT_BOX (same cells as the OpenFOAM cellZone 'seats')."""
+    """CO2 source of n people, spread evenly over the seating area."""
     from make_rans_case import seat_mask
     m = seat_mask(g)
     if not m.any():

@@ -1,13 +1,6 @@
 """
-Old CO2 solver (fv_turb, advective form) vs new (fv_cons, mass-conserving) against OpenFOAM's own CO2,
-on a kept OpenFOAM case (V04: same windows as S04, 0-600 s, saves every 10 s).
-
-  real  all saved OpenFOAM snapshots (solver error alone)
-  B2    snapshots to 150 s, then the 150-600 s average flow (= the dataset method)
-Errors at 120 / 300 / 600 s: volume and plane (excess CO2), mass ratio, the paper's metric (absolute
-ppm, plane 1.1 m and 1.6 m), and the minimum CO2.
-Usage (training env, from experiments/gnot_openfoam_rans):
-  python3 compare_solvers.py --case cases/V04_dx0.1        (~1 h, GPU)
+Old CO2 solver vs the mass-conserving one, both against OpenFOAM's own CO2 on a kept case.
+Usage: python3 compare_solvers.py --case cases/V04_dx0.1
 """
 import argparse
 import os

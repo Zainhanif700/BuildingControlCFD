@@ -1,18 +1,6 @@
 """
-Deeper checks of the extracted RANS files before the dataset runs on for days.
-
- 1. negative CO2 (the 2nd-order upwind scheme has no limiter -> small undershoots at sharp edges):
-    how many cells, how much of the CO2 mass, WHERE (window wall / edge of the seating box / elsewhere),
-    and on the planes 1.1 m and 1.6 m
- 2. --pilot: the same numbers for OpenFOAM's own CO2 (linearUpwind, also unlimited) in the pilot case
-    -> are undershoots a property of the scheme family, of similar size?
- 3. --recompute-test: recompute the CO2 of one file from its STORED flow (extract_rans.py --recompute
-    on a copy) and compare with the stored C -> proves the expensive part (OpenFOAM flow) is kept, so the
-    CO2 can be redone later (other seating area, other scheme) without new OpenFOAM runs
-Usage (training env, from experiments/gnot_openfoam_rans):
-  python3 check_rans_data.py
-  python3 check_rans_data.py --pilot cases/W1_1ms_rans_dx0.1
-  python3 check_rans_data.py --recompute-test data/S03.npz
+Checks of the dataset CO2: negative values, and that the CO2 can be recomputed from the stored flow.
+Usage: python3 check_rans_data.py [--pilot <case> | --recompute-test data/S03.npz]
 """
 import argparse
 import glob
@@ -22,10 +10,10 @@ import tempfile
 
 import numpy as np
 
-import common  # noqa: F401
+import common
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-Y_WIN = 9.16          # window wall (ROOM_Y[1])
+Y_WIN = 9.16
 
 
 def where_negative(P, neg, seat_box, band=0.3):
@@ -62,7 +50,7 @@ def main():
         tmp = os.path.join(tempfile.mkdtemp(), os.path.basename(src))
         shutil.copy(src, tmp)
         d0 = np.load(src)
-        solver = str(d0["co2_solver"]) if "co2_solver" in d0.files else "old"     # settings the file was made with
+        solver = str(d0["co2_solver"]) if "co2_solver" in d0.files else "old"
         sct = float(d0["sc_t"]) if "sc_t" in d0.files else common.SC_T
         recompute(tmp, args.device, solver, sct)
         a, b = np.load(src)["C"], np.load(tmp)["C"]

@@ -1,15 +1,6 @@
 """
-Train the CO2 forecasting operator (forecast.py) as in Bian & Shi (2025): last 6 min -> next 3 min on the
-breathing plane, Gaussian NLL, AdamW, ensemble of 5 members (different seeds), l2 error of eq. 12.
-
-Works on both datasets (same scenario names / split):
-  laminar  --data-dir ../gnot_openfoam/data      (test run while the RANS dataset is computed)
-  RANS     --data-dir data                        (the real target, option B2)
-
-Usage (training env, from experiments/gnot_openfoam_rans):
-  python3 train_forecast.py --data-dir ../gnot_openfoam/data --tag lam_fc --members 5 --iters 20000
-Output: checkpoints/<tag>/member<k>.pth, logs to stdout; at the end the ensemble test errors
-(per case and mean) and the persistence baseline ('CO2 stays as it is').
+Trains the forecast ensemble (5 networks) and prints the test errors and the 'CO2 stays the same' baseline.
+Usage: python3 train_forecast.py --data-dir data_transitions --transitions --tag rans_tr --z 1.6 --c-offset 400
 """
 import argparse
 import os
@@ -18,7 +9,7 @@ import time
 import numpy as np
 import torch
 
-import common  # noqa: F401
+import common
 from forecast import ForecastGNOT, PlaneData, nll, evaluate
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -39,7 +30,7 @@ def split(data_dir, scen, with_s00):
 
 
 def c_scale_of(data, n_typ=45.0):
-    """RMS CO2 of the training frames at a typical occupancy (middle of 10-80; transitions: N_A = N_B = 45)."""
+    """Typical CO2 level of the training data (used to scale the inputs)."""
     sq = []
     for k in range(len(data.cases)):
         f = data.frames[k] * (n_typ / data.N_ref[k])
@@ -50,7 +41,7 @@ def c_scale_of(data, n_typ=45.0):
 
 
 def d_scale_of(data, n_typ=45.0):
-    """RMS of the 3-min change (future frames - last history frame) over all training samples, typical N."""
+    """Typical 3-minute change of the CO2 (used to scale the outputs)."""
     sq = []
     for k, (f, n, t0s) in enumerate(zip(data.frames, data.N_ref, data.t0s)):
         f = f * (n_typ / n)

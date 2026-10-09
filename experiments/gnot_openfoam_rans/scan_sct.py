@@ -1,10 +1,6 @@
 """
-Can extra turbulent mixing make up for the flow fluctuations that the averaged flow (B2) leaves out?
-B2 with the new solver (fv_cons) for several turbulent Schmidt numbers Sc_t (smaller = more mixing,
-D = D_CO2 + nut / Sc_t), against OpenFOAM's own CO2 on a kept case (0-600 s).
-Sc_t = 0.7 is the standard value used so far. A value is only adopted if it also wins on a SECOND case.
-Usage (training env, from experiments/gnot_openfoam_rans):
-  python3 scan_sct.py --case cases/V04_dx0.1          (~8 min per value)
+Tries several turbulent Schmidt numbers on a kept case and compares the CO2 with OpenFOAM.
+Usage: python3 scan_sct.py --case cases/V04_dx0.1
 """
 import argparse
 import os
@@ -40,7 +36,7 @@ def main():
     for t in times:
         u = rd(t, "U", 3) * fl[..., None]
         snaps[t] = [u[..., 0], u[..., 1], u[..., 2], rd(t, "nut", 1) * fl]
-    mean = [np.mean([snaps[t][k] for t in times if T_AVG <= t <= 600.0], axis=0) for k in range(4)]   # as the dataset: 150-600 s
+    mean = [np.mean([snaps[t][k] for t in times if T_AVG <= t <= 600.0], axis=0) for k in range(4)]
     T = [0.0] + [t for t in times if t <= T_AVG]
     S = [snaps[t] for t in T] + [mean]
     T = T + [T[-1] + 10.0]

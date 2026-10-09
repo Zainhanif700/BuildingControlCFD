@@ -1,7 +1,6 @@
 #!/bin/bash
-# Learning curve: train the forecast ensemble with 5, 10 and 20 training cases (same 8 test cases, same
-# settings as the full run rans_tr with 31 cases). Finished sizes are skipped. ~1.5 h per size on the GPU.
-# Usage (from experiments/gnot_openfoam_rans, in tmux):  bash run_learning_curve.sh
+# Learning curve: the same training with 5, 10 and 20 training cases (same 8 test cases); finished sizes are skipped.
+# Usage: bash run_learning_curve.sh
 set -e
 cd "$(dirname "$0")"
 PY="$HOME/anaconda3/envs/cfd/bin/python"

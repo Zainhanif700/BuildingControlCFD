@@ -1,15 +1,6 @@
 """
-The RANS flow is statistically steady but keeps fluctuating (pilot: mean speed constant from ~150 s,
-instantaneous field changes 25-35 % per 10-30 s). Can the CO2 be computed on the TIME-AVERAGED flow?
-Measured against OpenFOAM's own CO2 transport on the real fluctuating flow (scalarTransport, field s):
-
-  run 1  fv_turb on ALL saved snapshots (every 10 s, linear in between)   -> solver on the true flow
-  run 2  fv_turb on the snapshots up to T_AVG_START, then the AVERAGE of U and nut over
-         [T_AVG_START, last save] frozen                                   -> error of the averaged flow
-
-Also prints how far each instantaneous field is from the average (the size of the fluctuations).
-Usage (training env, from experiments/gnot_openfoam_rans):
-  python3 check_mean_flow_co2.py --case cases/W1_1ms_rans_dx0.1 [--avg-start 150]
+Pilot check: CO2 on the time-averaged flow compared with OpenFOAM's own CO2.
+Usage: python3 check_mean_flow_co2.py --case cases/W1_1ms_rans_dx0.1
 """
 import argparse
 import os
@@ -55,7 +46,7 @@ def main():
     T_all = [0.0] + times
     run1, _, n1 = TurbFV(g, src, args.device, torch.float32).solve(T_all, [snaps[t] for t in T_all], t_chk)
     T2 = [0.0] + [t for t in times if t < args.avg_start] + [args.avg_start]
-    S2 = [snaps[t] for t in T2[:-1]] + [mean]          # average flow from avg_start on (frozen afterwards)
+    S2 = [snaps[t] for t in T2[:-1]] + [mean]
     run2, _, n2 = TurbFV(g, src, args.device, torch.float32).solve(T2, S2, t_chk)
     print(f"\n{'t':>5s} | {'run 1 (all snapshots)':>27s} | {'run 2 (average flow)':>27s} | mean excess CO2 OF / 1 / 2 [ppm]")
     print(f"{'':>5s} | {'vol':>7s} {'plane':>7s} {'mass':>9s} | {'vol':>7s} {'plane':>7s} {'mass':>9s} |")

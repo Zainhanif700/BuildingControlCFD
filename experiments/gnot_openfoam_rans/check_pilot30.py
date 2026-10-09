@@ -1,23 +1,13 @@
 """
-Minutes 10-30 check on the pilot extended to 1800 s (W1 at 1 m/s). Works on a partly finished run too
-(uses the saves that exist).
-
- 1. flow: time average over [150, 600] (what the dataset uses) vs over [600, end] -> is the mean flow
-    the same in minutes 10-30?
- 2. CO2 against OpenFOAM's own CO2 (field s, real fluctuating flow) at 5, 10, 15, 20, 25, 30 min:
-      real  fv_turb on all saved snapshots                 (solver error on the true flow)
-      B2    snapshots to 150 s, then the [150, 600] average frozen  (= the dataset)
-      B2L   snapshots to 150 s, then the [150, end] average frozen  (longer average)
-    volume and plane errors and mass ratio; does the B2 error stay ~constant or grow after 10 min?
-Usage (training env, from experiments/gnot_openfoam_rans):
-  python3 check_pilot30.py --case cases/W1_1ms_rans_dx0.1
+30-minute pilot check: is the mean flow the same in minutes 10-30, and does the CO2 error stay small?
+Usage: python3 check_pilot30.py --case cases/W1_1ms_rans_dx0.1
 """
 import argparse
 import os
 
 import numpy as np
 
-import common  # noqa: F401
+import common
 from common import N_REF, BREATHING_Z
 
 
@@ -78,9 +68,6 @@ def main():
             cells.append(f"{100 * ev:5.1f} {100 * ep:5.1f} {c[fl].sum() / ref[fl].sum():6.3f}")
         print(f"{t:5.0f} | " + " | ".join(f"{s:>22s}" for s in cells) + f" | {ref[fl].mean():7.1f}")
 
-    # 3. the paper's metric: l2 relative error of the ABSOLUTE concentration (400 ppm + excess, Bian & Shi
-    #    report ppm incl. the 400 ppm fresh air, Table 3 ~530-650 ppm) on a plane; 1.1 m (ours, inside the
-    #    seat source box 1.0-1.2 m) and 1.6 m (the paper's people plane, above the sources)
     k16 = int(np.argmin(np.abs(g.c1d[2] - 1.6)))
     print(f"\n3. paper metric: plane l2 of ABSOLUTE ppm (400 + excess) -- B2 / real-flow vs OpenFOAM [%]")
     print(f"{'t':>5s} | {'z = %.2f m' % g.c1d[2][kz]:>20s} | {'z = %.2f m' % g.c1d[2][k16]:>20s} | plane mean excess OF 1.1 / 1.6 m [ppm]")

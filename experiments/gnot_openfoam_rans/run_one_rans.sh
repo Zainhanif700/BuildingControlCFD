@@ -1,8 +1,6 @@
 #!/usr/bin/env bash
-# One RANS scenario end to end (option B2): case (k-omega SST, 0-600 s, saves every 10 s) -> OpenFOAM
-# (1 core) -> extract_rans.py (flow snapshots + average, 30-min CO2, check vs OpenFOAM CO2) -> delete
-# the case folder (KEEP_CASES=1 keeps it). Skips a scenario whose data/<name>.npz exists.
-# Usage (from experiments/gnot_openfoam_rans):  bash run_one_rans.sh <name> <V1,...,V8>
+# One window setting end to end: write the case, run OpenFOAM, extract the dataset file, delete the case.
+# Usage: bash run_one_rans.sh <name> <V1,...,V8>
 set -u
 NAME="${1:?usage: run_one_rans.sh <name> <V1,...,V8>}"
 V="${2:?usage: run_one_rans.sh <name> <V1,...,V8>}"

@@ -1,17 +1,13 @@
 """
-Is the flow still developing or does it oscillate? For every saved time of an OpenFOAM case:
-mean speed, change of U relative to the previous save (per 10 s) and relative to the save 30 s
-earlier, the door split, and the mean nut. A steadily shrinking change = still settling (will become
-steady); a change that stays large while the mean speed goes up and down = unsteady (oscillating).
-Usage (training env, from experiments/gnot_openfoam_rans):
-  python3 steadiness_series.py --case cases/W1_1ms_rans_dx0.1
+How steady is the transient flow? Mean speed and change over time.
+Usage: python3 steadiness_series.py --case cases/W1_1ms_rans_dx0.1
 """
 import argparse
 import os
 
 import numpy as np
 
-import common  # noqa: F401
+import common
 
 
 def main():

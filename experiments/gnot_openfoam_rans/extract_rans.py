@@ -1,18 +1,6 @@
 """
-Extract one transient k-omega SST case (0-600 s, saves every 10 s) into a dataset file (option B2):
-
-  flow   real snapshots 0-T_AVG (start-up), then the TIME AVERAGE of U and nut over [T_AVG, end],
-         frozen for the rest of the 30 min (the flow is statistically steady but fluctuates; the
-         average is the reproducible part -- pilot: a single realisation differs by ~25 %)
-  CO2    fv_turb.py (D_CO2 + nut / Sc_t, seated source, ppm excess over 400 ppm outdoor), every 30 s
-         to 1800 s (as in Bian & Shi 2025), N_REF people (C is exactly linear in N)
-  check  CO2 at the last OpenFOAM time vs OpenFOAM's own CO2 (scalarTransport on the real flow), for
-         (a) fv_turb on all real snapshots and (b) the B2 flow -> per-case quality numbers
-  kept   the snapshots 0-T_AVG and the average flow, so the CO2 can be RECOMPUTED later (e.g. with the
-         real seating area) without a new OpenFOAM run: --recompute <npz>
-
-Usage (training env, from experiments/gnot_openfoam_rans):
-  python3 extract_rans.py --case cases/S04_dx0.1 --name S04
+Turns one OpenFOAM case into a dataset file: real flow to 150 s, then the 150-600 s average, and the 30-min CO2 on the GPU.
+Usage: python3 extract_rans.py --case cases/S04_dx0.1 --name S04   (or --recompute data/S04.npz)
 """
 import argparse
 import os
@@ -29,7 +17,7 @@ DT_OUT = 30.0
 
 
 def co2_b2(g, src, t_snap, snaps, mean, device, solver=common.DATA_CO2_SOLVER, sct=common.SC_T_DATA, V=None):
-    """solver 'cons' = fv_cons (mass-conserving, needs V; dataset default); 'old' = fv_turb (advective form)"""
+    """CO2 for 30 min on the dataset flow (real snapshots, then the average flow)."""
     import torch
     T = list(t_snap) + [t_snap[-1] + 10.0]
     S = list(snaps) + [mean]
@@ -72,8 +60,6 @@ def extract(case, name, out_dir=DATA_DIR, device="cuda"):
 
     t0 = time.time()
     out_t, C, dt, n = co2_b2(g, src, t_snap, [snaps[t] for t in t_snap], mean, device, V=V)
-    # per-case check at the last OpenFOAM time against OpenFOAM's own CO2:
-    #  'real' = our solver on all real snapshots with OpenFOAM's own Sc_t (solver check); 'B2' = the dataset CO2
     if common.DATA_CO2_SOLVER == "cons":
         from fv_cons import ConsFV
         real, _, _ = ConsFV(g, src, V, device, torch.float32).solve([0.0] + times, [snaps[t] for t in [0.0] + times], [t_end])
@@ -85,7 +71,6 @@ def extract(case, name, out_dir=DATA_DIR, device="cuda"):
     rel = lambda c: float(np.linalg.norm(c[fl] - ref[fl]) / np.linalg.norm(ref[fl]))
     chk = {"err_real_vs_OF": rel(real[t_end]), "err_B2_vs_OF": rel(b2),
            "mass_real_vs_OF": float(real[t_end][fl].sum() / ref[fl].sum()), "mass_B2_vs_OF": float(b2[fl].sum() / ref[fl].sum())}
-    # the paper's metric: plane l2 of the ABSOLUTE ppm (400 + excess), at 1.1 m and at 1.6 m (paper plane)
     for zz in (1.1, 1.6):
         k_ = int(np.argmin(np.abs(g.c1d[2] - zz)))
         m_ = fl[:, :, k_]
@@ -101,7 +86,7 @@ def extract(case, name, out_dir=DATA_DIR, device="cuda"):
     kz = int(np.argmin(np.abs(g.c1d[2] - BREATHING_Z)))
     os.makedirs(out_dir, exist_ok=True)
     out = os.path.join(out_dir, name + ".npz")
-    tmp = out + ".tmp"                      # atomic: other scripts never see a half-written file
+    tmp = out + ".tmp"
     with open(tmp, "wb") as fh:
       np.savez_compressed(
         fh, P=P, plane=np.abs(P[:, 2] - g.c1d[2][kz]) < 1e-5, z_plane=np.float32(g.c1d[2][kz]),
@@ -123,8 +108,7 @@ def extract(case, name, out_dir=DATA_DIR, device="cuda"):
 
 
 def recompute(npz, device="cuda", solver=common.DATA_CO2_SOLVER, sct=common.SC_T_DATA):
-    """New CO2 from the stored flow (other SEAT_BOX, solver or Sc_t); overwrites C and records the settings.
-    Atomic: written to a temporary file first, then renamed (a crash never leaves a broken file)."""
+    """Recompute the CO2 of a dataset file from its stored flow (safe: writes a temporary file first)."""
     import check_co2_with_model_flow as L2
     from fv_turb import seat_source
     d = dict(np.load(npz))
@@ -142,7 +126,7 @@ def recompute(npz, device="cuda", solver=common.DATA_CO2_SOLVER, sct=common.SC_T
     d["seat_box_placeholder"] = common.SEAT_BOX_IS_PLACEHOLDER
     d["co2_solver"] = np.array(solver)
     d["sc_t"] = np.float32(sct)
-    tmp = npz + ".tmp"                      # not *.npz, so no checker ever picks it up
+    tmp = npz + ".tmp"
     with open(tmp, "wb") as f:
         np.savez_compressed(f, **d)
     os.replace(tmp, npz)

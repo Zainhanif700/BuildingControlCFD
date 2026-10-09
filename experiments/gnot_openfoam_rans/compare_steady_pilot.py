@@ -1,16 +1,6 @@
 """
-Steady RANS pilot (simpleFoam) vs the transient RANS pilot (pimpleFoam, 0-600 s), window 1 at 1 m/s:
-
- 1. convergence: last initial residuals of the steady run
- 2. flow: steady field vs the TIME AVERAGE of the transient run from --avg-start (both k-omega SST);
-    mean speed, door split, mean nut
- 3. CO2 (30-min approach of the dataset: steady flow frozen from t = 0, our solver fv_turb) against
-      * OpenFOAM's CO2 on the real fluctuating flow (scalarTransport of the transient pilot) and
-      * fv_turb on the transient time-averaged flow (the 'run 2' of check_mean_flow_co2.py)
-    The difference to OpenFOAM is expected around 25 % (the measured natural scatter of the fluctuating
-    flow); the steady field should be CLOSE to the time-averaged one.
-Usage (training env, from experiments/gnot_openfoam_rans):
-  python3 compare_steady_pilot.py --steady cases/W1_1ms_steady_dx0.1 --transient cases/W1_1ms_rans_dx0.1
+Pilot: steady RANS flow vs the time average of the transient run.
+Usage: python3 compare_steady_pilot.py --steady <steady case> --transient <transient case>
 """
 import argparse
 import os
@@ -44,7 +34,6 @@ def main():
     vec = lambda case, d, CC, ii: np.nan_to_num(to_grid(g, ii, read_internal(os.path.join(case, d, "U"), 3, len(CC)))) * fl[..., None]
     sca = lambda case, d, f, CC, ii: np.nan_to_num(to_grid(g, ii, read_internal(os.path.join(case, d, f), 1, len(CC)).reshape(-1))) * fl
 
-    # 1. convergence
     it_last = max(tds)
     logp = os.path.join(st, "log.simpleFoam")
     txt = open(logp).read() if os.path.isfile(logp) else ""
@@ -57,7 +46,6 @@ def main():
     print(f"steady case {st}: last saved iteration {it_last:g}; {conv}")
     print("  last initial residuals: " + ", ".join(f"{k} {v:.1e}" for k, v in res.items()))
 
-    # 2. flow
     Us = vec(st, tds[it_last], Cs, i_s)
     nus = sca(st, tds[it_last], "nut", Cs, i_s)
     avg_t = [t for t in sorted(tdt) if t >= args.avg_start]
@@ -79,7 +67,6 @@ def main():
     print(f"  door split steady {d1 / (d1 + d2):.3f} / transient mean {np.mean(splits):.3f} (range {min(splits):.3f}-{max(splits):.3f})")
     print(f"  mean nut steady {nus[fl].mean():.2e} / average {num[fl].mean():.2e} m^2/s")
 
-    # 3. CO2
     src = seat_source(g, N_REF)
     t_chk = [t for t in (120.0, 300.0, 600.0) if t in tdt]
     stdy = [Us[..., 0], Us[..., 1], Us[..., 2], nus]

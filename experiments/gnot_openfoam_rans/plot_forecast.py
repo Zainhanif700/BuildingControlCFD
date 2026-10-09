@@ -1,12 +1,6 @@
 """
-Figures for a trained forecast ensemble (train_forecast.py) on one TEST case:
-  1. maps on the plane: CFD | prediction | difference, 3 min ahead, at chosen start times
-  2. CO2 over time at 4 points: CFD vs the 3-min-ahead prediction (rolling forecast over 30 min)
-CO2 shown as absolute ppm (400 + excess). Transition data: N_A people before, N people now.
-Usage (training env, from experiments/gnot_openfoam_rans):
-  python3 plot_forecast.py --tag rans_tr --data-dir data_transitions --transitions --z 1.6
-  (--case S22 --t0-min 6,15 --N 45 --NA 45; default case = every test case)
-Output: figures/<tag>_<case>_maps.png and _series.png, errors printed.
+Figures for the test cases: CO2 maps (CFD, prediction, difference) and CO2 over time at 4 points.
+Usage: python3 plot_forecast.py --tag rans_tr --data-dir data_transitions --transitions --z 1.6
 """
 import argparse
 import glob
@@ -18,13 +12,13 @@ import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
-import common  # noqa: F401
+import common
 from forecast import ForecastGNOT, PlaneData, predict_full, l2_rel, H_IN, T_OUT, DT
 from train_forecast import split, SCEN
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 OFF = 400.0
-POINTS = [(3.0, 2.5), (7.8, 4.6), (12.0, 6.5), (14.0, 2.0)]     # [m], for the time series
+POINTS = [(3.0, 2.5), (7.8, 4.6), (12.0, 6.5), (14.0, 2.0)]
 
 
 def load_models(tag, dev):
@@ -89,7 +83,6 @@ def main():
         lo, hi = data.t0s[k][0], data.t0s[k][-1]
         t0s = [min(max(t, lo), hi) for t in t0s_map]
 
-        # 1. maps, 3 min ahead
         fig, ax = plt.subplots(len(t0s), 3, figsize=(15, 3.6 * len(t0s)), squeeze=False)
         for r, t0 in enumerate(t0s):
             p, f, _ = ens(models, data, k, t0, args.N, NA)
@@ -112,7 +105,6 @@ def main():
         out1 = os.path.join(HERE, "figures", f"{args.tag}_{name}_maps.png")
         fig.savefig(out1, dpi=130); plt.close(fig)
 
-        # 2. rolling 3-min-ahead forecast at 4 points
         ip = [int(np.argmin((xy[:, 0] - px) ** 2 + (xy[:, 1] - py) ** 2)) for px, py in POINTS]
         full = (data.frames[k] * (args.N / data.N_ref[k])
                 + (data.H[k] * (NA / data.N_ref[k]) if data.H is not None else 0)).cpu().numpy() + OFF

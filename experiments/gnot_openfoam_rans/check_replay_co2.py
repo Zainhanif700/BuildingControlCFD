@@ -1,17 +1,6 @@
 """
-Option a': run OpenFOAM only until the flow is statistically steady, then continue the CO2 with our
-solver on a RECORDED stretch of the fluctuating flow, replayed in a loop. Tested on the pilot without a
-new OpenFOAM run:
-
-  reference   OpenFOAM's own CO2 (s) on the real flow, 0-600 s
-  run real    fv_turb on all real snapshots 0-600 s                  (solver + 10-s snapshot error)
-  run replay  fv_turb on the real snapshots up to --real-end, then the stretch
-              [--loop-start, --real-end) replayed in a loop until 600 s
-
-If 'replay' is about as close to OpenFOAM as 'real', the replay is justified for the 30-min dataset
-(OpenFOAM to ~400-600 s per case instead of 1800 s).
-Usage (training env, from experiments/gnot_openfoam_rans):
-  python3 check_replay_co2.py --case cases/W1_1ms_rans_dx0.1 [--loop-start 150 --real-end 380]
+Pilot check: CO2 on a repeated loop of real flow snapshots compared with OpenFOAM's own CO2.
+Usage: python3 check_replay_co2.py --case cases/W1_1ms_rans_dx0.1
 """
 import argparse
 import os
@@ -48,7 +37,7 @@ def main():
         u = np.nan_to_num(to_grid(g, idx, read_internal(os.path.join(case, td[t], "U"), 3, len(Cc)))) * fl[..., None]
         nut = np.nan_to_num(to_grid(g, idx, read_internal(os.path.join(case, td[t], "nut"), 1, len(Cc)).reshape(-1))) * fl
         snaps[t] = [u[..., 0], u[..., 1], u[..., 2], nut]
-    loop = [t for t in times if args.loop_start <= t < args.real_end]      # recorded stretch
+    loop = [t for t in times if args.loop_start <= t < args.real_end]
     period = args.real_end - args.loop_start
     T_real = [0.0] + times
     T_rep = [0.0] + [t for t in times if t <= args.real_end]
@@ -56,7 +45,7 @@ def main():
     t = args.real_end
     while t < t_last - 1e-9:
         t += 10.0
-        src_t = args.loop_start + ((t - args.real_end - 10.0) % period)    # 390 -> loop_start, ...
+        src_t = args.loop_start + ((t - args.real_end - 10.0) % period)
         T_rep.append(t)
         S_rep.append(snaps[min(loop, key=lambda s: abs(s - src_t))])
     src = seat_source(g, N_REF)

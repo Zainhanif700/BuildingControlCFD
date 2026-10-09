@@ -1,17 +1,6 @@
 """
-RANS pilot evaluation (window 1 at 1 m/s), two questions:
-
- A. How different is the k-omega SST flow from the laminar effective-viscosity flow used so far?
-    relative L2 difference of the velocity (volume / breathing plane), mean speeds, door split,
-    steadiness (U 150 s vs 180 s), size of the turbulent viscosity nut, yPlus (from the log).
- B. Is our CO2 solver with turbulent mixing (fv_turb.py) right? It is run on the OpenFOAM U and nut
-    and compared with OpenFOAM's own CO2 transport of the same problem (scalarTransport function
-    object: same diffusivity D_CO2 + nut/Sc_t, same seating source, same boundary conditions).
-    The two use different discretisations (cell-centred 2nd-order upwind vs OpenFOAM linearUpwind,
-    our flux form vs OpenFOAM's), so agreement within a few % is the target, not round-off.
-
-Usage (training env, from experiments/gnot_openfoam_rans):
-  python3 compare_rans_pilot.py --rans cases/W1_1ms_rans_dx0.1 --laminar ../gnot/openfoam/cases/W1_1ms_dx0.1
+Pilot: k-omega SST flow vs the laminar flow, and my CO2 solver vs OpenFOAM's CO2 on the same case.
+Usage: python3 compare_rans_pilot.py --rans <rans case> --laminar <laminar case>
 """
 import argparse
 import os

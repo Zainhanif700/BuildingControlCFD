@@ -1,8 +1,6 @@
 """
-Learning curve: scenario files with fewer TRAINING cases (same 8 test cases). The subsets are nested
-(5 in 10 in 20), drawn with a fixed seed from the training cases that exist in --data-dir.
-Usage (from experiments/gnot_openfoam_rans):  python3 make_lc_scenarios.py 5 10 20
-Output: scenarios_lc/scen_n<k>.txt
+Scenario files with fewer training cases (5, 10, 20) for the learning curve; the 8 test cases stay the same.
+Usage: python3 make_lc_scenarios.py 5 10 20
 """
 import argparse
 import os

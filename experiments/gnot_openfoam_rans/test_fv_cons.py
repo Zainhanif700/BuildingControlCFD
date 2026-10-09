@@ -1,11 +1,6 @@
 """
-Tests of fv_cons.py (no OpenFOAM, ~1-2 min):
-  1. no flow: ConsFV == TurbFV (same diffusion, source, time stepping)
-  2. projection: divergence ~ 0 in every cell; door outflow = window inflow
-  3. closed room (no windows, doors shut), swirling flow, uniform CO2, no source: stays uniform
-  4. closed room, flow + source: total CO2 = injected amount exactly (conservation)
-  5. open windows, flow + source: no negative CO2 (limiter)
-Usage (from experiments/gnot_openfoam_rans):  python3 test_fv_cons.py
+Tests of the mass-conserving CO2 solver: no flow, divergence, closed room, mass conservation, no negative CO2.
+Usage: python3 test_fv_cons.py
 """
 import sys
 
@@ -27,7 +22,7 @@ def check(name, ok, msg=""):
 
 
 def swirl(g, amp=0.3):
-    """smooth flow, NOT divergence-free (the projection has to fix it)"""
+    """A smooth test flow that is not divergence-free."""
     u = amp * np.sin(g.Y / 2.0) * np.cos(g.Z) * g.fluid
     v = -amp * np.cos(g.X / 3.0) * np.sin(g.Z / 2.0) * g.fluid
     w = 0.3 * amp * np.sin(g.X / 2.5) * np.cos(g.Y / 2.0) * g.fluid
@@ -39,7 +34,6 @@ def main():
     dt = torch.float64
     rng = np.random.default_rng(0)
 
-    # 1. no flow
     V = [1.0, 0, 0, 0, 0, 0, 0, 0.5]
     g = L2.Grid(0.25, V)
     z = np.zeros(g.X.shape)
@@ -47,11 +41,9 @@ def main():
     S = seat_source(g, 20.0)
     a, _, _ = TurbFV(g, S, dev, dt).solve([0.0, 10.0], [[z, z, z, nut]] * 2, [30.0])
     b, _, _ = ConsFV(g, S, [0.0] * 8, dev, dt).solve([0.0, 10.0], [[z, z, z, nut]] * 2, [30.0])
-    # TurbFV's grid has open windows (Dirichlet c = 0 by g.open_top) -- ConsFV uses the same g, so same
     e = float(np.abs(a[30.0] - b[30.0]).max() / np.abs(a[30.0]).max())
     check("1 no flow: ConsFV == TurbFV", e < 1e-10, f"(max rel. diff {e:.1e})")
 
-    # 2. projection with open windows
     cf = ConsFV(g, S, V, dev, dt)
     u, v, w = swirl(g)
     F, rd, it = cf.project(u, v, w, 100.0)
@@ -61,7 +53,6 @@ def main():
     check("2 door outflow = window inflow", abs(door - inflow) / inflow < 1e-6,
           f"(in {inflow:.4f}, out {door:.4f} m^3/s; expected V*A = {(1.0 * 0.61 + 0.5 * 0.61) * 3.15:.4f})")
 
-    # 3./4. closed room
     gc = L2.Grid(0.25, [0.0] * 8)
     zc = np.zeros(gc.X.shape)
     u, v, w = swirl(gc)
@@ -81,7 +72,6 @@ def main():
     m_got = out[60.0][gc.fluid].sum() * vol
     check("4 closed room: CO2 mass = initial + injected", abs(m_got / m_exp - 1) < 1e-8, f"(ratio {m_got / m_exp:.10f})")
 
-    # 5. positivity with open windows and doors
     u, v, w = swirl(g, 1.0)
     out, _, _ = ConsFV(g, S, V, dev, dt).solve([0.0, 10.0], [[z, z, z, nut], [u, v, w, nut]], [120.0])
     c = out[120.0][g.fluid]

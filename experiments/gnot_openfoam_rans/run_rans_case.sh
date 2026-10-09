@@ -1,8 +1,6 @@
 #!/usr/bin/env bash
-# Mesh + run one RANS case made by make_rans_case.py (conda env "foam" active). Same mesh steps as
-# experiments/gnot/openfoam/run_openfoam_case.sh, plus the seating cellZone for the CO2 cross-check.
-# Serial run (MPI is not usable on this server).
-# Usage:  bash run_rans_case.sh cases/W1_1ms_rans_dx0.1
+# Mesh and run one OpenFOAM case (conda env "foam" active), on one core.
+# Usage: bash run_rans_case.sh cases/<name>_dx0.1
 set -eu
 CASE="${1:?usage: bash run_rans_case.sh <case dir>}"
 cd "$CASE"

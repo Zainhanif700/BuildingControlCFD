@@ -1,25 +1,12 @@
 """
-Mass-conserving CO2 solver (replaces the advective form of fv_turb.py).
-
-Why: fv_turb.py advects with u.grad(c) using the OpenFOAM cell-centre velocity. That velocity is not
-divergence-free on our grid, so CO2 is created/destroyed numerically (pilot: +9.5 % CO2 mass vs
-OpenFOAM at 30 min even on the real flow).
-
-What changes:
-  1. face velocities = mean of the two cell-centre velocities, then PROJECTED to be exactly
-     divergence-free (Poisson solve, CG): walls/closed windows no flow, open windows the fixed inflow
-     V * flux_fix * tanh(3t/TAU) (as in OpenFOAM), doors free outflow (p = 0)
-  2. advection in FLUX form with these face velocities -> CO2 is conserved exactly
-     (only the source adds, only the doors remove, fresh air enters with c = 0)
-  3. upwind face values with a minmod limiter (2nd order, no undershoots -> no negative CO2)
-Diffusion (D_CO2 + nut/Sc_t), source, time stepping (SSP-RK3) and boundary rules are unchanged.
+Mass-conserving CO2 solver used for the dataset: divergence-free face velocities, flux-form advection with a minmod limiter.
 """
 import math
 
 import numpy as np
 import torch
 
-import common  # noqa: F401
+import common
 from fv_turb import TurbFV, _shift
 from point_sampler import WINDOWS, DOORS, TAU_RAMP
 
@@ -35,7 +22,6 @@ class ConsFV(TurbFV):
         nx, ny, nz = g.n
         T = lambda a: torch.tensor(np.asarray(a), device=device)
         fl = self.fluid
-        # interior faces (between two fluid cells), face arrays have n+1 entries along their axis
         self.open = []
         for a in range(3):
             shp = list(g.n)
@@ -45,7 +31,6 @@ class ConsFV(TurbFV):
             sl_lo[a], sl_hi[a], sl_in[a] = slice(0, -1), slice(1, None), slice(1, -1)
             m[tuple(sl_in)] = fl[tuple(sl_lo)] & fl[tuple(sl_hi)]
             self.open.append(m)
-        # door faces (y = 0) and open-window faces (y = top): same selection rule as the OpenFOAM patches
         xc, zc = g.c1d[0], g.c1d[2]
         e = 0.25 * min(g.h)
         door = np.zeros((nx, nz), bool)
@@ -57,13 +42,12 @@ class ConsFV(TurbFV):
         for k, (a, b, _, _) in enumerate(WINDOWS):
             inx = (xc >= a) & (xc <= b)
             if self.V[k] > 0:
-                flux_fix = (b - a) / (inx.sum() * g.h[0])      # as make_openfoam_case.py
+                flux_fix = (b - a) / (inx.sum() * g.h[0])
                 win_speed[inx, :] = self.V[k] * flux_fix
         self.win_speed = T(win_speed).to(torch.float64) * fl[:, -1, :]
 
-    # ---------------- projection ----------------
     def _faces_from_cells(self, u, v, w, t):
-        """cell-centre velocity (grid arrays, float64 torch) -> face velocity arrays fx, fy, fz"""
+        """Cell velocities -> face velocities (fixed inflow at the windows, free outflow at the doors)."""
         F = []
         for a, ua in enumerate((u, v, w)):
             shp = list(ua.shape)
@@ -74,8 +58,8 @@ class ConsFV(TurbFV):
             f[tuple(inn)] = 0.5 * (ua[tuple(lo)] + ua[tuple(hi)])
             f = f * self.open[a]
             F.append(f)
-        F[1][:, 0, :] = torch.where(self.door, v[:, 0, :], torch.zeros_like(v[:, 0, :]))     # door: free, start from cell value
-        F[1][:, -1, :] = -self.win_speed * math.tanh(3.0 * t / TAU_RAMP)                     # window: fixed inflow (-y)
+        F[1][:, 0, :] = torch.where(self.door, v[:, 0, :], torch.zeros_like(v[:, 0, :]))
+        F[1][:, -1, :] = -self.win_speed * math.tanh(3.0 * t / TAU_RAMP)
         return F
 
     def _div(self, F):
@@ -84,8 +68,7 @@ class ConsFV(TurbFV):
                 + (F[2][:, :, 1:] - F[2][:, :, :-1]) / h[2]) * self.fluid
 
     def _grad(self, p):
-        """face gradient of a cell field: interior open faces, door faces (p = 0 at the door, half cell);
-        zero on walls and windows (fixed flux)"""
+        """Face gradient (p = 0 at the doors, zero at walls and windows)."""
         G = []
         for a in range(3):
             shp = list(p.shape)
@@ -103,11 +86,10 @@ class ConsFV(TurbFV):
         return self._div(self._grad(p))
 
     def project(self, u, v, w, t, tol=1e-10, max_it=5000):
-        """-> divergence-free face velocities [fx, fy, fz] (float64) and the remaining relative divergence"""
+        """Make the face velocities divergence-free (pressure Poisson solve with CG)."""
         u, v, w = (torch.as_tensor(np.asarray(a), device=self.dev, dtype=torch.float64) * self.fluid for a in (u, v, w))
         F = self._faces_from_cells(u, v, w, t)
         b = self._div(F)
-        # solve lap(p) = div(F) with CG on the SPD operator -lap, Jacobi preconditioner
         ones = self.fluid.to(torch.float64)
         diag = torch.zeros_like(ones)
         for a in range(3):
@@ -141,14 +123,12 @@ class ConsFV(TurbFV):
                 rz = rz_new
         G = self._grad(x)
         F = [F[a] - G[a] for a in range(3)]
-        F[1][:, -1, :] = -self.win_speed * math.tanh(3.0 * t / TAU_RAMP)   # unchanged by construction; keep exact
+        F[1][:, -1, :] = -self.win_speed * math.tanh(3.0 * t / TAU_RAMP)
         u_scale = max(float(max(f.abs().max() for f in F)), 1e-30)
         rel_div = float(self._div(F).abs().max() * min(self.h) / u_scale)
         return F, rel_div, it
 
-    # ---------------- transport ----------------
     def rhs_c(self, c, fx, fy, fz, D):
-        # diffusion: as fv_turb (walls/doors zero gradient, open windows c = 0)
         div = torch.zeros_like(c)
         for a in range(3):
             h = self.h[a]
@@ -156,7 +136,6 @@ class ConsFV(TurbFV):
             Dp = torch.where(self.nb_ok[(a, 1)], 0.5 * (D + _shift(D, a, 1)), D)
             Dm = torch.where(self.nb_ok[(a, -1)], 0.5 * (D + _shift(D, a, -1)), D)
             div = div + (Dp * (p1 - c) - Dm * (c - m1)) / h ** 2
-        # advection: flux form, limited upwind face values
         adv = torch.zeros_like(c)
         for a, f in enumerate((fx, fy, fz)):
             dl = torch.where(self.nb_ok[(a, -1)], c - _shift(c, a, -1), torch.zeros_like(c))
@@ -164,20 +143,19 @@ class ConsFV(TurbFV):
             s = minmod(dl, dr)
             lo, hi, inn = [slice(None)] * 3, [slice(None)] * 3, [slice(None)] * 3
             lo[a], hi[a], inn[a] = slice(0, -1), slice(1, None), slice(1, -1)
-            cL = (c + 0.5 * s)[tuple(lo)]          # value at the face from the cell on its low side
-            cR = (c - 0.5 * s)[tuple(hi)]          # ... from the cell on its high side
+            cL = (c + 0.5 * s)[tuple(lo)]
+            cR = (c - 0.5 * s)[tuple(hi)]
             flux = torch.zeros_like(f)
             fi = f[tuple(inn)]
             flux[tuple(inn)] = torch.where(fi > 0, fi * cL, fi * cR)
-            if a == 1:   # doors (y = 0): outflow carries the cell value, inflow is fresh air (0); windows: inflow, 0
+            if a == 1:
                 fd = f[:, 0, :]
                 flux[:, 0, :] = torch.where(fd < 0, fd * c[:, 0, :], torch.zeros_like(fd))
             adv = adv + (flux[tuple(hi)] - flux[tuple(lo)]) / self.h[a]
         return (div - adv + self.S) * self.fluid_f
 
     def solve(self, snap_times, snaps, out_times, c0=None, log_every=None, verbose=False):
-        """snaps: [u, v, w, nut] numpy grid arrays at snap_times (as fv_turb). Each snapshot is projected
-        once; face velocities and D are linear in time between snapshots, frozen after the last."""
+        """CO2 over time for the given flow snapshots (linear in between, frozen after the last)."""
         g = self.g
         S, info = [], []
         for t, s in zip(snap_times, snaps):
