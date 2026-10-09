@@ -1,9 +1,15 @@
+"""
+SOAP optimiser (Vyas et al. 2024, arXiv:2409.11321), used in some training runs.
+Unmodified copy of the authors' code: github.com/nikhilvyas/SOAP (MIT licence).
+"""
 import torch
 import torch.nn as nn
 import torch.optim as optim
 
 from itertools import chain
 
+# Parts of the code are modifications of Pytorch's AdamW optimizer
+# Parts of the code are modifications of code from https://github.com/jiaweizzhao/GaLore/blob/master/galore_torch/galore_projector.py
 
 
 class SOAP(optim.Optimizer):
