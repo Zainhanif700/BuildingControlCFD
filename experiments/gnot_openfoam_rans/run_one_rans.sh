@@ -15,18 +15,19 @@ mkdir -p "$HERE/cases" "$HERE/logs/cases" "$DATA"
 LOG="$HERE/logs/cases/$NAME.log"
 CASE="$HERE/cases/${NAME}_dx${DX}"
 [ "${SKIP_EXTRACT:-0}" = 1 ] && [ -f "$CASE/done" ] && { echo "$NAME: OpenFOAM already done -- skipped"; exit 0; }
+# every step must succeed (set -e does not work inside 'if ( ... )', so each step ends with '|| exit 1')
 if (
-    set -e
     echo "[$(date '+%F %T')] $NAME: V = $V, doors = $DOORS, dx = $DX"
-    cd "$HERE"
-    "$PY" make_rans_case.py --V "$V" --doors "$DOORS" --dx "$DX" --name "$NAME" --t-end 600 --write-interval 10
-    ( source "$HOME/anaconda3/etc/profile.d/conda.sh" && conda activate foam && bash run_rans_case.sh "$CASE" )
-    touch "$CASE/done"
+    cd "$HERE" || exit 1
+    "$PY" make_rans_case.py --V "$V" --doors "$DOORS" --dx "$DX" --name "$NAME" --t-end 600 --write-interval 10 || exit 1
+    ( source "$HOME/anaconda3/etc/profile.d/conda.sh" && conda activate foam && bash run_rans_case.sh "$CASE" ) || exit 1
+    grep -q "^End" "$CASE/log.pimpleFoam" || { echo "OpenFOAM did not reach the end -- see $CASE/log.pimpleFoam"; exit 1; }
+    touch "$CASE/done" || exit 1
     if [ "${SKIP_EXTRACT:-0}" = 1 ]; then
         echo "[$(date '+%F %T')] $NAME: OpenFOAM done, case kept for extraction (saved)"
         exit 0
     fi
-    "$PY" extract_rans.py --case "$CASE" --name "$NAME" --out "$DATA"
+    "$PY" extract_rans.py --case "$CASE" --name "$NAME" --out "$DATA" || exit 1
     [ "${KEEP_CASES:-0}" = 1 ] || rm -rf "$CASE"
     echo "[$(date '+%F %T')] $NAME: done"
 ) > "$LOG" 2>&1; then
