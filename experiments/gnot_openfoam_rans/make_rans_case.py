@@ -39,8 +39,11 @@ def main():
                     help="steady RANS (simpleFoam, SIMPLEC) instead of the transient run: the mean flow, no "
                          "fluctuations (pilot: the transient flow fluctuates ~24 %% around its mean)")
     ap.add_argument("--iters", type=int, default=3000, help="(steady) maximum SIMPLE iterations")
+    ap.add_argument("--doors", default="1,1", help="door1,door2: 1 = open (outlet), 0 = closed (wall)")
     args = ap.parse_args()
     V = [float(v) for v in args.V.split(",")]
+    doors = [int(d) for d in args.doors.split(",")]
+    assert len(doors) == 2 and any(doors), "at least one door must be open (the only outlets of the room)"
 
     import make_openfoam_case as moc
     argv = sys.argv
@@ -66,7 +69,18 @@ def main():
         if v == 0:
             cp, n = re.subn(rf"(name window{k + 1}; patchInfo \{{ type )patch(; \}})", r"\1wall\2", cp)
             assert n == 1, f"window{k + 1} not found in createPatchDict"
+    for j, d in enumerate(doors):
+        if not d:
+            cp, n = re.subn(rf"(name door{j + 1}; patchInfo \{{ type )patch(; \}})", r"\1wall\2", cp)
+            assert n == 1, f"door{j + 1} not found in createPatchDict"
     wr("system/createPatchDict", cp)
+    for rel, closed in (("0.orig/U", "type noSlip;"), ("0.orig/p", "type zeroGradient;")):
+        txt = rd(rel)
+        for j, d in enumerate(doors):
+            if not d:
+                txt, n = re.subn(rf"(    door{j + 1} \{{ ).*?( \}})", rf"\g<1>{closed}\2", txt)
+                assert n == 1, f"door{j + 1} not found in {rel}"
+        wr(rel, txt)
 
     def kw(v):
         k = 1.5 * (TURB_INTENSITY * v) ** 2
@@ -92,6 +106,12 @@ def main():
             bs.append(f"    {p} {{ type zeroGradient; }}")
     for j in (1, 2):
         p = f"door{j}"
+        if not doors[j - 1]:
+            bk.append(f"    {p} {{ type kqRWallFunction; value uniform {K_AMBIENT:g}; }}")
+            bo.append(f"    {p} {{ type omegaWallFunction; value uniform {OMEGA_AMBIENT:g}; }}")
+            bn.append(f"    {p} {{ type nutkWallFunction; value uniform 0; }}")
+            bs.append(f"    {p} {{ type zeroGradient; }}")
+            continue
         bk.append(f"    {p} {{ type inletOutlet; inletValue uniform {K_AMBIENT:g}; value uniform {K_AMBIENT:g}; }}")
         bo.append(f"    {p} {{ type inletOutlet; inletValue uniform {OMEGA_AMBIENT:g}; value uniform {OMEGA_AMBIENT:g}; }}")
         bn.append(f"    {p} {{ type calculated; value uniform 0; }}")
@@ -161,6 +181,7 @@ functions
         meta = f.read()
     meta = re.sub(r"^nu .*$", f"nu {NU_AIR:g}", meta, flags=re.M)
     meta += ("solver simpleFoam (steady)\n" if args.steady else "solver pimpleFoam (transient)\n")
+    meta += f"doors {doors[0]} {doors[1]}\n"
     meta += f"turbulence kOmegaSST\nseat_cells {n_seat}\nseat_volume {v_seat:.6g}\nco2_rate_ppm_s {rate:.8g}\nN_ref {N_REF:g}\n"
     with open(os.path.join(case, "scenario.txt"), "w") as f:
         f.write(meta)

@@ -39,3 +39,5 @@ experiments/gnot_openfoam_rans/checkpoints/
 experiments/gnot_openfoam_rans/data_transitions/
 experiments/gnot_openfoam_rans/figures/
 experiments/gnot_openfoam_rans/scenarios_lc/
+experiments/gnot_openfoam_rans/data_v2/
+experiments/gnot_openfoam_rans/data_transitions_v2/

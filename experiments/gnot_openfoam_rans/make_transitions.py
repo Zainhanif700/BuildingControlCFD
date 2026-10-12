@@ -33,7 +33,7 @@ def make_one(b_path, a_path, device="cuda"):
     assert np.allclose(a["P"], b["P"]), "grid mismatch"
     assert "co2_solver" in b.files and str(b["co2_solver"]) == common.DATA_CO2_SOLVER, f"{b_path}: old solver"
     V = [float(v) for v in b["V"]]
-    g = L2.Grid(float(b["dx"]), V)
+    g = L2.Grid(round(float(b["dx"]), 6), V)
     fl = g.fluid
     grid = lambda x: (lambda o: (o.__setitem__(fl, x), o)[1])(np.zeros(g.X.shape))
     snaps = [[grid(U[:, 0]), grid(U[:, 1]), grid(U[:, 2]), grid(nu)] for U, nu in zip(b["U_snap"], b["nut_snap"])]
@@ -43,13 +43,15 @@ def make_one(b_path, a_path, device="cuda"):
     S = snaps + [mean]
     out_t = [float(t) for t in np.arange(DT_OUT, T_CO2 + 1e-9, DT_OUT)]
     c0 = a["C"][-1].astype(np.float64)
-    fv = ConsFV(g, np.zeros(g.X.shape), V, device, torch.float32, sc_t=float(b["sc_t"]))
+    doors = [int(x) for x in b["doors"]] if "doors" in b.files else [1, 1]
+    fv = ConsFV(g, np.zeros(g.X.shape), V, device, torch.float32, sc_t=float(b["sc_t"]), doors=doors)
     H, _, n = fv.solve(T, S, out_t, c0=grid(c0))
     m = plane_mask(b["P"])
     Hp = np.stack([c0[m]] + [H[t][fl][m] for t in out_t]).astype(np.float32)
     assert np.allclose(b["t_c"], np.array([0.0] + out_t, np.float32)), "time grid differs from the dataset"
     return dict(P=b["P"][m], V=b["V"], N_ref=np.float32(N_REF), t_c=b["t_c"], H=Hp, S=b["C"][:, m],
-                from_case=np.array(os.path.basename(a_path)[:-4]), sc_t=b["sc_t"], co2_solver=b["co2_solver"]), n
+                from_case=np.array(os.path.basename(a_path)[:-4]), sc_t=b["sc_t"], co2_solver=b["co2_solver"],
+                doors=np.array(doors, np.int8)), n
 
 
 def main():
@@ -58,18 +60,21 @@ def main():
     ap.add_argument("--device", default="cuda")
     ap.add_argument("--shard", default="0/1", help="i/n: this process does cases i, i+n, ... (run n processes in parallel)")
     ap.add_argument("--expect", type=int, default=39, help="number of dataset files (the random pairing depends on it)")
+    ap.add_argument("--data-dir", default=os.path.join(HERE, "data"), help="folder with the dataset files")
+    ap.add_argument("--pattern", default="S*.npz")
+    ap.add_argument("--out", default=OUT, help="folder for the transition files")
     args = ap.parse_args()
-    files = sorted(glob.glob(os.path.join(HERE, "data", "S*.npz")))
+    files = sorted(glob.glob(os.path.join(args.data_dir, args.pattern)))
     if len(files) != args.expect:
         raise SystemExit(f"found {len(files)} dataset files, expected {args.expect} -- wait until the dataset is complete")
     names = [os.path.basename(f)[:-4] for f in files]
     rng = np.random.default_rng(args.seed)
-    os.makedirs(OUT, exist_ok=True)
-    print(f"{len(files)} cases -> {OUT}", flush=True)
+    os.makedirs(args.out, exist_ok=True)
+    print(f"{len(files)} cases -> {args.out}", flush=True)
     for i, (f, nb) in enumerate(zip(files, names)):
         others = [k for k in range(len(files)) if k != i]
         a = files[others[int(rng.integers(len(others)))]]
-        out = os.path.join(OUT, f"{nb}.npz")
+        out = os.path.join(args.out, f"{nb}.npz")
         si, sn = (int(x) for x in args.shard.split("/"))
         if i % sn != si:
             continue

@@ -16,7 +16,7 @@ T_CO2 = 1800.0
 DT_OUT = 30.0
 
 
-def co2_b2(g, src, t_snap, snaps, mean, device, solver=common.DATA_CO2_SOLVER, sct=common.SC_T_DATA, V=None):
+def co2_b2(g, src, t_snap, snaps, mean, device, solver=common.DATA_CO2_SOLVER, sct=common.SC_T_DATA, V=None, doors=(1, 1)):
     """CO2 for 30 min on the dataset flow (real snapshots, then the average flow)."""
     import torch
     T = list(t_snap) + [t_snap[-1] + 10.0]
@@ -24,7 +24,7 @@ def co2_b2(g, src, t_snap, snaps, mean, device, solver=common.DATA_CO2_SOLVER, s
     out_t = [float(t) for t in np.arange(DT_OUT, T_CO2 + 1e-9, DT_OUT)]
     if solver == "cons":
         from fv_cons import ConsFV
-        fv = ConsFV(g, src, V, device, torch.float32, sc_t=sct)
+        fv = ConsFV(g, src, V, device, torch.float32, sc_t=sct, doors=doors)
     else:
         from fv_turb import TurbFV
         fv = TurbFV(g, src, device, torch.float32, sc_t=sct)
@@ -59,10 +59,11 @@ def extract(case, name, out_dir=DATA_DIR, device="cuda"):
     src = seat_source(g, N_REF)
 
     t0 = time.time()
-    out_t, C, dt, n = co2_b2(g, src, t_snap, [snaps[t] for t in t_snap], mean, device, V=V)
+    doors = [int(x) for x in meta.get("doors", "1 1").split()]
+    out_t, C, dt, n = co2_b2(g, src, t_snap, [snaps[t] for t in t_snap], mean, device, V=V, doors=doors)
     if common.DATA_CO2_SOLVER == "cons":
         from fv_cons import ConsFV
-        real, _, _ = ConsFV(g, src, V, device, torch.float32).solve([0.0] + times, [snaps[t] for t in [0.0] + times], [t_end])
+        real, _, _ = ConsFV(g, src, V, device, torch.float32, doors=doors).solve([0.0] + times, [snaps[t] for t in [0.0] + times], [t_end])
     else:
         real, _, _ = TurbFV(g, src, device, torch.float32).solve([0.0] + times, [snaps[t] for t in [0.0] + times], [t_end])
     ref = np.nan_to_num(to_grid(g, idx, read_internal(os.path.join(case, td[t_end], "s"), 1, len(Cc)).reshape(-1))) * fl
@@ -90,7 +91,7 @@ def extract(case, name, out_dir=DATA_DIR, device="cuda"):
     with open(tmp, "wb") as fh:
       np.savez_compressed(
         fh, P=P, plane=np.abs(P[:, 2] - g.c1d[2][kz]) < 1e-5, z_plane=np.float32(g.c1d[2][kz]),
-        V=np.array(V, np.float32), N_ref=np.float32(N_REF), dx=np.float32(float(meta["dx"])),
+        V=np.array(V, np.float32), N_ref=np.float32(N_REF), dx=np.float32(float(meta["dx"])), doors=np.array(doors, np.int8),
         t_c=np.array([0.0] + out_t, np.float32),
         C=np.stack([np.zeros(int(fl.sum()), np.float32)] + [C[t][fl].astype(np.float32) for t in out_t]),
         t_snap=np.array(t_snap, np.float32),
@@ -113,14 +114,15 @@ def recompute(npz, device="cuda", solver=common.DATA_CO2_SOLVER, sct=common.SC_T
     from fv_turb import seat_source
     d = dict(np.load(npz))
     V = [float(v) for v in d["V"]]
-    g = L2.Grid(float(d["dx"]), V)
+    g = L2.Grid(round(float(d["dx"]), 6), V)
     fl = g.fluid
     grid = lambda a: (lambda o: (o.__setitem__(fl, a), o)[1])(np.zeros(g.X.shape))
     snaps = [[grid(U[:, 0]), grid(U[:, 1]), grid(U[:, 2]), grid(nu)] for U, nu in zip(d["U_snap"], d["nut_snap"])]
     mean = [grid(d["U_mean"][:, 0]), grid(d["U_mean"][:, 1]), grid(d["U_mean"][:, 2]), grid(d["nut_mean"])]
     t0 = time.time()
+    doors = [int(x) for x in d["doors"]] if "doors" in d else [1, 1]
     out_t, C, _, _ = co2_b2(g, seat_source(g, N_REF), [float(t) for t in d["t_snap"]], snaps, mean, device,
-                            solver=solver, sct=sct, V=V)
+                            solver=solver, sct=sct, V=V, doors=doors)
     d["C"] = np.stack([np.zeros(int(fl.sum()), np.float32)] + [C[t][fl].astype(np.float32) for t in out_t])
     d["seat_box"] = np.array(SEAT_BOX, np.float32)
     d["seat_box_placeholder"] = common.SEAT_BOX_IS_PLACEHOLDER
@@ -141,13 +143,14 @@ def main():
     ap.add_argument("--solver", default=common.DATA_CO2_SOLVER, choices=["old", "cons"], help="(recompute) CO2 solver")
     ap.add_argument("--sct", type=float, default=common.SC_T_DATA, help="(recompute) turbulent Schmidt number")
     ap.add_argument("--device", default="cuda")
+    ap.add_argument("--out", default=DATA_DIR, help="folder for the dataset file")
     args = ap.parse_args()
     if args.recompute:
         recompute(args.recompute, args.device, args.solver, args.sct)
     else:
         if not (args.case and args.name):
             raise SystemExit("give --case and --name (or --recompute <npz>)")
-        extract(args.case, args.name, device=args.device)
+        extract(args.case, args.name, out_dir=args.out, device=args.device)
 
 
 if __name__ == "__main__":
