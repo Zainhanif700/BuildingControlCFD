@@ -11,6 +11,7 @@ HERE="$(cd "$(dirname "$0")" && pwd)"
 PY="${CFD_PY:-$HOME/anaconda3/envs/cfd/bin/python}"
 DATA="$HERE/${DATA_SUBDIR:-data}"
 mkdir -p "$HERE/cases" "$HERE/logs/cases" "$DATA"
+[ -f "$HERE/cases/$NAME.skip" ] && { echo "$NAME: runs on another machine (cases/$NAME.skip) -- skipped"; exit 0; }
 [ -f "$DATA/$NAME.npz" ] && { echo "$NAME: already extracted -- skipped"; exit 0; }
 LOG="$HERE/logs/cases/$NAME.log"
 CASE="$HERE/cases/${NAME}_dx${DX}"
