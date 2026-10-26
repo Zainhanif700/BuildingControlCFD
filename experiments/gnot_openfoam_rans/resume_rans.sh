@@ -14,6 +14,10 @@ mkdir -p "$HERE/logs/cases"
 if (
     cd "$CASE" || exit 1
     source "$HOME/anaconda3/etc/profile.d/conda.sh" && conda activate foam || exit 1
+    if [ -d processor0 ]; then           # stopped during a run on several cores
+        reconstructPar -newTimes > log.reconstructPar 2>&1 || exit 1
+        rm -rf processor*
+    fi
     LAST=$(ls | grep -E '^[0-9.]+$' | sort -g | tail -1)
     for f in U p phi k omega nut; do
         [ -f "$LAST/$f.gz" ] || [ -f "$LAST/$f" ] || { echo "the save at $LAST s has no $f -- cannot continue"; exit 1; }

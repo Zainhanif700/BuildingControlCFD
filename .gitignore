@@ -33,6 +33,7 @@ experiments/pinn/openfoam/cases/
 experiments/pinto/
 # Track 2b (RANS): cases and extracted data are regenerated on the server
 experiments/gnot_openfoam_rans/cases/
+experiments/gnot_openfoam_rans/speedtest/
 experiments/gnot_openfoam_rans/data/
 experiments/gnot_openfoam_rans/logs/
 experiments/gnot_openfoam_rans/checkpoints/

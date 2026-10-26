@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Mesh and run one OpenFOAM case (conda env "foam" active), on one core.
+# Mesh and run one OpenFOAM case (conda env "foam" active), on one core or with FOAM_NP=n on n cores.
 # Usage: bash run_rans_case.sh cases/<name>_dx0.1
 set -eu
 CASE="${1:?usage: bash run_rans_case.sh <case dir>}"
@@ -24,8 +24,23 @@ grep -E "seats.*size|cellZone" log.topoSet.seats | tail -2 || true
 rm -rf 0 && cp -r 0.orig 0
 postProcess -func writeCellCentres -time 0 > log.cellCentres 2>&1
 APP=$(foamDictionary -entry application -value system/controlDict)
-say "run: $APP (k-omega SST) on 1 core (log.$APP)"
-$APP > log.$APP 2>&1
+NP="${FOAM_NP:-1}"
+if [ "$NP" -gt 1 ]; then
+    cat > system/decomposeParDict <<EOF
+FoamFile { version 2.0; format ascii; class dictionary; object decomposeParDict; }
+numberOfSubdomains $NP;
+method scotch;
+EOF
+    say "run: $APP (k-omega SST) on $NP cores (log.$APP)"
+    decomposePar -force > log.decomposePar 2>&1
+    mpirun -np "$NP" $APP -parallel > log.$APP 2>&1
+    say "reconstructPar"
+    reconstructPar > log.reconstructPar 2>&1
+    rm -rf processor*
+else
+    say "run: $APP (k-omega SST) on 1 core (log.$APP)"
+    $APP > log.$APP 2>&1
+fi
 if [ "$APP" = pimpleFoam ]; then         # transient: keep p/phi only at the comparison times
     for d in [0-9]*; do
         case "$d" in 0|0.orig|30|60|120|180) ;; *) rm -f "$d"/p "$d"/p.gz "$d"/phi "$d"/phi.gz ;; esac

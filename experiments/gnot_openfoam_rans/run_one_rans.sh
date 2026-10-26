@@ -2,11 +2,13 @@
 # One window setting end to end: write the case, run OpenFOAM, extract the dataset file, delete the case.
 # Usage: bash run_one_rans.sh <name> <V1,...,V8> [doors, default 1,1] [dx, default 0.1]
 #   DATA_SUBDIR=data_v2 -> dataset folder;  SKIP_EXTRACT=1 -> only run OpenFOAM and keep the case (no GPU needed)
+#   FOAM_NP=4 -> OpenFOAM on 4 cores;  T_END=20 -> short test run, saved as <name>_test
 set -u
 NAME="${1:?usage: run_one_rans.sh <name> <V1,...,V8> [doors] [dx]}"
 V="${2:?usage: run_one_rans.sh <name> <V1,...,V8> [doors] [dx]}"
 DOORS="${3:-1,1}"
 DX="${4:-0.1}"
+[ "${T_END:-600}" = 600 ] || NAME="${NAME}_test"
 HERE="$(cd "$(dirname "$0")" && pwd)"
 PY="${CFD_PY:-$HOME/anaconda3/envs/cfd/bin/python}"
 DATA="$HERE/${DATA_SUBDIR:-data}"
@@ -20,7 +22,7 @@ CASE="$HERE/cases/${NAME}_dx${DX}"
 if (
     echo "[$(date '+%F %T')] $NAME: V = $V, doors = $DOORS, dx = $DX"
     cd "$HERE" || exit 1
-    "$PY" make_rans_case.py --V "$V" --doors "$DOORS" --dx "$DX" --name "$NAME" --t-end 600 --write-interval 10 || exit 1
+    "$PY" make_rans_case.py --V "$V" --doors "$DOORS" --dx "$DX" --name "$NAME" --t-end "${T_END:-600}" --write-interval 10 || exit 1
     ( source "$HOME/anaconda3/etc/profile.d/conda.sh" && conda activate foam && bash run_rans_case.sh "$CASE" ) || exit 1
     grep -q "^End" "$CASE/log.pimpleFoam" || { echo "OpenFOAM did not reach the end -- see $CASE/log.pimpleFoam"; exit 1; }
     touch "$CASE/done" || exit 1
