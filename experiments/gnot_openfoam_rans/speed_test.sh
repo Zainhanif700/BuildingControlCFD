@@ -10,7 +10,7 @@ cd "$HERE"
 read -r V DOORS < <(awk -v n="$NAME" '$1 == n { print $3, $4 }' scenarios_v2.txt) || true
 [ -n "${V:-}" ] || { echo "$NAME not in scenarios_v2.txt"; exit 1; }
 OUT="$HERE/speedtest/$NAME"
-rm -rf "$OUT" && mkdir -p "$OUT"
+rm -rf "$OUT/new" && mkdir -p "$OUT"
 "$PY" make_rans_case.py --V "$V" --doors "$DOORS" --dx 0.08 --name "$NAME" --t-end "$TEND" --write-interval "$TEND" --out "$OUT/new" > "$OUT/make_case.log"
 NEW="$OUT/new/${NAME}_dx0.08"
 source "$HOME/anaconda3/etc/profile.d/conda.sh" && conda activate foam
@@ -23,10 +23,11 @@ relax() {
 
 for run in current_1 relaxed_1 current_$NP relaxed_$NP; do
     CASE="$OUT/$run"
-    cp -r "$NEW" "$CASE"
+    if grep -q "^End" "$CASE/log.pimpleFoam" 2> /dev/null; then echo "  $run: done before -- kept"; continue; fi
+    rm -rf "$CASE" && cp -r "$NEW" "$CASE"
     case "$run" in relaxed_*) relax "$CASE" ;; esac
     echo "[$(date '+%F %T')] $run"
     FOAM_NP="${run##*_}" bash run_rans_case.sh "$CASE" > "$CASE/log.run" 2>&1 || { echo "$run FAILED -- see $CASE/log.run"; exit 1; }
-    grep "^ExecutionTime" "$CASE/log.pimpleFoam" | tail -1 | awk -v r="$run" '{ printf "  %-12s %8.0f s\n", r, $7 }' | tee -a "$OUT/times.txt"
+    grep "^ExecutionTime" "$CASE/log.pimpleFoam" | tail -1 | awk -v r="$run" '{ printf "  %-12s %8.0f s\n", r, $7 }'
 done
 "$PY" compare_runs.py "$OUT" current_1 | tee "$OUT/result.txt"

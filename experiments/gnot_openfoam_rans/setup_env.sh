@@ -14,4 +14,8 @@ conda env list | grep -q "^foam " || conda create -y -n foam -c conda-forge open
 conda env list | grep -q "^cfd "  || conda create -y -n cfd -c conda-forge python=3.11 numpy scipy matplotlib
 "$PY" -c "import torch" 2> /dev/null || "$PY" -m pip install torch --index-url https://download.pytorch.org/whl/cpu
 "$PY" -c "import numpy, torch; print('python OK')"
+# the conda package looks for the MPI library in lib/sys-mpich but installs it as lib/mpich-<version>
+LIB="$HOME/anaconda3/envs/foam/lib"
+[ -e "$LIB/sys-mpich" ] || ln -s "$(basename "$(ls -d "$LIB"/mpich-* | head -1)")" "$LIB/sys-mpich"
 ( conda activate foam && command -v pimpleFoam > /dev/null && echo "OpenFOAM OK" )
+ldd "$HOME/anaconda3/envs/foam/bin/pimpleFoam" | grep -q "sys-mpich/libPstream" && echo "MPI OK"
