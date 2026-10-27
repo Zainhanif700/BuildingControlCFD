@@ -28,7 +28,9 @@ def main():
     ap.add_argument("folder")
     ap.add_argument("reference")
     args = ap.parse_args()
-    runs = sorted(r for r in os.listdir(args.folder) if os.path.isfile(os.path.join(args.folder, r, "log.pimpleFoam")))
+    finished = lambda r: os.path.isfile(os.path.join(args.folder, r, "log.pimpleFoam")) and \
+        re.search(r"^End", open(os.path.join(args.folder, r, "log.pimpleFoam")).read(), re.M)
+    runs = sorted(r for r in os.listdir(args.folder) if finished(r))
     t_ref, ref = last_fields(os.path.join(args.folder, args.reference))
     w_ref = wall_time(os.path.join(args.folder, args.reference))
     print(f"t = {t_ref:g} s, difference to {args.reference} (relative l2):")

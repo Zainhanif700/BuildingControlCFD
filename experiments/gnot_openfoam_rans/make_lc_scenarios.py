@@ -17,6 +17,7 @@ def main():
     ap.add_argument("--scenarios", default=SCEN)
     ap.add_argument("--data-dir", default=os.path.join(HERE, "data_transitions"))
     ap.add_argument("--seed", type=int, default=0)
+    ap.add_argument("--name", default="scen", help="file names scenarios_lc/<name>_n<size>.txt")
     args = ap.parse_args()
     lines = open(args.scenarios).read().splitlines()
     head = [l for l in lines if l.startswith("#")]
@@ -31,7 +32,7 @@ def main():
     for n in sorted(args.sizes):
         assert n <= len(train), f"only {len(train)} training cases"
         sub = [train[i] for i in sorted(perm[:n])]
-        out = os.path.join(HERE, "scenarios_lc", f"scen_n{n}.txt")
+        out = os.path.join(HERE, "scenarios_lc", f"{args.name}_n{n}.txt")
         with open(out, "w") as f:
             f.write("\n".join(head + sub + test) + "\n")
         print(f"n = {n:2d}: {' '.join(l.split()[0] for l in sub)}  -> {out}")
