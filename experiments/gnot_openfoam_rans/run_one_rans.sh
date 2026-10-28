@@ -2,7 +2,7 @@
 # One window setting end to end: write the case, run OpenFOAM, extract the dataset file, delete the case.
 # Usage: bash run_one_rans.sh <name> <V1,...,V8> [doors, default 1,1] [dx, default 0.1]
 #   DATA_SUBDIR=data_v2 -> dataset folder;  SKIP_EXTRACT=1 -> only run OpenFOAM and keep the case (no GPU needed)
-#   FOAM_NP=4 -> OpenFOAM on 4 cores;  T_END=20 -> short test run, saved as <name>_test
+#   FOAM_NP=4 -> OpenFOAM on 4 cores;  T_END=20 -> short test run, saved as <name>_test;  EXTRACT_ARGS=--no-check
 set -u
 NAME="${1:?usage: run_one_rans.sh <name> <V1,...,V8> [doors] [dx]}"
 V="${2:?usage: run_one_rans.sh <name> <V1,...,V8> [doors] [dx]}"
@@ -30,7 +30,7 @@ if (
         echo "[$(date '+%F %T')] $NAME: OpenFOAM done, case kept for extraction (saved)"
         exit 0
     fi
-    "$PY" extract_rans.py --case "$CASE" --name "$NAME" --out "$DATA" || exit 1
+    "$PY" extract_rans.py --case "$CASE" --name "$NAME" --out "$DATA" ${EXTRACT_ARGS:-} || exit 1
     [ "${KEEP_CASES:-0}" = 1 ] || rm -rf "$CASE"
     echo "[$(date '+%F %T')] $NAME: done"
 ) > "$LOG" 2>&1; then

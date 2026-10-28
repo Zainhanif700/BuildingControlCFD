@@ -32,7 +32,7 @@ def co2_b2(g, src, t_snap, snaps, mean, device, solver=common.DATA_CO2_SOLVER, s
     return out_t, out, dt, n
 
 
-def extract(case, name, out_dir=DATA_DIR, device="cuda", t_max=None):
+def extract(case, name, out_dir=DATA_DIR, device="cuda", t_max=None, check=True):
     import torch
     import check_co2_with_model_flow as L2
     from compare_with_openfoam import read_internal, time_dirs
@@ -61,17 +61,19 @@ def extract(case, name, out_dir=DATA_DIR, device="cuda", t_max=None):
     t0 = time.time()
     doors = [int(x) for x in meta.get("doors", "1 1").split()]
     out_t, C, dt, n = co2_b2(g, src, t_snap, [snaps[t] for t in t_snap], mean, device, V=V, doors=doors)
-    if common.DATA_CO2_SOLVER == "cons":
+    real = None                          # check run: CO2 on the real OpenFOAM flow (skipped with check=False)
+    if check and common.DATA_CO2_SOLVER == "cons":
         from fv_cons import ConsFV
         real, _, _ = ConsFV(g, src, V, device, torch.float32, doors=doors).solve([0.0] + times, [snaps[t] for t in [0.0] + times], [t_end])
-    else:
+    elif check:
         real, _, _ = TurbFV(g, src, device, torch.float32).solve([0.0] + times, [snaps[t] for t in [0.0] + times], [t_end])
     ref = np.nan_to_num(to_grid(g, idx, read_internal(os.path.join(case, td[t_end], "s"), 1, len(Cc)).reshape(-1))) * fl
     assert t_end in C, f"last OpenFOAM time {t_end:g} s is not on the {DT_OUT:g}-s output grid"
     b2 = C[t_end]
     rel = lambda c: float(np.linalg.norm(c[fl] - ref[fl]) / np.linalg.norm(ref[fl]))
-    chk = {"err_real_vs_OF": rel(real[t_end]), "err_B2_vs_OF": rel(b2),
-           "mass_real_vs_OF": float(real[t_end][fl].sum() / ref[fl].sum()), "mass_B2_vs_OF": float(b2[fl].sum() / ref[fl].sum())}
+    chk = {"err_real_vs_OF": rel(real[t_end]) if real is not None else np.nan, "err_B2_vs_OF": rel(b2),
+           "mass_real_vs_OF": float(real[t_end][fl].sum() / ref[fl].sum()) if real is not None else np.nan,
+           "mass_B2_vs_OF": float(b2[fl].sum() / ref[fl].sum())}
     for zz in (1.1, 1.6):
         k_ = int(np.argmin(np.abs(g.c1d[2] - zz)))
         m_ = fl[:, :, k_]
@@ -145,13 +147,14 @@ def main():
     ap.add_argument("--device", default="cuda")
     ap.add_argument("--out", default=DATA_DIR, help="folder for the dataset file")
     ap.add_argument("--t-max", type=float, default=None, help="use the OpenFOAM saves only up to this time (test)")
+    ap.add_argument("--no-check", action="store_true", help="skip the check run on the real OpenFOAM flow (~25 %% faster)")
     args = ap.parse_args()
     if args.recompute:
         recompute(args.recompute, args.device, args.solver, args.sct)
     else:
         if not (args.case and args.name):
             raise SystemExit("give --case and --name (or --recompute <npz>)")
-        extract(args.case, args.name, out_dir=args.out, device=args.device, t_max=args.t_max)
+        extract(args.case, args.name, out_dir=args.out, device=args.device, t_max=args.t_max, check=not args.no_check)
 
 
 if __name__ == "__main__":

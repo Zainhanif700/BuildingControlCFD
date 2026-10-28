@@ -2,7 +2,6 @@
 Mass-conserving CO2 solver used for the dataset: divergence-free face velocities, flux-form advection with a minmod limiter.
 """
 import math
-import os
 
 import numpy as np
 import torch
@@ -158,30 +157,8 @@ class ConsFV(TurbFV):
             adv = adv + (flux[tuple(hi)] - flux[tuple(lo)]) / self.h[a]
         return (div - adv + self.S) * self.fluid_f
 
-    def _rk3(self, c, step, f0, f1, fh):
-        k1 = c + step * self.rhs_c(c, *f0)
-        k2 = 0.75 * c + 0.25 * (k1 + step * self.rhs_c(k1, *f1))
-        return c / 3.0 + 2.0 / 3.0 * (k2 + step * self.rhs_c(k2, *fh))
-
-    def _graph_step(self, c, F, step):
-        """One time step on the frozen flow recorded as a CUDA graph: the same GPU operations, replayed without
-        the launch overhead of the ~400 small operations per step."""
-        static_c = c.clone()
-        side = torch.cuda.Stream()
-        side.wait_stream(torch.cuda.current_stream())
-        with torch.cuda.stream(side):
-            for _ in range(2):
-                self._rk3(static_c, step, F, F, F)
-        torch.cuda.current_stream().wait_stream(side)
-        graph = torch.cuda.CUDAGraph()
-        with torch.cuda.graph(graph):
-            static_out = self._rk3(static_c, step, F, F, F)
-        return graph, static_c, static_out
-
-    def solve(self, snap_times, snaps, out_times, c0=None, log_every=None, verbose=False, use_graph=None):
+    def solve(self, snap_times, snaps, out_times, c0=None, log_every=None, verbose=False):
         """CO2 over time for the given flow snapshots (linear in between, frozen after the last)."""
-        if use_graph is None:
-            use_graph = str(self.dev).startswith("cuda") and os.environ.get("FV_GRAPH", "1") == "1"
         g = self.g
         S, info = [], []
         for t, s in zip(snap_times, snaps):
@@ -206,18 +183,13 @@ class ConsFV(TurbFV):
         c = torch.zeros(g.X.shape, device=self.dev, dtype=self.dt_) if c0 is None else \
             torch.tensor(np.asarray(c0), device=self.dev, dtype=self.dt_) * self.fluid_f
         out, t, n = {}, 0.0, 0
-        graph = None
         for t_end in out_times:
             while t < t_end - 1e-9:
                 step = min(dt, t_end - t)
-                if use_graph and t >= ts[-1] and step == dt:
-                    if graph is None:
-                        graph, g_in, g_out = self._graph_step(c, S[-1], dt)
-                    g_in.copy_(c)
-                    graph.replay()
-                    c = g_out
-                else:
-                    c = self._rk3(c, step, fields(t), fields(t + step), fields(t + 0.5 * step))
+                f0, f1, fh = fields(t), fields(t + step), fields(t + 0.5 * step)
+                k1 = c + step * self.rhs_c(c, *f0)
+                k2 = 0.75 * c + 0.25 * (k1 + step * self.rhs_c(k1, *f1))
+                c = c / 3.0 + 2.0 / 3.0 * (k2 + step * self.rhs_c(k2, *fh))
                 t += step
                 n += 1
                 if log_every and n % log_every == 0:
