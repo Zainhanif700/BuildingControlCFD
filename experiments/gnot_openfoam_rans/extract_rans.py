@@ -32,7 +32,7 @@ def co2_b2(g, src, t_snap, snaps, mean, device, solver=common.DATA_CO2_SOLVER, s
     return out_t, out, dt, n
 
 
-def extract(case, name, out_dir=DATA_DIR, device="cuda"):
+def extract(case, name, out_dir=DATA_DIR, device="cuda", t_max=None):
     import torch
     import check_co2_with_model_flow as L2
     from compare_with_openfoam import read_internal, time_dirs
@@ -41,7 +41,7 @@ def extract(case, name, out_dir=DATA_DIR, device="cuda"):
     case = os.path.abspath(case)
     meta, V, g, Cc, idx, td = load_case(case, read_internal, time_dirs, L2)
     fl = g.fluid
-    times = sorted(t for t in td if t > 0)
+    times = sorted(t for t in td if 0 < t <= (t_max or np.inf))
     t_end = times[-1]
     assert t_end > T_AVG + 100, f"case saved only to {t_end:g} s -- needs the run to ~600 s"
     z = np.zeros(g.X.shape)
@@ -144,13 +144,14 @@ def main():
     ap.add_argument("--sct", type=float, default=common.SC_T_DATA, help="(recompute) turbulent Schmidt number")
     ap.add_argument("--device", default="cuda")
     ap.add_argument("--out", default=DATA_DIR, help="folder for the dataset file")
+    ap.add_argument("--t-max", type=float, default=None, help="use the OpenFOAM saves only up to this time (test)")
     args = ap.parse_args()
     if args.recompute:
         recompute(args.recompute, args.device, args.solver, args.sct)
     else:
         if not (args.case and args.name):
             raise SystemExit("give --case and --name (or --recompute <npz>)")
-        extract(args.case, args.name, out_dir=args.out, device=args.device)
+        extract(args.case, args.name, out_dir=args.out, device=args.device, t_max=args.t_max)
 
 
 if __name__ == "__main__":

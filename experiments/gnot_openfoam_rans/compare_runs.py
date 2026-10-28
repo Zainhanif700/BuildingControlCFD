@@ -19,8 +19,11 @@ def wall_time(case):
 
 def last_fields(case):
     t, d = time_dirs(case)[-1]
-    n = len(read_internal(os.path.join(case, "0", "C"), 3))
-    return t, {f: read_internal(os.path.join(case, d, f), k, n) for f, k in (("U", 3), ("nut", 1), ("s", 1))}
+    C = read_internal(os.path.join(case, "0", "C"), 3)
+    order = np.lexsort(np.round(C, 5).T[::-1])      # same cell order in every run, also after renumberMesh
+    have = lambda f: any(os.path.isfile(os.path.join(case, d, f + e)) for e in ("", ".gz"))
+    return t, {f: read_internal(os.path.join(case, d, f), k, len(C))[order] if have(f) else None
+               for f, k in (("U", 3), ("nut", 1), ("s", 1))}
 
 
 def main():
@@ -39,9 +42,9 @@ def main():
         case = os.path.join(args.folder, r)
         t, f = last_fields(case)
         assert abs(t - t_ref) < 1e-6, f"{r} ended at {t} s"
-        err = [np.linalg.norm(f[k] - ref[k]) / np.linalg.norm(ref[k]) for k in ("U", "nut", "s")]
+        err = [np.linalg.norm(f[k] - ref[k]) / np.linalg.norm(ref[k]) if f[k] is not None else None for k in ("U", "nut", "s")]
         w = wall_time(case)
-        print(f"  {r:12s} {w:9.0f}s {w_ref / w:8.1f}x " + " ".join(f"{100 * e:7.2f}%" for e in err))
+        print(f"  {r:12s} {w:9.0f}s {w_ref / w:8.1f}x " + " ".join("       -" if e is None else f"{100 * e:7.2f}%" for e in err))
 
 
 if __name__ == "__main__":

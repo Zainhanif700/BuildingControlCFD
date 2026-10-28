@@ -21,6 +21,9 @@ say "mesh: seating zone";              cp system/topoSetDict.seats system/topoSe
 checkMesh > log.checkMesh 2>&1 || true
 grep -E "cells:|Mesh OK|Failed|\*\*\*" log.checkMesh | head -8
 grep -E "seats.*size|cellZone" log.topoSet.seats | tail -2 || true
+if [ "${RENUMBER:-0}" = 1 ]; then
+    say "mesh: renumberMesh";          renumberMesh -overwrite > log.renumberMesh 2>&1
+fi
 rm -rf 0 && cp -r 0.orig 0
 postProcess -func writeCellCentres -time 0 > log.cellCentres 2>&1
 APP=$(foamDictionary -entry application -value system/controlDict)
