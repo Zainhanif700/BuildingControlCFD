@@ -171,7 +171,7 @@ functions
             }}
         }}
     }}
-    yPlus {{ type yPlus; libs (fieldFunctionObjects); writeControl writeTime; }}
+    yPlus {{ type yPlus; libs (fieldFunctionObjects); executeControl writeTime; writeControl writeTime; }}
 }}
 """
     wr("system/controlDict", cd)

@@ -9,8 +9,8 @@ import time
 import numpy as np
 import torch
 
+from common import N_REF  # first: adds experiments/pinn to the path
 import check_co2_with_model_flow as L2
-from common import N_REF
 from extract_rans import DT_OUT
 from fv_cons import ConsFV
 from fv_turb import seat_source
