@@ -67,7 +67,7 @@ def main():
     const = torch.ones(10, 6)
     good = (mean.shape == tg.shape == lv.shape == (3, 128, 6) and torch.isfinite(L) and F.l2_rel(tg, tg) == 0
             and F.l2_rel(const, const) == 0 and hh.shape == (3, min(F.N_HIST_TOKENS, d.xyz.shape[0]), 12))
-    print(f"3 model: mean {tuple(mean.shape)}, NLL {float(L):.3f}, oracle l2 0  -> {'OK' if good else 'FAIL'}")
+    print(f"3 model: mean {tuple(mean.shape)}, NLL {L.item():.3f}, oracle l2 0  -> {'OK' if good else 'FAIL'}")
     ok &= good
 
     paths = []
