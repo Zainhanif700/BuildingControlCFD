@@ -29,6 +29,7 @@ BuildingControlCFD/
 ├── learning/  simulation/  control/  local/  scripts/   original code of the paper
 ├── images/                   figures of the original README
 ├── sweep_results/            results of an early parameter sweep
+├── Dockerfile                OpenFOAM v2412 + Python, for running the simulations in a container
 └── requirements.txt
 ```
 
@@ -39,8 +40,12 @@ trained forecast model:
 |---|---|
 | `common.py` | all physical settings in one place (air, turbulence, CO₂ per person, seating area) |
 | `scenarios.py`, `scenarios.txt` | the 40 window settings and the fixed train/test split |
-| `make_rans_case.py`, `run_rans_case.sh` | write and run one OpenFOAM case (k-ω SST) |
+| `scenarios_v2.py`, `scenarios_v2.txt` | the 28 settings of the current setup (windows W1, W3, W6; door 1 open, door 2 closed) |
+| `make_rans_case.py`, `run_rans_case.sh` | write and run one OpenFOAM case (k-ω SST), on one or several cores |
 | `run_one_rans.sh`, `run_dataset_rans.sh` | one window setting end to end / all settings in parallel |
+| `run_batch.sh`, `slurm_batch.sh`, `README_batch.md` | all settings of a scenario file on a server, a SLURM cluster or in Docker |
+| `setup_env.sh`, `foam_env.sh` | install the Python packages / find OpenFOAM (installed, `FOAM_BASHRC`, Docker or conda) |
+| `extract_cases.sh`, `resume_rans.sh` | make the dataset files of finished cases / continue a stopped OpenFOAM run |
 | `extract_rans.py` | turns an OpenFOAM case into a dataset file and computes the 30-min CO₂ on the GPU |
 | `fv_torch.py`, `fv_turb.py`, `fv_cons.py` | my finite-volume CO₂ solver (the dataset uses `fv_cons.py`) |
 | `make_transitions.py` | paper-like runs that start from the CO₂ of another window setting |
@@ -106,6 +111,23 @@ enough for this room.
 speed), the 30-minute CO₂ 0.5–2.5 hours on the GPU, the transition data about 22 hours for all
 cases, and the training of the 5 networks about 1.5 hours.
 
+## Current setup
+
+Later we changed the setup to match the classroom as it will be used with the sensors: only windows
+W1, W3 and W6 can open (each closed or 0.2–2.0 m/s), door 1 is open and door 2 is closed. A mesh study
+with 15, 10 and 8 cm cells showed that the 10 cm mesh is not accurate enough for the faster flows
+(about 30 % less CO₂ in the room than on the 8 cm mesh), so these simulations use an 8 cm mesh
+(856,284 cells). I simulated 28 window settings (20 for training, 8 for testing) with the same method
+as above.
+
+| Training settings | 5 | 10 | 15 | 20 |
+|---|---|---|---|---|
+| Test error, model (5 networks) | 0.76 % | 0.71 % | 0.62 % | 0.61 % |
+
+"CO₂ stays the same" has a test error of 2.74 %, so with 20 training settings the model is about
+4–5 times better, and 15 settings already give almost the same result. How long the simulations take
+and how to run them on a server is described in `experiments/gnot_openfoam_rans/README_batch.md`.
+
 ## Approach 2: training without data (PINN)
 
 Here the network never sees simulation data. It learns only from the equations for airflow and CO₂
@@ -122,8 +144,9 @@ accurate enough, so the thesis focuses on approach 1.
 The Python packages are in `requirements.txt` (`pip install -r requirements.txt`, any environment such
 as a venv). The scripts use the `python3` of the active environment; another one can be given with
 `CFD_PY=/path/to/python`. OpenFOAM v2412 is installed separately: source its `etc/bashrc` before running the
-simulation scripts, or set `FOAM_BASHRC` to it (details in `experiments/gnot_openfoam_rans/README_batch.md`).
-All commands are run from `experiments/gnot_openfoam_rans/`.
+simulation scripts, or set `FOAM_BASHRC` to it. All commands are run from `experiments/gnot_openfoam_rans/`.
+To run the simulations on a server, a SLURM cluster or in Docker, see
+`experiments/gnot_openfoam_rans/README_batch.md`.
 
 ```bash
 cd experiments/gnot_openfoam_rans
@@ -164,7 +187,6 @@ example with the real seating plan) without new OpenFOAM runs: `python3 recomput
 - Test the forecast on real sensor data.
 - Use the model to choose window openings that keep the CO₂ low with as little ventilation as
   possible, as in the paper.
-- Set the pipeline up for the university's batch system.
 
 ## Original paper code
 
