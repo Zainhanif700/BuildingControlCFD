@@ -16,7 +16,7 @@ def minmod(a, b):
 
 
 class ConsFV(TurbFV):
-    def __init__(self, g, S_grid, V, device="cuda", dtype=torch.float32, doors_open=True, **kw):
+    def __init__(self, g, S_grid, V, device="cuda", dtype=torch.float32, doors_open=True, doors=None, **kw):
         super().__init__(g, S_grid, device, dtype, **kw)
         self.V = [float(v) for v in V]
         nx, ny, nz = g.n
@@ -34,8 +34,11 @@ class ConsFV(TurbFV):
         xc, zc = g.c1d[0], g.c1d[2]
         e = 0.25 * min(g.h)
         door = np.zeros((nx, nz), bool)
-        if doors_open:
-            for (a, b, c, d) in DOORS:
+        doors = [doors_open] * len(DOORS) if doors is None else [bool(x) for x in doors]
+        assert len(doors) == len(DOORS), f"doors needs {len(DOORS)} flags, got {doors}"
+        assert any(doors) or not any(v > 0 for v in self.V), "open windows need at least one open door"
+        for (a, b, c, d), op in zip(DOORS, doors):
+            if op:
                 door |= ((xc >= a) & (xc <= b))[:, None] & ((zc >= c - e) & (zc <= d))[None, :]
         self.door = T(door) & fl[:, 0, :]
         win_speed = np.zeros((nx, nz))

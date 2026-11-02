@@ -1,14 +1,14 @@
 #!/usr/bin/env bash
-# Mesh and run one OpenFOAM case (conda env "foam" active), on one core.
+# Mesh and run one OpenFOAM case, on one core or with FOAM_NP=n on n cores (OpenFOAM is found by foam_env.sh).
 # Usage: bash run_rans_case.sh cases/<name>_dx0.1
 set -eu
 CASE="${1:?usage: bash run_rans_case.sh <case dir>}"
+source "$(cd "$(dirname "$0")" && pwd)/foam_env.sh"
 cd "$CASE"
-command -v pimpleFoam > /dev/null || { echo "OpenFOAM not found -- run: conda activate foam"; exit 1; }
 say() { echo "[$(date '+%T')] $*"; }
 trap 'echo "FAILED at: $BASH_COMMAND -- see the newest log.* file in $CASE"; ls -t log.* 2>/dev/null | head -1' ERR
 rm -rf 0 processor* constant/polyMesh
-find . -maxdepth 1 -regextype posix-extended -regex './[0-9.]+(e[-+]?[0-9]+)?' ! -name '0.orig' -exec rm -rf {} +
+for d in [0-9]*; do [[ "$d" =~ ^[0-9.]+(e[-+]?[0-9]+)?$ ]] && rm -rf "$d"; done      # old time folders
 say "mesh: blockMesh";                 blockMesh > log.blockMesh 2>&1
 say "mesh: remove the columns";        cp system/topoSetDict.fluid system/topoSetDict
                                        topoSet > log.topoSet.fluid 2>&1
@@ -21,11 +21,29 @@ say "mesh: seating zone";              cp system/topoSetDict.seats system/topoSe
 checkMesh > log.checkMesh 2>&1 || true
 grep -E "cells:|Mesh OK|Failed|\*\*\*" log.checkMesh | head -8
 grep -E "seats.*size|cellZone" log.topoSet.seats | tail -2 || true
+if [ "${RENUMBER:-0}" = 1 ]; then
+    say "mesh: renumberMesh";          renumberMesh -overwrite > log.renumberMesh 2>&1
+fi
 rm -rf 0 && cp -r 0.orig 0
 postProcess -func writeCellCentres -time 0 > log.cellCentres 2>&1
 APP=$(foamDictionary -entry application -value system/controlDict)
-say "run: $APP (k-omega SST) on 1 core (log.$APP)"
-$APP > log.$APP 2>&1
+NP="${FOAM_NP:-1}"
+if [ "$NP" -gt 1 ]; then
+    cat > system/decomposeParDict <<EOF
+FoamFile { version 2.0; format ascii; class dictionary; object decomposeParDict; }
+numberOfSubdomains $NP;
+method scotch;
+EOF
+    say "run: $APP (k-omega SST) on $NP cores (log.$APP)"
+    decomposePar -force > log.decomposePar 2>&1
+    mpirun -np "$NP" $APP -parallel > log.$APP 2>&1
+    say "reconstructPar"
+    reconstructPar > log.reconstructPar 2>&1
+    rm -rf processor*
+else
+    say "run: $APP (k-omega SST) on 1 core (log.$APP)"
+    $APP > log.$APP 2>&1
+fi
 if [ "$APP" = pimpleFoam ]; then         # transient: keep p/phi only at the comparison times
     for d in [0-9]*; do
         case "$d" in 0|0.orig|30|60|120|180) ;; *) rm -f "$d"/p "$d"/p.gz "$d"/phi "$d"/phi.gz ;; esac

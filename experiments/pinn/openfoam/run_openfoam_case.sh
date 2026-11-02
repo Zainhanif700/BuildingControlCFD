@@ -1,18 +1,18 @@
 #!/usr/bin/env bash
-# Mesh and run one laminar OpenFOAM reference case (conda env "foam" active).
+# Mesh and run one laminar OpenFOAM reference case (OpenFOAM is found by foam_env.sh).
 # Usage: bash run_openfoam_case.sh cases/W1_1ms_dx0.1 [n_procs] [--mesh-only]
 set -eu
 CASE="${1:?usage: bash run_openfoam_case.sh <case dir> [n_procs] [--mesh-only]}"
 NP="${2:-4}"
+source "$(cd "$(dirname "$0")" && pwd)/../../gnot_openfoam_rans/foam_env.sh"
 cd "$CASE"
-command -v pimpleFoam > /dev/null || { echo "OpenFOAM not found -- run: conda activate foam"; exit 1; }
 say() { echo "[$(date '+%T')] $*"; }
 trap 'echo "FAILED at: $BASH_COMMAND -- see the newest log.* file in $CASE"; ls -t log.* 2>/dev/null | head -1' ERR
 
 # clean leftovers of an earlier run: an existing 0/ (fields with window/door patches that do not
 # exist yet on the fresh blockMesh mesh) makes subsetMesh fail; also old sets, time dirs, processors
 rm -rf 0 processor* constant/polyMesh
-find . -maxdepth 1 -regextype posix-extended -regex './[0-9.]+(e[-+]?[0-9]+)?' ! -name '0.orig' -exec rm -rf {} +
+for d in [0-9]*; do [[ "$d" =~ ^[0-9.]+(e[-+]?[0-9]+)?$ ]] && rm -rf "$d"; done      # old time folders
 
 say "mesh: blockMesh";                 blockMesh > log.blockMesh 2>&1
 say "mesh: remove the columns";        cp system/topoSetDict.fluid system/topoSetDict

@@ -119,10 +119,11 @@ accurate enough, so the thesis focuses on approach 1.
 
 ## How to run approach 1
 
-I use two conda environments: `cfd` (Python with PyTorch and a GPU, see `requirements.txt`) and
-`foam` (OpenFOAM v2412 from conda-forge). The scripts call
-`~/anaconda3/envs/cfd/bin/python`; for another location set `CFD_PY` or edit the path at the top of
-the shell scripts. All commands are run from `experiments/gnot_openfoam_rans/`.
+The Python packages are in `requirements.txt` (`pip install -r requirements.txt`, any environment such
+as a venv). The scripts use the `python3` of the active environment; another one can be given with
+`CFD_PY=/path/to/python`. OpenFOAM v2412 is installed separately: source its `etc/bashrc` before running the
+simulation scripts, or set `FOAM_BASHRC` to it (details in `experiments/gnot_openfoam_rans/README_batch.md`).
+All commands are run from `experiments/gnot_openfoam_rans/`.
 
 ```bash
 cd experiments/gnot_openfoam_rans

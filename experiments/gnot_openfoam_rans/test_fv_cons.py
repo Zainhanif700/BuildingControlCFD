@@ -1,5 +1,5 @@
 """
-Tests of the mass-conserving CO2 solver: no flow, divergence, closed room, mass conservation, no negative CO2.
+Tests of the mass-conserving CO2 solver: no flow, divergence, closed room, mass conservation, no negative CO2, door 2 closed.
 Usage: python3 test_fv_cons.py
 """
 import sys
@@ -76,6 +76,35 @@ def main():
     out, _, _ = ConsFV(g, S, V, dev, dt).solve([0.0, 10.0], [[z, z, z, nut], [u, v, w, nut]], [120.0])
     c = out[120.0][g.fluid]
     check("5 no negative CO2 (limiter)", c.min() >= -1e-6 * c.max(), f"(min {c.min():.2e}, max {c.max():.1f})")
+
+    # 6. new setup: only W1, W3, W6 open, door 1 open, door 2 closed
+    V6 = [1.0, 0, 0.5, 0, 0, 1.5, 0, 0]
+    g6 = L2.Grid(0.25, V6)
+    S6 = seat_source(g6, 20.0)
+    z6 = np.zeros(g6.X.shape)
+    u, v, w = swirl(g6)
+    both = ConsFV(g6, S6, V6, dev, dt)
+    same = ConsFV(g6, S6, V6, dev, dt, doors=(1, 1))
+    Fa, _, _ = both.project(u, v, w, 100.0)
+    Fb, _, _ = same.project(u, v, w, 100.0)
+    check("6 doors=(1, 1) is the same as the default", all(torch.allclose(a, b, rtol=1e-12, atol=1e-15) for a, b in zip(Fa, Fb)))
+    cf6 = ConsFV(g6, S6, V6, dev, dt, doors=(1, 0))
+    check("6 door mask with door 2 closed is a strict part of the default mask",
+          bool((cf6.door <= both.door).all()) and int(cf6.door.sum()) < int(both.door.sum()) and int(cf6.door.sum()) > 0)
+    F, rd, it = cf6.project(u, v, w, 100.0)
+    xc = g6.c1d[0]
+    d2 = torch.tensor((xc >= 12.32) & (xc <= 13.38), device=F[1].device)
+    out2 = float(F[1][:, 0, :][d2].abs().sum())
+    inflow = float(cf6.win_speed.sum() * g6.h[0] * g6.h[2])
+    door = float(-F[1][:, 0, :].sum() * g6.h[0] * g6.h[2])
+    check("6 door 2 closed: no flow through door 2", out2 == 0.0, f"(|flux| {out2:.1e})")
+    check("6 door 1 carries all the inflow", abs(door - inflow) / inflow < 1e-6 and rd < 1e-7,
+          f"(in {inflow:.4f}, out {door:.4f} m^3/s, divergence {rd:.1e})")
+    nut6 = 0.01 * g6.fluid
+    out, _, _ = cf6.solve([0.0, 10.0], [[z6, z6, z6, nut6], [u, v, w, nut6]], [120.0])
+    c = out[120.0][g6.fluid]
+    check("6 door 2 closed: CO2 finite and not negative", np.isfinite(c).all() and c.min() >= -1e-6 * c.max(),
+          f"(min {c.min():.2e}, max {c.max():.1f})")
 
     print("\nALL PASSED" if not FAILED else f"\nFAILED: {FAILED}")
     sys.exit(1 if FAILED else 0)
