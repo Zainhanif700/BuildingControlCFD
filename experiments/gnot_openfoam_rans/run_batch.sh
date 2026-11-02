@@ -20,4 +20,4 @@ grep -v '^#' "$SCEN" | awk -v only="$*" -v dx="$DX" '
     BEGIN { n = split(only, a, " "); for (i = 1; i <= n; i++) w[a[i]] = 1 }
     NF && (n == 0 || ($1 in w)) { print $1, $3, ($4 ~ /^[01],[01]$/ ? $4 : "1,1"), dx }' \
     | xargs -P "$NPAR" -n 4 bash "$HERE/run_one_rans.sh"
-echo "[$(date '+%F %T')] finished cases: $(ls -d cases/*_dx${DX}/done 2>/dev/null | wc -l)"
+echo "[$(date '+%F %T')] finished cases: $(ls -d cases/*_dx${DX}/done 2>/dev/null | grep -vc '_test_')"
