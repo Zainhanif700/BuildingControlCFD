@@ -39,7 +39,8 @@ def load_transition(path, z=1.6):
     zs = np.unique(d["P"][:, 2])
     pl = np.abs(d["P"][:, 2] - zs[np.argmin(np.abs(zs - (1.6 if z is None else z)))]) < 1e-5
     P = d["P"][pl]
-    assert np.allclose(d["t_c"], np.arange(0.0, d["t_c"][-1] + 1e-6, DT)), f"{path}: not every {DT:g} s"
+    t = d["t_c"].astype(float)
+    assert np.allclose(t, np.arange(0.0, t[-1] + 1e-6, DT)), f"{path}: not every {DT:g} s"
     return {"xy": P[:, :2].astype(np.float32), "z": float(P[0, 2]), "frames": d["S"][:, pl].astype(np.float32),
             "H": d["H"][:, pl].astype(np.float32), "V": d["V"].astype(np.float32), "N_ref": float(d["N_ref"]),
             "name": str(path).split("/")[-1], "from": str(d["from_case"])}
