@@ -1,16 +1,13 @@
---extra-index-url https://download.pytorch.org/whl/cu118
-torch==2.3.0+cu118
+# Python packages for the CO2 forecast (experiments/gnot_openfoam_rans) and the earlier experiments (experiments/pinn).
+# Works with Python 3.10 to 3.13 on Linux, Windows and macOS (also Apple Silicon).
+#
+#   pip install -r requirements.txt
+#
+# Linux PC with an NVIDIA GPU: install the CUDA version of PyTorch first, then the line above, e.g.
+#   pip install torch --index-url https://download.pytorch.org/whl/cu121
+numpy>=1.26
+torch>=2.3
+matplotlib>=3.8
 
--f https://data.dgl.ai/wheels/torch-2.3/cu118/repo.html
-dgl==2.2.1+cu118
-
-numpy==1.26.4
-scipy==1.12.0
-scikit-learn==1.7.2
-einops==0.8.2
-tqdm==4.70.0
-matplotlib==3.10.9
-networkx==3.4.2
-wandb==0.29.0
-tensorboard==2.21.0
-pandas==2.3.3
+# only for the geometry scripts in experiments/pinn/geometry (reading the STL model of the room):
+# trimesh numpy-stl pyvista
