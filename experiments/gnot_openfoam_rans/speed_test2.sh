@@ -13,7 +13,7 @@ NAME="${1:-N12}"; TEND="${2:-10}"
 VARIANTS="${*:-base renum noco2 dicgs}"
 case " $VARIANTS " in *" base "*) ;; *) VARIANTS="base $VARIANTS" ;; esac
 HERE="$(cd "$(dirname "$0")" && pwd)"
-PY="${CFD_PY:-$HOME/anaconda3/envs/cfd/bin/python}"
+PY="${CFD_PY:-python3}"
 cd "$HERE"
 read -r V DOORS < <(awk -v n="$NAME" '$1 == n { print $3, $4 }' scenarios_v2.txt) || true
 [ -n "${V:-}" ] || { echo "$NAME not in scenarios_v2.txt"; exit 1; }
@@ -21,10 +21,10 @@ OUT="$HERE/speedtest2/${NAME}_$(echo $VARIANTS | tr ' ' '-')"
 rm -rf "$OUT" && mkdir -p "$OUT"
 "$PY" make_rans_case.py --V "$V" --doors "$DOORS" --dx 0.08 --name "$NAME" --t-end "$TEND" --write-interval "$TEND" --out "$OUT/new" > "$OUT/make_case.log"
 NEW="$OUT/new/${NAME}_dx0.08"
-source "$HOME/anaconda3/etc/profile.d/conda.sh" && conda activate foam
+source "$HERE/foam_env.sh"
 
 change() {   # change <case> <file> <sed expression> <text that must be there afterwards>
-    sed -i "$3" "$1/system/$2"
+    sed -i.bak "$3" "$1/system/$2" && rm -f "$1/system/$2.bak"
     grep -q "$4" "$1/system/$2" || { echo "could not change $1/system/$2"; exit 1; }
 }
 for run in $VARIANTS; do

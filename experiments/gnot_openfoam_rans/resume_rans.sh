@@ -13,7 +13,7 @@ mkdir -p "$HERE/logs/cases"
 # every step must succeed (set -e does not work inside 'if ( ... )', so each step ends with '|| exit 1')
 if (
     cd "$CASE" || exit 1
-    source "$HOME/anaconda3/etc/profile.d/conda.sh" && conda activate foam || exit 1
+    source "$HERE/foam_env.sh"
     if [ -d processor0 ]; then           # stopped during a run on several cores
         reconstructPar -newTimes > log.reconstructPar 2>&1 || exit 1
         rm -rf processor*

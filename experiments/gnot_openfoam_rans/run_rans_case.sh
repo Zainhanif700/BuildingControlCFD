@@ -1,14 +1,14 @@
 #!/usr/bin/env bash
-# Mesh and run one OpenFOAM case (conda env "foam" active), on one core or with FOAM_NP=n on n cores.
+# Mesh and run one OpenFOAM case, on one core or with FOAM_NP=n on n cores (OpenFOAM is found by foam_env.sh).
 # Usage: bash run_rans_case.sh cases/<name>_dx0.1
 set -eu
 CASE="${1:?usage: bash run_rans_case.sh <case dir>}"
+source "$(cd "$(dirname "$0")" && pwd)/foam_env.sh"
 cd "$CASE"
-command -v pimpleFoam > /dev/null || { echo "OpenFOAM not found -- run: conda activate foam"; exit 1; }
 say() { echo "[$(date '+%T')] $*"; }
 trap 'echo "FAILED at: $BASH_COMMAND -- see the newest log.* file in $CASE"; ls -t log.* 2>/dev/null | head -1' ERR
 rm -rf 0 processor* constant/polyMesh
-find . -maxdepth 1 -regextype posix-extended -regex './[0-9.]+(e[-+]?[0-9]+)?' ! -name '0.orig' -exec rm -rf {} +
+for d in [0-9]*; do [[ "$d" =~ ^[0-9.]+(e[-+]?[0-9]+)?$ ]] && rm -rf "$d"; done      # old time folders
 say "mesh: blockMesh";                 blockMesh > log.blockMesh 2>&1
 say "mesh: remove the columns";        cp system/topoSetDict.fluid system/topoSetDict
                                        topoSet > log.topoSet.fluid 2>&1

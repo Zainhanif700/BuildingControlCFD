@@ -5,7 +5,7 @@
 set -euo pipefail
 NAME="${1:-N12}"; CO="${2:-2}"; NP="${3:-4}"
 HERE="$(cd "$(dirname "$0")" && pwd)"
-PY="${CFD_PY:-$HOME/anaconda3/envs/cfd/bin/python}"
+PY="${CFD_PY:-python3}"
 cd "$HERE"
 [ -f "data_v2/$NAME.npz" ] || { echo "data_v2/$NAME.npz missing"; exit 1; }
 read -r V DOORS < <(awk -v n="$NAME" '$1 == n { print $3, $4 }' scenarios_v2.txt) || true
@@ -17,9 +17,9 @@ echo "[$(date '+%F %T')] $TAG: $NAME with maxCo $CO on $NP cores"
 if [ ! -f "$CASE/done" ]; then
     rm -rf "$CASE"
     "$PY" make_rans_case.py --V "$V" --doors "$DOORS" --dx 0.08 --name "$TAG" --t-end 600 --write-interval 10 > /dev/null
-    sed -i "s/^maxCo .*/maxCo           $CO;/" "$CASE/system/controlDict"
+    sed -i.bak "s/^maxCo .*/maxCo           $CO;/" "$CASE/system/controlDict" && rm -f "$CASE/system/controlDict.bak"
     grep -q "^maxCo           $CO;" "$CASE/system/controlDict" || { echo "could not set maxCo"; exit 1; }
-    ( source "$HOME/anaconda3/etc/profile.d/conda.sh" && conda activate foam && FOAM_NP="$NP" bash run_rans_case.sh "$CASE" ) > "$CASE.log" 2>&1
+    FOAM_NP="$NP" bash run_rans_case.sh "$CASE" > "$CASE.log" 2>&1
     grep -q "^End" "$CASE/log.pimpleFoam" || { echo "OpenFOAM did not reach the end -- see $CASE.log"; exit 1; }
     touch "$CASE/done"
     echo "[$(date '+%F %T')] OpenFOAM done ($(grep '^ExecutionTime' "$CASE/log.pimpleFoam" | tail -1 | awk '{print $7}') s)"

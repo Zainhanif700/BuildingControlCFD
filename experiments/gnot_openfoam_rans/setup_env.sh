@@ -1,21 +1,10 @@
 #!/usr/bin/env bash
-# One-time setup on a new machine (no root needed): Miniforge in ~/anaconda3 with the envs foam (OpenFOAM v2412)
-# and cfd (Python, PyTorch on CPU). Parts that already exist are skipped.
-# Usage: bash setup_env.sh
+# One-time setup of the Python packages with pip, inside the environment you want to use, e.g.
+#   python3 -m venv ~/venv-cfd && source ~/venv-cfd/bin/activate && bash setup_env.sh
+# OpenFOAM v2412 is not a Python package: install it separately and source its etc/bashrc
+# (or set FOAM_BASHRC=/path/to/OpenFOAM/etc/bashrc). It is only needed for the simulations.
 set -eu
-if [ ! -d "$HOME/anaconda3" ]; then
-    wget -q https://github.com/conda-forge/miniforge/releases/latest/download/Miniforge3-Linux-x86_64.sh -O /tmp/miniforge.sh
-    bash /tmp/miniforge.sh -b -p "$HOME/anaconda3"
-    rm /tmp/miniforge.sh
-fi
-source "$HOME/anaconda3/etc/profile.d/conda.sh"
-PY="$HOME/anaconda3/envs/cfd/bin/python"
-conda env list | grep -q "^foam " || conda create -y -n foam -c conda-forge openfoam=2412
-conda env list | grep -q "^cfd "  || conda create -y -n cfd -c conda-forge python=3.11 numpy scipy matplotlib
-"$PY" -c "import torch" 2> /dev/null || "$PY" -m pip install torch --index-url https://download.pytorch.org/whl/cpu
-"$PY" -c "import numpy, torch; print('python OK')"
-# the conda package looks for the MPI library in lib/sys-mpich but installs it as lib/mpich-<version>
-LIB="$HOME/anaconda3/envs/foam/lib"
-[ -e "$LIB/sys-mpich" ] || ln -s "$(basename "$(ls -d "$LIB"/mpich-* | head -1)")" "$LIB/sys-mpich"
-( conda activate foam && command -v pimpleFoam > /dev/null && echo "OpenFOAM OK" )
-ldd "$HOME/anaconda3/envs/foam/bin/pimpleFoam" | grep -q "sys-mpich/libPstream" && echo "MPI OK"
+HERE="$(cd "$(dirname "$0")" && pwd)"
+python3 -m pip install -r "$HERE/../../requirements.txt"
+python3 -c "import numpy, torch, matplotlib; print('python OK: numpy', numpy.__version__, '| torch', torch.__version__)"
+( source "$HERE/foam_env.sh" && echo "OpenFOAM OK" ) || echo "OpenFOAM not found yet (only needed for the simulations)"

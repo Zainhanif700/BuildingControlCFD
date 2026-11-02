@@ -6,7 +6,7 @@
 set -eu
 NAME="${1:-N12}"; TEND="${2:-10}"; NP="${3:-4}"
 HERE="$(cd "$(dirname "$0")" && pwd)"
-PY="${CFD_PY:-$HOME/anaconda3/envs/cfd/bin/python}"
+PY="${CFD_PY:-python3}"
 cd "$HERE"
 read -r V DOORS < <(awk -v n="$NAME" '$1 == n { print $3, $4 }' scenarios_v2.txt) || true
 [ -n "${V:-}" ] || { echo "$NAME not in scenarios_v2.txt"; exit 1; }
@@ -14,15 +14,15 @@ OUT="$HERE/speedtest/$NAME"
 rm -rf "$OUT/new" && mkdir -p "$OUT"
 "$PY" make_rans_case.py --V "$V" --doors "$DOORS" --dx 0.08 --name "$NAME" --t-end "$TEND" --write-interval "$TEND" --out "$OUT/new" > "$OUT/make_case.log"
 NEW="$OUT/new/${NAME}_dx0.08"
-source "$HOME/anaconda3/etc/profile.d/conda.sh" && conda activate foam
+source "$HERE/foam_env.sh"
 
 relax() {
-    sed -i -e 's/tolerance 1e-7; relTol 0.01;/tolerance 1e-6; relTol 0.05;/' \
-           -e 's/tolerance 1e-8; relTol 0;/tolerance 1e-6; relTol 0;/' "$1/system/fvSolution"
+    sed -i.bak -e 's/tolerance 1e-7; relTol 0.01;/tolerance 1e-6; relTol 0.05;/' \
+               -e 's/tolerance 1e-8; relTol 0;/tolerance 1e-6; relTol 0;/' "$1/system/fvSolution" && rm -f "$1/system/fvSolution.bak"
     [ "$(grep -c 'tolerance 1e-6' "$1/system/fvSolution")" = 2 ] || { echo "could not change $1/system/fvSolution"; exit 1; }
 }
 maxco2() {
-    sed -i 's/^maxCo .*/maxCo           2.0;/' "$1/system/controlDict"
+    sed -i.bak 's/^maxCo .*/maxCo           2.0;/' "$1/system/controlDict" && rm -f "$1/system/controlDict.bak"
     grep -q "^maxCo           2.0;" "$1/system/controlDict" || { echo "could not change $1/system/controlDict"; exit 1; }
 }
 

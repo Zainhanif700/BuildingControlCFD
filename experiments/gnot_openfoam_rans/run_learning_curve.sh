@@ -4,7 +4,7 @@
 #        bash run_learning_curve.sh scenarios_v2.txt data_transitions_v2 v2_tr 5 10 15
 set -e
 cd "$(dirname "$0")"
-PY="$HOME/anaconda3/envs/cfd/bin/python"
+PY="${CFD_PY:-python3}"
 SCEN="${1:-scenarios.txt}"; DATA="${2:-data_transitions}"; TAG="${3:-rans_tr}"
 shift $(( $# < 3 ? $# : 3 ))
 SIZES="${*:-5 10 20}"

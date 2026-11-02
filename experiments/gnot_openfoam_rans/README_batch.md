@@ -14,15 +14,24 @@ name, train/test, the inflow speed at windows W1-W8 in m/s (0 = closed) and, if 
 
 A new setup only needs a new scenario file in the same format.
 
-## Setup (once, about 15 min, no root rights needed)
+## Setup (once)
+
+Python packages, with pip in any environment (here a new venv):
 
 ```
-git clone -b new-setup https://github.com/Zainhanif700/BuildingControlCFD.git
+git clone https://github.com/Zainhanif700/BuildingControlCFD.git
 cd BuildingControlCFD/experiments/gnot_openfoam_rans
+python3 -m venv ~/venv-cfd && source ~/venv-cfd/bin/activate
 bash setup_env.sh
 ```
 
-It should end with `python OK` and `OpenFOAM OK`.
+OpenFOAM v2412 is not a Python package and is installed separately
+([precompiled versions](https://gitlab.com/openfoam/core/openfoam/-/wikis/precompiled)). Before running the
+scripts, source its `etc/bashrc`, or set `FOAM_BASHRC=/path/to/OpenFOAM/etc/bashrc` and the scripts do it.
+A conda environment named `foam` in `~/anaconda3` (as on our lab PC) is also found automatically.
+
+`setup_env.sh` should end with `python OK` and `OpenFOAM OK`. The scripts use the `python3` of the active
+environment; another Python can be given with `CFD_PY=/path/to/python`.
 
 ## Quick test (about 15 min)
 

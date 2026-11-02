@@ -12,8 +12,8 @@ sys.path.insert(0, os.path.dirname(HERE))
 try:
     from point_sampler import ROOM_X, ROOM_Y, ROOM_Z, WINDOWS, DOORS, COLUMNS, TAU_RAMP, T_MAX
 except ImportError as exc:
-    raise SystemExit(f"{exc}: run this generator in the training environment (conda activate cfd); "
-                     f"only the OpenFOAM run itself needs the 'foam' environment.")
+    raise SystemExit(f"{exc}: run this generator in the Python environment of requirements.txt; "
+                     f"only the OpenFOAM run itself needs OpenFOAM.")
 
 NU = 0.01
 HEADER = """/*--------------------------------*- C++ -*----------------------------------*\\

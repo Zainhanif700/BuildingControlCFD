@@ -10,7 +10,7 @@ DOORS="${3:-1,1}"
 DX="${4:-0.1}"
 [ "${T_END:-600}" = 600 ] || NAME="${NAME}_test"
 HERE="$(cd "$(dirname "$0")" && pwd)"
-PY="${CFD_PY:-$HOME/anaconda3/envs/cfd/bin/python}"
+PY="${CFD_PY:-python3}"
 DATA="$HERE/${DATA_SUBDIR:-data}"
 mkdir -p "$HERE/cases" "$HERE/logs/cases" "$DATA"
 [ -f "$HERE/cases/$NAME.skip" ] && { echo "$NAME: runs on another machine (cases/$NAME.skip) -- skipped"; exit 0; }
@@ -23,7 +23,7 @@ if (
     echo "[$(date '+%F %T')] $NAME: V = $V, doors = $DOORS, dx = $DX"
     cd "$HERE" || exit 1
     "$PY" make_rans_case.py --V "$V" --doors "$DOORS" --dx "$DX" --name "$NAME" --t-end "${T_END:-600}" --write-interval 10 || exit 1
-    ( source "$HOME/anaconda3/etc/profile.d/conda.sh" && conda activate foam && bash run_rans_case.sh "$CASE" ) || exit 1
+    bash run_rans_case.sh "$CASE" || exit 1
     grep -q "^End" "$CASE/log.pimpleFoam" || { echo "OpenFOAM did not reach the end -- see $CASE/log.pimpleFoam"; exit 1; }
     touch "$CASE/done" || exit 1
     if [ "${SKIP_EXTRACT:-0}" = 1 ]; then
