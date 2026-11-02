@@ -44,11 +44,27 @@ ls cases/N01_test_dx0.08/done && rm -rf cases/N01_test_dx0.08
 
 ## All settings
 
-Normal server, e.g. 32 cores = 8 settings at a time with 4 cores each:
+Normal server, e.g. 20 cores = 20 settings at a time on one core each (this gives the most output; several
+cores per setting only help when there are fewer settings than cores):
 
 ```
-nohup bash run_batch.sh scenarios_v2.txt 8 4 > batch.log 2>&1 &
+nohup bash run_batch.sh scenarios_v2.txt 20 1 > batch.log 2>&1 &
 ```
+
+Docker (e.g. DGX Spark): the image has OpenFOAM v2412 and the Python packages; the project folder is mounted,
+so all results stay on the host. Build once in the project's main folder, then run the quick test and the batch:
+
+```
+docker build -t classroom-cfd .
+docker run --rm --user "$(id -u):$(id -g)" --shm-size=2g -v "$PWD":/work -e T_END=20 classroom-cfd \
+    bash run_batch.sh scenarios_v2.txt 1 4 N01
+docker run -d --name cfd-batch --user "$(id -u):$(id -g)" --shm-size=4g -v "$PWD":/work classroom-cfd \
+    bash run_batch.sh scenarios_v2.txt 20 1
+docker logs -f cfd-batch
+```
+
+The container only runs OpenFOAM (CPU). The CO2 data and the training run afterwards outside the container,
+in a Python environment with the GPU version of PyTorch: `bash extract_cases.sh data_v2`.
 
 SLURM cluster, one job per setting (the resources are at the top of `slurm_batch.sh`):
 
@@ -62,8 +78,8 @@ Each setting has its log in `logs/cases/<name>.log`.
 
 ## Run time and disk
 
-On one core a setting takes 15-90 h, depending on the window speeds (faster air needs smaller time steps).
-More cores per setting make it faster. A finished case needs about 2-4 GB.
+On one core a setting took 15-90 h on our lab PC, depending on the window speeds (faster air needs smaller
+time steps). On 4 cores one setting ran 2.7 times faster. A finished case needs about 2-4 GB.
 
 ## Why not on the GPU
 

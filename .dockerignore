@@ -1,0 +1,3 @@
+# the image only needs requirements.txt; the project is mounted at run time
+*
+!requirements.txt

@@ -3,7 +3,8 @@
 #   2. FOAM_BASHRC=/path/to/OpenFOAM/etc/bashrc  -> sourced here
 #   3. a conda environment "foam" in ~/anaconda3 (our lab PC)
 if ! command -v pimpleFoam > /dev/null 2>&1; then
-    set +u
+    _foam_opts="$-"
+    set +eu                              # OpenFOAM's bashrc and conda are not written for 'set -eu'
     if [ -n "${FOAM_BASHRC:-}" ]; then
         source "$FOAM_BASHRC"
     elif [ -f "$HOME/anaconda3/etc/profile.d/conda.sh" ]; then
@@ -14,6 +15,7 @@ if ! command -v pimpleFoam > /dev/null 2>&1; then
             ln -s "$(basename "$(ls -d "$L"/mpich-* | head -1)")" "$L/sys-mpich"
         fi
     fi
-    set -u
+    case "$_foam_opts" in *e*) set -e ;; esac
+    case "$_foam_opts" in *u*) set -u ;; esac
 fi
 command -v pimpleFoam > /dev/null 2>&1 || { echo "OpenFOAM not found: source its etc/bashrc first or set FOAM_BASHRC"; exit 1; }
