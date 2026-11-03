@@ -1,0 +1,7 @@
+# keep Linux line endings for scripts and text, also on Windows (the scripts run in Linux / Docker)
+*.sh        text eol=lf
+*.py        text eol=lf
+*.txt       text eol=lf
+*.md        text eol=lf
+Dockerfile  text eol=lf
+.dockerignore text eol=lf
