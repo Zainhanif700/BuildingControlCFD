@@ -19,3 +19,8 @@ if ! command -v pimpleFoam > /dev/null 2>&1; then
     case "$_foam_opts" in *u*) set -u ;; esac
 fi
 command -v pimpleFoam > /dev/null 2>&1 || { echo "OpenFOAM not found: source its etc/bashrc first or set FOAM_BASHRC"; exit 1; }
+# the cases are written for OpenFOAM from openfoam.com (versions like v2412); openfoam.org (versions like 12, 14) differs
+case "${WM_PROJECT_VERSION:-}" in
+    v*|"") ;;
+    *) echo "found OpenFOAM $WM_PROJECT_VERSION from openfoam.org -- this project needs OpenFOAM v2412 from openfoam.com"; exit 1 ;;
+esac

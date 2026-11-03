@@ -25,8 +25,10 @@ python3 -m venv ~/venv-cfd && source ~/venv-cfd/bin/activate
 bash setup_env.sh
 ```
 
-OpenFOAM v2412 is not a Python package and is installed separately
-([precompiled versions](https://gitlab.com/openfoam/core/openfoam/-/wikis/precompiled)). Before running the
+OpenFOAM v2412 from openfoam.com is not a Python package and is installed separately
+([precompiled versions](https://gitlab.com/openfoam/core/openfoam/-/wikis/precompiled); on a Mac with Homebrew:
+`brew install gerlero/openfoam/openfoam@2412`). The OpenFOAM Foundation's versions from openfoam.org (12, 13,
+14, ...) are a different program with other commands and do not work with these cases. Before running the
 scripts, source its `etc/bashrc`, or set `FOAM_BASHRC=/path/to/OpenFOAM/etc/bashrc` and the scripts do it.
 A conda environment named `foam` in `~/anaconda3` (as on our lab PC) is also found automatically.
 
