@@ -50,11 +50,14 @@ class FlowBank:
 
 
 def run(fv, bank, flow_at, out_times, sct, log=None):
-    """CO2 with SSP-RK3; flow_at(t) -> (key0, key1, weight). Returns {t: CO2 grid} at out_times."""
+    """CO2 with SSP-RK3; flow_at(t) -> (key0, key1, weight). Returns {t: CO2 grid} at out_times.
+    sct: turbulent Schmidt number, or a function key -> Schmidt number (e.g. other value for the mean flow)."""
     import torch
     dev = fv.dev
     d_mol = fv.d_mol
-    dt = min(0.5 / bank.umax, 0.25 / ((d_mol + bank.nutmax / sct) * sum(1.0 / h ** 2 for h in fv.h)), 0.5)
+    sct_of = sct if callable(sct) else (lambda k: sct)
+    sct_min = min(sct_of(k) for k in bank.nut)
+    dt = min(0.5 / bank.umax, 0.25 / ((d_mol + bank.nutmax / sct_min) * sum(1.0 / h ** 2 for h in fv.h)), 0.5)
     gpu = {}
 
     def entry(k):
@@ -62,7 +65,7 @@ def run(fv, bank, flow_at, out_times, sct, log=None):
             if len(gpu) > 4:
                 gpu.pop(next(iter(gpu)))
             nut = torch.tensor(bank.nut[k], device=dev)
-            gpu[k] = [f.to(dev) for f in bank.F[k]] + [(d_mol + nut / sct).float()]
+            gpu[k] = [f.to(dev) for f in bank.F[k]] + [(d_mol + nut / sct_of(k)).float()]
         return gpu[k]
 
     def fields(t):

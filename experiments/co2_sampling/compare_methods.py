@@ -20,6 +20,7 @@ def main():
     ap.add_argument("--case", required=True)
     ap.add_argument("--t-split", type=float, default=300.0, help="loop test: real flow up to here, then loop")
     ap.add_argument("--device", default="cuda")
+    ap.add_argument("--only", default=None, help="run only these methods (indices in the list, e.g. 1,2)")
     args = ap.parse_args()
     import torch
     from fv_cons import ConsFV
@@ -60,18 +61,23 @@ def main():
     t1 = [t for t in times if t <= 150.0]
     split = [t for t in times if t <= args.t_split]
 
+    hybrid = lambda k: 0.3 if isinstance(k, str) else 0.7
     methods = [
         ("dataset now: 10-s saves to 150 s, then mean, Sc 0.3", S.map_b2(t10, "mean10"), 0.3, check),
+        ("10-s saves to 150 s Sc 0.7, then mean Sc 0.3", S.map_b2(t10, "mean10"), hybrid, check),
+        ("1-s saves to 150 s Sc 0.7, then mean Sc 0.3", S.map_b2(t1, "mean"), hybrid, check),
         ("1-s saves to 150 s, then mean, Sc 0.3", S.map_b2(t1, "mean"), 0.3, check),
         ("1-s saves to 150 s, then mean, Sc 0.7", S.map_b2(t1, "mean"), 0.7, check),
         (f"1-s saves to {args.t_split:g} s, then loop 150-{args.t_split:g} s, Sc 0.7",
          S.map_loop(split, 150.0), 0.7, check),
         (f"1-s saves to {t_end:g} s (real flow, upper limit), Sc 0.7", S.interp_keys(times), 0.7, check),
     ]
+    if args.only:
+        methods = [methods[int(i)] for i in args.only.split(",")]
     kz = {zz: int(np.argmin(np.abs(g.c1d[2] - zz))) for zz in (1.1, 1.6)}
     rows = []
     for name, flow_at, sct, at in methods:
-        fv = fv07 if sct == common.SC_T else ConsFV(g, src, V, args.device, torch.float32, sc_t=sct, doors=doors)
+        fv = fv07
         t1_ = time.time()
         out = S.run(fv, bank, flow_at, at, sct)
         cells = []
