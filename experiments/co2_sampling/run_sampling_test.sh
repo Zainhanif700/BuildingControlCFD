@@ -12,16 +12,16 @@ read -r V DOORS < <(awk -v n="$NAME" '$1 == n { print $3, $4 }' "$RANS/scenarios
 [ -n "${V:-}" ] || { echo "$NAME not in scenarios_v2.txt"; exit 1; }
 CASES="${SAMPLING_CASES:-$HERE/cases}"
 CASE="$CASES/${NAME}ws1_dx0.08"
-echo "[$(date '+%F %T')] $NAME (V $V, doors $DOORS): OpenFOAM to 150 s, save every 1 s, $NP cores, python $PY"
+echo "[$(date '+%F %T')] $NAME (V $V, doors $DOORS): OpenFOAM to ${SAMPLING_T_END:-150} s, save every 1 s, $NP cores, python $PY"
 if [ ! -f "$CASE/done" ]; then
     rm -rf "$CASE"
     mkdir -p "$CASES"
     (cd "$RANS" && "$PY" make_rans_case.py --V "$V" --doors "$DOORS" --dx 0.08 --name "${NAME}ws1" \
-        --t-end 150 --write-interval 1 --out "$CASES" > /dev/null)
+        --t-end "${SAMPLING_T_END:-150}" --write-interval 1 --out "$CASES" > /dev/null)
     FOAM_NP="$NP" bash "$RANS/run_rans_case.sh" "$CASE" > "$CASE.log" 2>&1
     grep -q "^End" "$CASE/log.pimpleFoam" || { echo "OpenFOAM did not reach the end -- see $CASE.log"; exit 1; }
     touch "$CASE/done"
     echo "[$(date '+%F %T')] OpenFOAM done, case size $(du -sh "$CASE" | cut -f1)"
 fi
-"$PY" "$HERE/compare_sampling.py" --case "$CASE"
+[ "${SAMPLING_T_END:-150}" = 150 ] && "$PY" "$HERE/compare_sampling.py" --case "$CASE"
 echo "[$(date '+%F %T')] FINISHED"
