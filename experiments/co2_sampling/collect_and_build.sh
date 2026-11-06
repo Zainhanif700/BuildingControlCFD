@@ -14,7 +14,7 @@ V2="${V2_DIR:?set V2_DIR to the data_v2 folder}"
 OUT="${V3_OUT:?set V3_OUT to the data_v3 folder}"
 [ -f "$V2/N01.npz" ] || { echo "$V2/N01.npz not found"; exit 1; }
 REMOTE="BuildingControlCFD/experiments/co2_sampling/cases"
-NAMES=$(awk '!/^#/ && NF {print $1}' "$RANS/scenarios_v2.txt")
+NAMES="$(awk '!/^#/ && NF && $2 == "test" {print $1}' "$RANS/scenarios_v2.txt") $(awk '!/^#/ && NF && $2 != "test" {print $1}' "$RANS/scenarios_v2.txt")"
 N_ALL=$(echo $NAMES | wc -w)
 mkdir -p "$OUT"
 while true; do
