@@ -40,13 +40,16 @@ class FlowBank:
 
     def __init__(self, fv):
         self.fv, self.F, self.nut, self.umax, self.nutmax = fv, {}, {}, 0.0, 0.0
+        self.u_of, self.nut_of = {}, {}
 
     def add(self, key, t_flow, u, nut):
         F, _, _ = self.fv.project(u[..., 0], u[..., 1], u[..., 2], t_flow)
         self.F[key] = [f.float().cpu() for f in F]
         self.nut[key] = np.clip(nut, 0.0, None).astype(np.float32)
-        self.umax = max(self.umax, sum(float(f.abs().max()) / h for f, h in zip(F, self.fv.h)))
-        self.nutmax = max(self.nutmax, float(self.nut[key].max()))
+        self.u_of[key] = sum(float(f.abs().max()) / h for f, h in zip(F, self.fv.h))
+        self.nut_of[key] = float(self.nut[key].max())
+        self.umax = max(self.umax, self.u_of[key])
+        self.nutmax = max(self.nutmax, self.nut_of[key])
 
 
 def run(fv, bank, flow_at, out_times, sct, log=None):
@@ -56,9 +59,21 @@ def run(fv, bank, flow_at, out_times, sct, log=None):
     dev = fv.dev
     d_mol = fv.d_mol
     sct_of = sct if callable(sct) else (lambda k: sct)
-    sct_min = min(sct_of(k) for k in bank.nut)
-    dt = min(0.5 / bank.umax, 0.25 / ((d_mol + bank.nutmax / sct_min) * sum(1.0 / h ** 2 for h in fv.h)), 0.5)
+    inv_h2 = sum(1.0 / h ** 2 for h in fv.h)
+    dt_of = lambda keys: min(min(0.5 / max(bank.u_of[k], 1e-30) for k in keys),
+                             min(0.25 / ((d_mol + bank.nut_of[k] / sct_of(k)) * inv_h2) for k in keys), 0.5)
+    dt = dt_of(list(bank.nut))
     gpu = {}
+
+    def step_size(t):
+        """Larger steps while the flow is one frozen field (e.g. the mean flow) for the whole step."""
+        k0, k1, _ = flow_at(t)
+        if k1 is None and isinstance(k0, str):
+            d = dt_of([k0])
+            k0b, k1b, _ = flow_at(t + d)
+            if k1b is None and k0b == k0:
+                return d
+        return dt
 
     def entry(k):
         if k not in gpu:
@@ -80,7 +95,7 @@ def run(fv, bank, flow_at, out_times, sct, log=None):
     out, t, n, t0 = {}, 0.0, 0, time.time()
     for t_end in sorted(out_times):
         while t < t_end - 1e-9:
-            step = min(dt, t_end - t)
+            step = min(step_size(t), t_end - t)
             f0, f1, fh = fields(t), fields(t + step), fields(t + 0.5 * step)
             k1 = c + step * fv.rhs_c(c, *f0)
             k2 = 0.75 * c + 0.25 * (k1 + step * fv.rhs_c(k1, *f1))
