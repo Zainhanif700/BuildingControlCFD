@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # On iai-19: every few minutes, copy finished 1-s cases from the other machines (only U, nut, s, cell centres)
 # and build the data_v3 file of every finished case (local ones too). Stops when all 28 files exist.
-# Usage: SAMPLING_CASES=<local cases folder> CFD_PY=<python> bash collect_and_build.sh <hosts file> [interval s]
+# Usage: SAMPLING_CASES=<local cases folder> V2_DIR=<data_v2 folder> V3_OUT=<data_v3 folder> CFD_PY=<python> \
+#        bash collect_and_build.sh <hosts file> [interval s]
 # hosts file (private, never in git): one line per machine, e.g. root@<address>
 set -uo pipefail
 HOSTS="${1:?usage: bash collect_and_build.sh <hosts file> [interval s]}"; EVERY="${2:-600}"
@@ -9,7 +10,9 @@ HERE="$(cd "$(dirname "$0")" && pwd)"
 RANS="$(cd "$HERE/../gnot_openfoam_rans" && pwd)"
 PY="$(command -v "${CFD_PY:-python3}")"
 CASES="${SAMPLING_CASES:?set SAMPLING_CASES to the local cases folder}"
-OUT="${V3_OUT:-$RANS/data_v3}"
+V2="${V2_DIR:?set V2_DIR to the data_v2 folder}"
+OUT="${V3_OUT:?set V3_OUT to the data_v3 folder}"
+[ -f "$V2/N01.npz" ] || { echo "$V2/N01.npz not found"; exit 1; }
 REMOTE="BuildingControlCFD/experiments/co2_sampling/cases"
 NAMES=$(awk '!/^#/ && NF {print $1}' "$RANS/scenarios_v2.txt")
 N_ALL=$(echo $NAMES | wc -w)
@@ -34,7 +37,7 @@ while true; do
         c="$CASES/${n}ws1_dx0.08"
         { [ -f "$c/done" ] && [ ! -f "$OUT/$n.npz" ]; } || continue
         echo "[$(date '+%F %T')] build $n"
-        "$PY" "$HERE/build_v3.py" --name "$n" --case "$c" --v2 "$RANS/data_v2/$n.npz" --out "$OUT" \
+        "$PY" "$HERE/build_v3.py" --name "$n" --case "$c" --v2 "$V2/$n.npz" --out "$OUT" \
             || echo "[$(date '+%F %T')]   build of $n FAILED"
     done
     n_done=$(ls "$OUT"/N*.npz 2>/dev/null | wc -l)
