@@ -52,7 +52,7 @@ class FlowBank:
         self.nutmax = max(self.nutmax, self.nut_of[key])
 
 
-def run(fv, bank, flow_at, out_times, sct, log=None):
+def run(fv, bank, flow_at, out_times, sct, log=None, c0=None):
     """CO2 with SSP-RK3; flow_at(t) -> (key0, key1, weight). Returns {t: CO2 grid} at out_times.
     sct: turbulent Schmidt number, or a function key -> Schmidt number (e.g. other value for the mean flow)."""
     import torch
@@ -91,7 +91,8 @@ def run(fv, bank, flow_at, out_times, sct, log=None):
         e1 = entry(k1)
         return [(1 - a) * x + a * y for x, y in zip(e0, e1)]
 
-    c = torch.zeros(fv.g.X.shape, device=dev, dtype=torch.float32)
+    c = torch.zeros(fv.g.X.shape, device=dev, dtype=torch.float32) if c0 is None else \
+        torch.tensor(np.asarray(c0), device=dev, dtype=torch.float32) * fv.fluid_f
     out, t, n, t0 = {}, 0.0, 0, time.time()
     for t_end in sorted(out_times):
         while t < t_end - 1e-9:
