@@ -38,12 +38,20 @@ while true; do
     done < "$HOSTS"
     for n in $NAMES; do
         c="$CASES/${n}ws1_dx0.08"
-        { [ -f "$c/done" ] && [ ! -f "$TOUT/$n.npz" ]; } || continue
-        [ -f "$OUT/$n.npz" ] && ONLY=--only-transition || ONLY=
-        echo "[$(date '+%F %T')] build $n ${ONLY:+(transition only)}"
+        { [ -f "$c/done" ] && [ ! -f "$OUT/$n.npz" ]; } || continue
+        echo "[$(date '+%F %T')] build $n (dataset)"
         "$PY" "$HERE/build_v3.py" --name "$n" --case "$c" --v2-dir "$V2" --out "$OUT" --trans-v2-dir "$TV2" \
-            --trans-out "$TOUT" $ONLY || echo "[$(date '+%F %T')]   build of $n FAILED"
+            --trans-out "$TOUT" --no-transition || echo "[$(date '+%F %T')]   build of $n FAILED"
     done
+    if [ "$(ls "$OUT"/N*.npz 2>/dev/null | wc -l)" -ge "$N_ALL" ]; then
+        for n in $NAMES; do
+            c="$CASES/${n}ws1_dx0.08"
+            [ -f "$TOUT/$n.npz" ] && continue
+            echo "[$(date '+%F %T')] build $n (transition)"
+            "$PY" "$HERE/build_v3.py" --name "$n" --case "$c" --v2-dir "$V2" --out "$OUT" --trans-v2-dir "$TV2" \
+                --trans-out "$TOUT" --only-transition || echo "[$(date '+%F %T')]   transition of $n FAILED"
+        done
+    fi
     n_done=$(ls "$TOUT"/N*.npz 2>/dev/null | wc -l)
     echo "[$(date '+%F %T')] data_v3: $(ls "$OUT"/N*.npz 2>/dev/null | wc -l) of $N_ALL, transitions: $n_done of $N_ALL"
     [ "$n_done" -ge "$N_ALL" ] && break

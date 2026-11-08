@@ -5,10 +5,12 @@ as in OpenFOAM), then on the 150-600 s mean flow from the data_v2 file (Schmidt 
 After --splice s (default 20 min) the frames are taken from data_v2: from there on both use the same mean flow and
 differ by <= 0.15 % (measured on 8 settings), so computing them again changes nothing.
 Transition: the same flow, no people, starting from the 30-min CO2 of the partner setting (same random pairing as
-make_transitions.py; start field from data_v2, identical to v3 at 30 min within 0.1 %); after --splice from data_transitions_v2.
+make_transitions.py; start field from data_v2, identical to v3 at 30 min within 0.1 %), computed for the full 30 min:
+the CO2 only decays there, so the difference to v2 does not become small and splicing is not allowed.
 Same keys as before, so the training reads both files unchanged. Only reads the case and the v2 files.
 Usage: python3 build_v3.py --name N14 --case <1-s case> --v2-dir <data_v2> --out <data_v3>
-                           --trans-v2-dir <data_transitions_v2> --trans-out <data_transitions_v3> [--only-transition]
+                           --trans-v2-dir <data_transitions_v2> --trans-out <data_transitions_v3>
+                           [--no-transition | --only-transition]
 """
 import argparse
 import os
@@ -47,6 +49,7 @@ def main():
     ap.add_argument("--trans-out", required=True)
     ap.add_argument("--splice", type=float, default=1200.0, help="[s] take the frames after this from the v2 files")
     ap.add_argument("--only-transition", action="store_true", help="the data_v3 file exists: build only the transition")
+    ap.add_argument("--no-transition", action="store_true", help="build only the data_v3 file")
     ap.add_argument("--device", default="cuda")
     args = ap.parse_args()
     import torch
@@ -56,7 +59,7 @@ def main():
 
     out_path = os.path.join(args.out, args.name + ".npz")
     tr_path = os.path.join(args.trans_out, args.name + ".npz")
-    if os.path.exists(tr_path):
+    if os.path.exists(tr_path) and not args.no_transition:
         raise SystemExit(f"{tr_path} exists -- delete it first to rebuild")
     if os.path.exists(out_path) != args.only_transition:
         raise SystemExit(f"{out_path} {'missing' if args.only_transition else 'exists'} -- "
@@ -125,6 +128,9 @@ def main():
         msg = (f"{args.name}: V = {V}; at 150 s vs OpenFOAM CO2: {100 * chk['err_real_vs_OF_150']:.1f} % (total "
                f"{chk['mass_real_vs_OF_150']:.3f}), paper metric {100 * chk['abs_err_150_z1p1']:.1f}/{100 * chk['abs_err_150_z1p6']:.1f} %; "
                f"jump to v2 at {args.splice:g} s {100 * chk['jump_at_splice_vs_v2']:.2f} %; dataset {time.time() - t1:.0f} s")
+        if args.no_transition:
+            print(f"{msg}; read {t_read:.0f} s, total {time.time() - t0:.0f} s", flush=True)
+            return
 
     names = sorted(os.path.basename(f)[:-4] for f in os.listdir(args.v2_dir) if f.startswith("N") and f.endswith(".npz"))
     assert len(names) == 28, f"expected 28 data_v2 files, found {len(names)}"
@@ -136,19 +142,22 @@ def main():
     assert np.allclose(tv2["P"], P[m]) and np.allclose(tv2["t_c"], t_c), "data_transitions_v2 grid or times differ"
     t1 = time.time()
     fv0 = ConsFV(g, np.zeros(g.X.shape), V, args.device, torch.float32, sc_t=SCT_REAL, doors=doors)
-    H = S.run(fv0, bank, flow, calc_t, sct, c0=grid(c0))
-    Hp = np.concatenate([c0[m][None], np.stack([H[t][fl][m] for t in calc_t]), tv2["H"][k_spl:]]).astype(np.float32)
-    jump = float(np.linalg.norm(Hp[k_spl - 1] - tv2["H"][k_spl - 1]) / np.linalg.norm(tv2["H"][k_spl - 1]))
+    H = S.run(fv0, bank, flow, out_t, sct, c0=grid(c0))
+    Hp = np.concatenate([c0[m][None], np.stack([H[t][fl][m] for t in out_t])]).astype(np.float32)
+    k20 = len(calc_t)
+    diff = lambda k: float(np.linalg.norm(Hp[k] - tv2["H"][k]) / np.linalg.norm(tv2["H"][k]))
+    jump, d30 = diff(k20), diff(len(t_c) - 1)
     os.makedirs(args.trans_out, exist_ok=True)
     with open(tr_path + ".tmp", "wb") as fh:
         np.savez_compressed(fh, P=P[m], V=np.array(V, np.float32), N_ref=np.float32(N_REF), t_c=t_c, H=Hp, S=Cfull[:, m],
                             from_case=np.array(a_name), co2_solver=np.array(common.DATA_CO2_SOLVER),
                             sc_t_real=np.float32(SCT_REAL), sc_t_mean=np.float32(SCT_MEAN), doors=np.array(doors, np.int8),
-                            splice_s=np.float32(args.splice), jump_at_splice_vs_v2=np.float32(jump),
-                            method=np.array(f"v3 transition: start = 30-min CO2 of {a_name} (data_v2), flow as data_v3; "
-                                            f"frames after {args.splice:g} s from data_transitions_v2"))
+                            diff_v2_20min=np.float32(jump), diff_v2_30min=np.float32(d30),
+                            method=np.array(f"v3 transition: start = 30-min CO2 of {a_name} (data_v2), flow as data_v3, "
+                                            f"computed for the full 30 min"))
     os.replace(tr_path + ".tmp", tr_path)
-    print(f"{msg}; transition from {a_name}: jump to v2 at {args.splice:g} s {100 * jump:.2f} %, {time.time() - t1:.0f} s; "
+    print(f"{msg}; transition from {a_name} (full 30 min): differs from v2 by {100 * jump:.1f} % at 20 min, "
+          f"{100 * d30:.1f} % at 30 min, {time.time() - t1:.0f} s; "
           f"read {t_read:.0f} s, total {time.time() - t0:.0f} s", flush=True)
 
 
