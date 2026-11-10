@@ -19,8 +19,12 @@ RUN B="$(ls -d /usr/lib/openfoam/openfoam*/etc/bashrc /opt/openfoam*/etc/bashrc 
  && [ -n "$B" ] || { echo "OpenFOAM etc/bashrc not found in the image"; exit 1; } \
  && ln -s "$B" /etc/openfoam-bashrc
 
+# one thread per process: without this every simulation starts one thread per core (load 400 on a 20-core machine)
 ENV PATH=/opt/venv/bin:$PATH \
     FOAM_BASHRC=/etc/openfoam-bashrc \
+    OMP_NUM_THREADS=1 \
+    OPENBLAS_NUM_THREADS=1 \
+    MKL_NUM_THREADS=1 \
     OMPI_ALLOW_RUN_AS_ROOT=1 \
     OMPI_ALLOW_RUN_AS_ROOT_CONFIRM=1 \
     HOME=/tmp
