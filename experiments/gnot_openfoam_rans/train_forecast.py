@@ -55,7 +55,7 @@ def d_scale_of(data, n_typ=45.0):
 def train_member(k, tr, te, args, dev, c_scale, d_scale):
     torch.manual_seed(1000 + k)
     gen = torch.Generator().manual_seed(2000 + k)
-    model = ForecastGNOT(d=args.d, layers=args.layers, c_scale=c_scale, d_scale=d_scale).to(dev)
+    model = ForecastGNOT(d=args.d, layers=args.layers, c_scale=c_scale, d_scale=d_scale, open_flags=args.open_flags).to(dev)
     opt = torch.optim.AdamW(model.parameters(), lr=args.lr, weight_decay=1e-4)
     sched = torch.optim.lr_scheduler.OneCycleLR(opt, max_lr=args.lr, total_steps=args.iters, pct_start=0.05)
     n_par = sum(p.numel() for p in model.parameters())
@@ -83,6 +83,7 @@ def train_member(k, tr, te, args, dev, c_scale, d_scale):
             print(msg, flush=True)
     path = os.path.join(args.out, f"member{k}.pth")
     torch.save({"state": model.state_dict(), "c_scale": c_scale, "d_scale": d_scale, "d": args.d, "layers": args.layers,
+                "open_flags": args.open_flags,
                 "data_dir": args.data_dir, "hist_idx": tr.hist_idx.cpu()}, path)
     print(f"  saved {path}", flush=True)
     model.eval()
@@ -109,6 +110,8 @@ def main():
     ap.add_argument("--z", type=float, default=None, help="plane height [m]; default the file's plane (1.6 = paper)")
     ap.add_argument("--c-offset",type=float, default=0.0,
                     help="RANS data: 400 -> also report the paper's metric (absolute ppm); laminar data: 0")
+    ap.add_argument("--open-flags", action="store_true",
+                    help="tell the model which windows and doors are open (needed for outlet windows and changing doors)")
     ap.add_argument("--device",default="cuda" if torch.cuda.is_available() else "cpu")
     args = ap.parse_args()
     args.out = os.path.join(HERE, "checkpoints", args.tag)
@@ -120,6 +123,9 @@ def main():
     tr = PlaneData(trp, dev, seed=0, z=args.z, transitions=args.transitions)
     te = PlaneData(tep, dev, seed=0, z=args.z, transitions=args.transitions)
     assert torch.equal(tr.hist_idx, te.hist_idx)
+    vals = torch.stack(tr.V + te.V)
+    if not args.open_flags and ((vals[:, :8] < 0).any() or (vals[:, 8:] != vals[0, 8:]).any()):
+        raise SystemExit("the data has outlet windows or changing doors -- train with --open-flags")
     c_scale, d_scale = c_scale_of(tr), d_scale_of(tr)
     print(f"data {args.data_dir}: {len(trp)} train / {len(tep)} test cases, {tr.xyz.shape[0]} plane points "
           f"(z = {float(tr.xyz[0, 2]):.2f} m), {sum(map(len, tr.t0s))} train samples per occupancy; device {dev}", flush=True)

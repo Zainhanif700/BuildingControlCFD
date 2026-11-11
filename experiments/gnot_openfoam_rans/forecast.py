@@ -16,6 +16,11 @@ N_MAX_FC = 80.0
 N_HIST_TOKENS = 900
 
 
+def doors_of(d):
+    """Door states of a data file (1 open, 0 closed); files from before the door input have both doors open."""
+    return d["doors"].astype(np.float32) if "doors" in d.files else np.ones(2, np.float32)
+
+
 def load_plane(path, z=None):
     """Read the CO2 on one plane every 30 s from a dataset file."""
     d = np.load(path)
@@ -30,7 +35,8 @@ def load_plane(path, z=None):
         pl = np.abs(d["P"][:, 2] - zs[np.argmin(np.abs(zs - z))]) < 1e-5
     P = d["P"][pl]
     return {"xy": P[:, :2].astype(np.float32), "z": float(P[0, 2]), "frames": d["C"][idx][:, pl].astype(np.float32),
-            "V": d["V"].astype(np.float32), "N_ref": float(d["N_ref"]), "name": str(path).split("/")[-1]}
+            "V": d["V"].astype(np.float32), "N_ref": float(d["N_ref"]), "name": str(path).split("/")[-1],
+            "doors": doors_of(d)}
 
 
 def load_transition(path, z=1.6):
@@ -43,19 +49,21 @@ def load_transition(path, z=1.6):
     assert np.allclose(t, np.arange(0.0, t[-1] + 1e-6, DT)), f"{path}: not every {DT:g} s"
     return {"xy": P[:, :2].astype(np.float32), "z": float(P[0, 2]), "frames": d["S"][:, pl].astype(np.float32),
             "H": d["H"][:, pl].astype(np.float32), "V": d["V"].astype(np.float32), "N_ref": float(d["N_ref"]),
+            "doors": doors_of(d),
             "name": str(path).split("/")[-1], "from": str(d["from_case"])}
 
 
 class ForecastGNOT(nn.Module):
-    def __init__(self, d=128, heads=4, layers=3, c_scale=1.0, d_scale=None):
+    def __init__(self, d=128, heads=4, layers=3, c_scale=1.0, d_scale=None, open_flags=False):
         super().__init__()
+        self.open_flags = bool(open_flags)
         self.c_scale = float(c_scale)
         self.d_scale = float(d_scale if d_scale is not None else c_scale)
         self.ff = FourierFeatures(room_length=ROOM_X[1] - ROOM_X[0], sigma=2.5, n_octaves=7)
         nf = 2 * self.ff.n_freq
         self.q_in = nn.Sequential(nn.Linear(nf + H_IN, d), nn.GELU(), nn.Linear(d, d))
         self.h_in = nn.Sequential(nn.Linear(nf + H_IN, d), nn.GELU(), nn.Linear(d, d))
-        self.c_in = nn.Sequential(nn.Linear(3 + 1, d), nn.GELU(), nn.Linear(d, d))
+        self.c_in = nn.Sequential(nn.Linear(3 + 1 + int(self.open_flags), d), nn.GELU(), nn.Linear(d, d))
         self.type_emb = nn.Embedding(4, d)
         self.blocks = nn.ModuleList([nn.ModuleDict({
             "att": nn.MultiheadAttention(d, heads, batch_first=True), "n1": nn.LayerNorm(d),
@@ -76,12 +84,20 @@ class ForecastGNOT(nn.Module):
         return torch.cat([f, last / self.c_scale, (hist[..., :-1] - last) / self.d_scale], -1)
 
     def forward(self, q_xyz, q_hist, h_xyz, h_hist, V, N):
-        """Mean and log-variance of the next 6 frames at the query points."""
+        """Mean and log-variance of the next 6 frames at the query points.
+        V: 8 window values (> 0 inlet speed, 0 closed, < 0 outlet window), followed by the 2 door states."""
         s = self.d_scale
         q = self.q_in(self._point_feats(q_xyz, q_hist))
         hk = self.h_in(self._point_feats(h_xyz, h_hist)) + self.type_emb.weight[3]
         B = V.shape[0]
-        val = torch.cat([V / V_MAX, torch.zeros(B, 2, device=V.device), N / N_MAX_FC], 1).unsqueeze(-1)
+        Vw = V[:, :8]
+        if self.open_flags:
+            Dr = V[:, 8:10]
+            speed = torch.cat([Vw.clamp(min=0.0) / V_MAX, torch.zeros_like(Dr), N / N_MAX_FC], 1)
+            opened = torch.cat([(Vw != 0).float(), Dr, torch.zeros_like(N)], 1)
+            val = torch.stack([speed, opened], -1)
+        else:
+            val = torch.cat([Vw / V_MAX, torch.zeros(B, 2, device=V.device), N / N_MAX_FC], 1).unsqueeze(-1)
         ck = self.c_in(torch.cat([self.tok_pos.unsqueeze(0).expand(B, -1, -1), val], -1))
         types = torch.tensor([0] * 8 + [1] * 2 + [2], device=V.device)
         ck = ck + self.type_emb(types).unsqueeze(0)
@@ -117,7 +133,7 @@ class PlaneData:
         self.dev = device
         self.xyz = torch.tensor(np.c_[xy0, np.full(len(xy0), self.cases[0]["z"], np.float32)], device=device)
         self.frames = [torch.tensor(c["frames"], device=device) for c in self.cases]
-        self.V = [torch.tensor(c["V"], device=device) for c in self.cases]
+        self.V = [torch.tensor(np.concatenate([c["V"], c["doors"]]), device=device) for c in self.cases]
         self.N_ref = [c["N_ref"] for c in self.cases]
         self.H = [torch.tensor(c["H"], device=device) for c in self.cases] if transitions else None
         rng = np.random.default_rng(seed)

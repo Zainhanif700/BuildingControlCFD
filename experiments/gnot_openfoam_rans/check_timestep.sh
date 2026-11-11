@@ -16,7 +16,7 @@ mkdir -p data_check
 echo "[$(date '+%F %T')] $TAG: $NAME with maxCo $CO on $NP cores"
 if [ ! -f "$CASE/done" ]; then
     rm -rf "$CASE"
-    "$PY" make_rans_case.py --V "$V" --doors "$DOORS" --dx 0.08 --name "$TAG" --t-end 600 --write-interval 10 > /dev/null
+    "$PY" make_rans_case.py --V="$V" --doors "$DOORS" --dx 0.08 --name "$TAG" --t-end 600 --write-interval 10 > /dev/null
     sed -i.bak "s/^maxCo .*/maxCo           $CO;/" "$CASE/system/controlDict" && rm -f "$CASE/system/controlDict.bak"
     grep -q "^maxCo           $CO;" "$CASE/system/controlDict" || { echo "could not set maxCo"; exit 1; }
     FOAM_NP="$NP" bash run_rans_case.sh "$CASE" > "$CASE.log" 2>&1

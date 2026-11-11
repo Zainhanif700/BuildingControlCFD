@@ -12,7 +12,7 @@ read -r V DOORS < <(awk -v n="$NAME" '$1 == n { print $3, $4 }' scenarios_v2.txt
 [ -n "${V:-}" ] || { echo "$NAME not in scenarios_v2.txt"; exit 1; }
 OUT="$HERE/speedtest/$NAME"
 rm -rf "$OUT/new" && mkdir -p "$OUT"
-"$PY" make_rans_case.py --V "$V" --doors "$DOORS" --dx 0.08 --name "$NAME" --t-end "$TEND" --write-interval "$TEND" --out "$OUT/new" > "$OUT/make_case.log"
+"$PY" make_rans_case.py --V="$V" --doors "$DOORS" --dx 0.08 --name "$NAME" --t-end "$TEND" --write-interval "$TEND" --out "$OUT/new" > "$OUT/make_case.log"
 NEW="$OUT/new/${NAME}_dx0.08"
 source "$HERE/foam_env.sh"
 

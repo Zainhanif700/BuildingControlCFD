@@ -46,7 +46,7 @@ else
 fi
 if [ "$APP" = pimpleFoam ]; then         # transient: keep p/phi only at the comparison times
     for d in [0-9]*; do
-        case "$d" in 0|0.orig|30|60|120|180) ;; *) rm -f "$d"/p "$d"/p.gz "$d"/phi "$d"/phi.gz ;; esac
+        case "$d" in 0|0.orig|30|60|120|150|180) ;; *) rm -f "$d"/p "$d"/p.gz "$d"/phi "$d"/phi.gz ;; esac
     done
 else                                      # steady: report convergence
     grep -E "SIMPLE solution converged|End" log.$APP | tail -2 || true

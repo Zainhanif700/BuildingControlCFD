@@ -15,7 +15,7 @@ one() {   # name V dx
         set -e
         echo "[$(date '+%F %T')] $NAME dx $DX: V = $V"
         cd "$HERE"
-        "$PY" make_rans_case.py --V "$V" --name "${NAME}_mesh" --dx "$DX" --t-end 600 --write-interval 10
+        "$PY" make_rans_case.py --V="$V" --name "${NAME}_mesh" --dx "$DX" --t-end 600 --write-interval 10
         ( source "$HOME/anaconda3/etc/profile.d/conda.sh" && conda activate foam && bash run_rans_case.sh "$CASE" )
         touch "$CASE/done"
         echo "[$(date '+%F %T')] $NAME dx $DX: done"

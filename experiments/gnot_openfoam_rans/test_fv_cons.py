@@ -106,6 +106,35 @@ def main():
     check("6 door 2 closed: CO2 finite and not negative", np.isfinite(c).all() and c.min() >= -1e-6 * c.max(),
           f"(min {c.min():.2e}, max {c.max():.1f})")
 
+    # 7. both doors closed: W1 and W6 let air in, W4 and W8 let it out (V < 0)
+    V7 = [1.0, 0, 0, -1, 0, 0.5, 0, -1]
+    g7 = L2.Grid(0.25, V7)
+    S7 = seat_source(g7, 20.0)
+    z7 = np.zeros(g7.X.shape)
+    u, v, w = swirl(g7)
+    cf7 = ConsFV(g7, S7, V7, dev, dt, doors=(0, 0))
+    check("7 doors closed: no door faces, outlet windows found", int(cf7.door.sum()) == 0 and int(cf7.out_top.sum()) > 0)
+    F, rd, it = cf7.project(u, v, w, 100.0)
+    a = g7.h[0] * g7.h[2]
+    inflow = float(cf7.win_speed.sum() * a)
+    outflow = float(F[1][:, -1, :][cf7.out_top].sum() * a)
+    exp = (1.0 + 0.5) * 0.61 * 3.15
+    check("7 outlet windows carry all the inflow", abs(outflow - inflow) / inflow < 1e-6 and rd < 1e-7,
+          f"(in {inflow:.4f}, out {outflow:.4f} m^3/s, expected {exp:.4f}; divergence {rd:.1e}, {it} CG iterations)")
+    check("7 inlet windows unchanged by the projection",
+          bool(torch.allclose(F[1][:, -1, :][cf7.win_speed > 0], -cf7.win_speed[cf7.win_speed > 0] * np.tanh(3.0 * 100.0 / 2.0))))
+    nut7 = 0.01 * g7.fluid
+    cf7 = ConsFV(g7, S7, V7, dev, dt, doors=(0, 0))
+    out, _, _ = cf7.solve([0.0, 10.0], [[z7, z7, z7, nut7], [u, v, w, nut7]], [120.0])
+    c = out[120.0][g7.fluid]
+    check("7 doors closed: CO2 finite and not negative", np.isfinite(c).all() and c.min() >= -1e-6 * c.max(),
+          f"(min {c.min():.2e}, max {c.max():.1f})")
+    cc7 = ConsFV(g7, z7, V7, dev, dt, doors=(0, 0))
+    out, _, _ = cc7.solve([0.0, 10.0], [[u, v, w, nut7]] * 2, [60.0], c0=np.ones(g7.X.shape))
+    m = out[60.0][g7.fluid]
+    check("7 uniform CO2 cannot rise with fresh-air inflow (no artificial sources)", m.max() <= 1.0 + 1e-8,
+          f"(max {m.max():.10f})")
+
     print("\nALL PASSED" if not FAILED else f"\nFAILED: {FAILED}")
     sys.exit(1 if FAILED else 0)
 

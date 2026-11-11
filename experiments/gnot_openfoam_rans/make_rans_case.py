@@ -29,7 +29,8 @@ def seat_mask(g):
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--V", required=True, help="comma-separated V1..V8 [m/s]")
+    ap.add_argument("--V", required=True, help="comma-separated V1..V8 [m/s]: > 0 inlet speed, 0 closed, "
+                                               "< 0 open window that works as outlet (like an open door)")
     ap.add_argument("--name", required=True)
     ap.add_argument("--dx", type=float, default=0.1)
     ap.add_argument("--t-end", type=float, default=180.0)
@@ -43,11 +44,13 @@ def main():
     args = ap.parse_args()
     V = [float(v) for v in args.V.split(",")]
     doors = [int(d) for d in args.doors.split(",")]
-    assert len(doors) == 2 and any(doors), "at least one door must be open (the only outlets of the room)"
+    assert len(doors) == 2, "--doors needs two flags"
+    assert any(doors) or any(v < 0 for v in V), "the air needs a way out: open a door or an outlet window (V < 0)"
+    assert any(v > 0 for v in V), "at least one window must be an inlet (V > 0)"
 
     import make_openfoam_case as moc
     argv = sys.argv
-    sys.argv = ["make_openfoam_case.py", "--V", args.V, "--name", args.name, "--dx", str(args.dx),
+    sys.argv = ["make_openfoam_case.py", "--V=" + args.V, "--name", args.name, "--dx", str(args.dx),
                 "--t-end", str(args.t_end), "--write-interval", str(args.write_interval), "--out", args.out]
     try:
         moc.main()
@@ -74,12 +77,18 @@ def main():
             cp, n = re.subn(rf"(name door{j + 1}; patchInfo \{{ type )patch(; \}})", r"\1wall\2", cp)
             assert n == 1, f"door{j + 1} not found in createPatchDict"
     wr("system/createPatchDict", cp)
+    outlet_bc = {"0.orig/U": "type pressureInletOutletVelocity; value uniform (0 0 0);",
+                 "0.orig/p": "type fixedValue; value uniform 0;"}
     for rel, closed in (("0.orig/U", "type noSlip;"), ("0.orig/p", "type zeroGradient;")):
         txt = rd(rel)
         for j, d in enumerate(doors):
             if not d:
                 txt, n = re.subn(rf"(    door{j + 1} \{{ ).*?( \}})", rf"\g<1>{closed}\2", txt)
                 assert n == 1, f"door{j + 1} not found in {rel}"
+        for k, v in enumerate(V):
+            if v < 0:
+                txt, n = re.subn(rf"(    window{k + 1} \{{ ).*?( \}})", rf"\g<1>{outlet_bc[rel]}\2", txt)
+                assert n == 1, f"window{k + 1} not found in {rel}"
         wr(rel, txt)
 
     def kw(v):
@@ -99,6 +108,11 @@ def main():
             bo.append(f"    {p} {{ type fixedValue; value uniform {oo:.6g}; }}")
             bn.append(f"    {p} {{ type calculated; value uniform 0; }}")
             bs.append(f"    {p} {{ type fixedValue; value uniform 0; }}")
+        elif v < 0:
+            bk.append(f"    {p} {{ type inletOutlet; inletValue uniform {K_AMBIENT:g}; value uniform {K_AMBIENT:g}; }}")
+            bo.append(f"    {p} {{ type inletOutlet; inletValue uniform {OMEGA_AMBIENT:g}; value uniform {OMEGA_AMBIENT:g}; }}")
+            bn.append(f"    {p} {{ type calculated; value uniform 0; }}")
+            bs.append(f"    {p} {{ type inletOutlet; inletValue uniform 0; value uniform 0; }}")
         else:
             bk.append(f"    {p} {{ type kqRWallFunction; value uniform {K_AMBIENT:g}; }}")
             bo.append(f"    {p} {{ type omegaWallFunction; value uniform {OMEGA_AMBIENT:g}; }}")

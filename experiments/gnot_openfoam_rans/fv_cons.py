@@ -36,7 +36,8 @@ class ConsFV(TurbFV):
         door = np.zeros((nx, nz), bool)
         doors = [doors_open] * len(DOORS) if doors is None else [bool(x) for x in doors]
         assert len(doors) == len(DOORS), f"doors needs {len(DOORS)} flags, got {doors}"
-        assert any(doors) or not any(v > 0 for v in self.V), "open windows need at least one open door"
+        assert any(doors) or any(v < 0 for v in self.V) or not any(v > 0 for v in self.V), \
+            "inlet windows need an outlet: an open door or an outlet window (V < 0)"
         for (a, b, c, d), op in zip(DOORS, doors):
             if op:
                 door |= ((xc >= a) & (xc <= b))[:, None] & ((zc >= c - e) & (zc <= d))[None, :]
@@ -48,9 +49,14 @@ class ConsFV(TurbFV):
                 flux_fix = (b - a) / (inx.sum() * g.h[0])
                 win_speed[inx, :] = self.V[k] * flux_fix
         self.win_speed = T(win_speed).to(torch.float64) * fl[:, -1, :]
+        out_top = np.zeros((nx, nz), bool)
+        for k, (a, b, _, _) in enumerate(WINDOWS):
+            if self.V[k] < 0:
+                out_top |= ((xc >= a) & (xc <= b))[:, None]
+        self.out_top = T(out_top) & fl[:, -1, :]
 
     def _faces_from_cells(self, u, v, w, t):
-        """Cell velocities -> face velocities (fixed inflow at the windows, free outflow at the doors)."""
+        """Cell velocities -> face velocities (fixed inflow at inlet windows, free outflow at doors and outlet windows)."""
         F = []
         for a, ua in enumerate((u, v, w)):
             shp = list(ua.shape)
@@ -62,7 +68,7 @@ class ConsFV(TurbFV):
             f = f * self.open[a]
             F.append(f)
         F[1][:, 0, :] = torch.where(self.door, v[:, 0, :], torch.zeros_like(v[:, 0, :]))
-        F[1][:, -1, :] = -self.win_speed * math.tanh(3.0 * t / TAU_RAMP)
+        F[1][:, -1, :] = torch.where(self.out_top, v[:, -1, :], -self.win_speed * math.tanh(3.0 * t / TAU_RAMP))
         return F
 
     def _div(self, F):
@@ -71,7 +77,7 @@ class ConsFV(TurbFV):
                 + (F[2][:, :, 1:] - F[2][:, :, :-1]) / h[2]) * self.fluid
 
     def _grad(self, p):
-        """Face gradient (p = 0 at the doors, zero at walls and windows)."""
+        """Face gradient (p = 0 at the doors and outlet windows, zero at walls and inlet windows)."""
         G = []
         for a in range(3):
             shp = list(p.shape)
@@ -83,6 +89,7 @@ class ConsFV(TurbFV):
             gr = gr * self.open[a]
             G.append(gr)
         G[1][:, 0, :] = torch.where(self.door, p[:, 0, :] / (0.5 * self.h[1]), torch.zeros_like(p[:, 0, :]))
+        G[1][:, -1, :] = torch.where(self.out_top, -p[:, -1, :] / (0.5 * self.h[1]), torch.zeros_like(p[:, -1, :]))
         return G
 
     def _lap(self, p):
@@ -101,6 +108,7 @@ class ConsFV(TurbFV):
             sl_l[a], sl_r[a] = slice(1, None), slice(0, -1)
             diag = diag + (o[tuple(sl_l)] + o[tuple(sl_r)]) / self.h[a] ** 2
         diag[:, 0, :] += self.door.to(torch.float64) * (2.0 / self.h[1] ** 2)
+        diag[:, -1, :] += self.out_top.to(torch.float64) * (2.0 / self.h[1] ** 2)
         diag = torch.where(self.fluid, diag, torch.ones_like(diag))
         diag = torch.where(diag > 0, diag, torch.ones_like(diag))
         A = lambda x: -self._lap(x)
@@ -126,7 +134,7 @@ class ConsFV(TurbFV):
                 rz = rz_new
         G = self._grad(x)
         F = [F[a] - G[a] for a in range(3)]
-        F[1][:, -1, :] = -self.win_speed * math.tanh(3.0 * t / TAU_RAMP)
+        F[1][:, -1, :] = torch.where(self.out_top, F[1][:, -1, :], -self.win_speed * math.tanh(3.0 * t / TAU_RAMP))
         u_scale = max(float(max(f.abs().max() for f in F)), 1e-30)
         rel_div = float(self._div(F).abs().max() * min(self.h) / u_scale)
         return F, rel_div, it
@@ -154,6 +162,8 @@ class ConsFV(TurbFV):
             if a == 1:
                 fd = f[:, 0, :]
                 flux[:, 0, :] = torch.where(fd < 0, fd * c[:, 0, :], torch.zeros_like(fd))
+                ft = f[:, -1, :]
+                flux[:, -1, :] = torch.where(self.out_top & (ft > 0), ft * c[:, -1, :], torch.zeros_like(ft))
             adv = adv + (flux[tuple(hi)] - flux[tuple(lo)]) / self.h[a]
         return (div - adv + self.S) * self.fluid_f
 

@@ -20,7 +20,7 @@ echo "[$(date '+%F %T')] $NAME (V $V, doors $DOORS): OpenFOAM to ${SAMPLING_T_EN
 if [ ! -f "$CASE/done" ]; then
     rm -rf "$CASE"
     mkdir -p "$CASES"
-    (cd "$RANS" && "$PY" make_rans_case.py --V "$V" --doors "$DOORS" --dx 0.08 --name "${NAME}ws1" \
+    (cd "$RANS" && "$PY" make_rans_case.py --V="$V" --doors "$DOORS" --dx 0.08 --name "${NAME}ws1" \
         --t-end "${SAMPLING_T_END:-150}" --write-interval 1 --out "$CASES" > /dev/null)
     FOAM_NP="$NP" bash "$RANS/run_rans_case.sh" "$CASE" > "$CASE.log" 2>&1
     grep -q "^End" "$CASE/log.pimpleFoam" || { echo "OpenFOAM did not reach the end -- see $CASE.log"; exit 1; }

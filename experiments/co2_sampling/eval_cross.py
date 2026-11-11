@@ -24,7 +24,8 @@ def load(ckdir, dev):
     models, hist = [], None
     for p in sorted(glob.glob(os.path.join(ckdir, "member*.pth"))):
         ck = torch.load(p, map_location=dev)
-        m = ForecastGNOT(d=ck["d"], layers=ck["layers"], c_scale=ck["c_scale"], d_scale=ck["d_scale"]).to(dev)
+        m = ForecastGNOT(d=ck["d"], layers=ck["layers"], c_scale=ck["c_scale"], d_scale=ck["d_scale"],
+                         open_flags=ck.get("open_flags", False)).to(dev)
         m.load_state_dict(ck["state"])
         m.eval()
         models.append(m)

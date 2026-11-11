@@ -22,7 +22,7 @@ CASE="$HERE/cases/${NAME}_dx${DX}"
 if (
     echo "[$(date '+%F %T')] $NAME: V = $V, doors = $DOORS, dx = $DX"
     cd "$HERE" || exit 1
-    "$PY" make_rans_case.py --V "$V" --doors "$DOORS" --dx "$DX" --name "$NAME" --t-end "${T_END:-600}" --write-interval 10 || exit 1
+    "$PY" make_rans_case.py --V="$V" --doors "$DOORS" --dx "$DX" --name "$NAME" --t-end "${T_END:-600}" --write-interval 10 || exit 1
     bash run_rans_case.sh "$CASE" || exit 1
     grep -q "^End" "$CASE/log.pimpleFoam" || { echo "OpenFOAM did not reach the end -- see $CASE/log.pimpleFoam"; exit 1; }
     touch "$CASE/done" || exit 1
