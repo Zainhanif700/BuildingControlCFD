@@ -131,7 +131,7 @@ def main():
     wr("system/fvSchemes", fs)
     fv = rd("system/fvSolution")
     fv = fv.replace('    "(U|UFinal)" { solver smoothSolver; smoother symGaussSeidel; tolerance 1e-8; relTol 0; }',
-                    '    "(U|k|omega|s)(|Final)" { solver smoothSolver; smoother symGaussSeidel; tolerance 1e-8; relTol 0; }')
+                    '    "(U|k|omega|s)(Final)?" { solver smoothSolver; smoother symGaussSeidel; tolerance 1e-8; relTol 0; }')
     assert "(U|k|omega|s)" in fv, "fvSolution layout changed -- update make_rans_case.py"
     wr("system/fvSolution", fv)
 
