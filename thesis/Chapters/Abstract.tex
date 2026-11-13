@@ -1,0 +1,20 @@
+Opening windows is the simplest way to bring fresh air into a classroom, but it costs heating energy, and
+without measurements nobody knows how long the windows really need to be open. A model that predicts how
+the \cotwo{} in the room will develop in the next minutes could help to open the windows only as much as
+needed. In this thesis I apply the method of \citet{bian2025} to a real classroom of our university. I
+simulate the airflow in the room with OpenFOAM (k-$\omega$ SST turbulence model), compute the \cotwo{}
+from the people in the room with my own GPU solver, and train a neural operator (GNOT) that uses the
+\cotwo{} of the last 6~minutes to forecast the next 3~minutes.
+
+For the current setup of the room (windows W1, W3 and W6, 28 window settings) the forecast error is
+4.5 times smaller than when assuming that the \cotwo{} stays the same for the paper-like runs that start
+from another setting, and about 10 times smaller for runs that start from fresh air. While checking the data, I found
+that saving the OpenFOAM flow only every 10~s made the \cotwo{} up to 45\,\% different from OpenFOAM's own
+\cotwo{} at high window speeds; with saves every second the difference is about 2\,\%. I rebuilt the
+dataset with this correction, and the model trained on it is more accurate on the corrected test data.
+I also tested whether the simulations can run on the GPU: a lattice Boltzmann solver I wrote was neither
+faster nor close enough to OpenFOAM, and from the other software I checked only a commercial code
+supports the same turbulence model fully on the GPU. A second approach that trains the network only from
+the equations, without simulation data, did not reach a useful accuracy.
+
+\todo{update the numbers once the transition comparison and the sensor work are finished}

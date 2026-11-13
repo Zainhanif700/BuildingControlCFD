@@ -1,0 +1,38 @@
+\chapter{Towards real sensor data}
+\label{ch:sensors}
+
+\section{The sensor network}
+A wireless sensor network (WSN) is being installed in the classroom. \todo{description of the WSN: number and
+positions of the \cotwo{} sensors, sampling interval, accuracy, window and door contacts, wind sensors, people
+counting; data format and access, as agreed with the lab}
+
+\section{Data flow}
+The model was trained on simulated \cotwo{} maps. To use it with the real sensors, the data has to flow from the
+sensors to the model:
+\begin{enumerate}
+  \item the WSN measures the \cotwo{} at fixed positions, the window and door states and, if available, the number
+        of people;
+  \item the measurements are collected in a common format \todo{format agreed on};
+  \item a preprocessing step brings them onto the model's time steps and converts the window states into the
+        model inputs;
+  \item the model forecasts the \cotwo{} for the next 3~minutes with an uncertainty;
+  \item the forecast is shown or used to decide about the windows.
+\end{enumerate}
+
+\section{Open points}
+\begin{itemize}
+  \item \textbf{Few measurement points.} The model uses the \cotwo{} history of 900 points on a plane; the WSN
+        gives only a few points. Since the network already works on point sets, it can be trained with only the
+        sensor positions as history.
+  \item \textbf{Window states instead of speeds.} The model needs the inflow speed of each window, while the WSN
+        probably reports whether a window is open. A way to estimate the speeds is needed \todo{wind sensors?}.
+  \item \textbf{All windows and doors.} The current dataset contains only W1, W3 and W6 with door~1 open and
+        door~2 closed. In the real room all 8 windows and both doors can be opened. This needs more simulations and
+        the door states as an additional model input.
+\end{itemize}
+
+\section{Synthetic sensor data}
+Until the WSN delivers data, I generate synthetic sensor data from the simulations: the \cotwo{} at the sensor
+positions every minute with realistic sensor noise, together with the window states and the number of people, in
+the same format as the real data. With this data the whole chain from the sensors to the forecast can be built and
+tested before the real data arrives. \todo{results}

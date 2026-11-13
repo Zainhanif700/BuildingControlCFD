@@ -1,0 +1,70 @@
+\chapter{Computing time and GPU alternatives}
+\label{ch:computation}
+
+\section{Run times}
+With the 8~cm mesh, one setting of 600~s took 15--90~hours on one CPU core of our lab computer, depending on
+the window speeds (faster air needs smaller time steps). The runs only need the CPU; the \cotwo{} and the
+training run on the GPU. \Cref{tab:speed} summarises tests on the slowest setting (N12, all windows at 2~m/s).
+
+\begin{table}[h]
+  \centering
+  \caption{Speed tests on setting N12.}
+  \label{tab:speed}
+  \begin{tabular}{>{\raggedright}p{5cm}rp{6.3cm}}
+    \toprule
+    Change & Speed-up & Result\\
+    \midrule
+    4 cores instead of 1 & 2.7$\times$ & identical results; used when only few settings run\\
+    450~s instead of 600~s & 1.33$\times$ & \cotwo{} 1.2--1.5\,\% different (N10: 3.1\,\%)\\
+    300~s instead of 600~s & 2$\times$ & about 4\,\% different\\
+    Courant number 2 instead of 1 & 1.8$\times$ & flow about 20\,\% different; rejected\\
+    looser solver tolerances & 1.1$\times$ & not used\\
+    \bottomrule
+  \end{tabular}
+\end{table}
+
+For many settings it is most efficient to run one setting per core. The corrected dataset needed 28 new runs
+of 150~s with a save every second; on the lab computer and additional machines they took less than two days.
+Computing the \cotwo{} of one setting then takes 1.25--4~hours on the GPU, and the training of the 5 networks
+about 1.5~hours.
+
+\section{Lattice Boltzmann on the GPU}
+To find out whether the simulations can be made much faster on the GPU, I wrote a lattice Boltzmann solver in
+PyTorch (D3Q19, regularised BGK collision with a Smagorinsky model \citep{smagorinsky1963,kruger2017}). It uses
+the same room, windows, door, columns and seating area, and computes the \cotwo{} in the same time loop. I first
+looked at the existing PyTorch package Lettuce, but its outlets work only on a full side of the domain, not on a
+door in part of a wall. I tested setting N10 on a 4~cm lattice (7 million nodes) for 600~s and compared it with
+OpenFOAM:
+
+\begin{itemize}
+  \item it took 7.3~hours on the RTX A2000, which is not faster than OpenFOAM on 4 cores;
+  \item the mean flow differs from OpenFOAM by 68\,\% and the \cotwo{} at 600~s by 71\,\% (paper's metric
+        11.1\,\%, while my \cotwo{} solver on the OpenFOAM flow gives 4.1\,\%).
+\end{itemize}
+
+A closer look showed no error in the solver itself: the inflow speed at the window and the strength of the
+fluctuations match OpenFOAM, and as much air leaves through the door as comes in. The difference comes from the turbulence model: in OpenFOAM the jet
+from window W1 slows down to 0.27~m/s within 2~m, while in the lattice Boltzmann solution it still has 0.47~m/s
+there. In addition, the mean over 150--600~s was not yet settled (17\,\% difference between the two halves). Since
+neither result can be called correct without measurements, and the dataset should stay consistent, I did not use
+this solver.
+
+\section{Other software}
+I checked the available software for running the same turbulence model (transient k-$\omega$ SST with a
+transported scalar) on the GPU. \todo{add references for each}
+\begin{itemize}
+  \item \textbf{OpenFOAM with GPU linear solvers} (AmgX, PETSc4FOAM, Ginkgo): only the pressure solver runs on the
+        GPU, so the total gain is limited.
+  \item \textbf{OpenFOAM v2606}: the first official release with GPU offloading; still experimental, and it is
+        not documented which solvers and turbulence models run on the GPU.
+  \item \textbf{RapidCFD}: an OpenFOAM fork that runs fully on the GPU and contains \texttt{pimpleFoam},
+        k-$\omega$ SST and our boundary conditions, but it is based on OpenFOAM 2.3.1 and CUDA 8 and could not be
+        built with the current tools on our computer.
+  \item \textbf{nekRS}: open source and GPU-based, with a related k-$\tau$ RANS model, but a different
+        discretisation and a large effort to set up.
+  \item \textbf{Lattice Boltzmann codes} (e.g.\ FluidX3D): fast, but LES instead of RANS (see above).
+  \item \textbf{ANSYS Fluent}: its GPU solver supports k-$\omega$ SST, transient runs and species transport, so it
+        could reproduce our setup. It needs a commercial or academic licence; the free student version seems to be
+        limited to about 512,000 cells, less than our mesh. \todo{confirm the limit with official documentation}
+\end{itemize}
+\todo{result of a Fluent test if a licence is available; benchmark on DGX Spark and M5 Max}

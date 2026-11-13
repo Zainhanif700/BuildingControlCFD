@@ -1,0 +1,77 @@
+\chapter{Results}
+\label{ch:results}
+
+\section{First setup}
+With the first setup (three window zones, both doors open, 10~cm mesh, 39 settings) and transition runs, the
+model has a test error of 0.11\,\% of the \cotwo{} above the outdoor level, against 0.39\,\% for persistence,
+so its error is about 4 times smaller (paper's metric: 0.01\,\% against 0.05\,\%). Training with only 5, 10,
+20 and 31 of the training settings gives 0.70, 0.39, 0.30 and 0.27 times the persistence error, so the
+learning curve levels off. \todo{figure of a test setting from the progress report}
+
+\section{Current setup, first dataset}
+For the current setup (W1, W3, W6; 28 settings, 8~cm mesh) with the first dataset and transition runs, the
+test error is 0.61\,\% against 2.74\,\% for persistence, 4.5 times smaller. The learning curve
+(\cref{tab:lc}) shows that 15 training settings already give almost the same result as 20.
+
+\begin{table}[h]
+  \centering
+  \caption{Learning curve, current setup, first dataset: test error of the model (5 networks) for different
+  numbers of training settings. Persistence: 2.74\,\%.}
+  \label{tab:lc}
+  \begin{tabular}{lrrrr}
+    \toprule
+    Training settings & 5 & 10 & 15 & 20\\
+    \midrule
+    Test error & 0.76\,\% & 0.71\,\% & 0.62\,\% & 0.61\,\%\\
+    \bottomrule
+  \end{tabular}
+\end{table}
+
+\section{Current setup, corrected dataset}
+To see what the correction of the data (\cref{ch:dataset}) means for the forecast, I trained the model twice
+in exactly the same way, once on the first dataset (model A) and once on the corrected dataset (model B), first
+with the direct runs. Then I tested both models on the test settings of both datasets (\cref{tab:ab}).
+
+\begin{table}[h]
+  \centering
+  \caption{Test error of models trained on the first (A) and the corrected (B) dataset, direct runs, 20
+  people; in brackets the paper's metric.}
+  \label{tab:ab}
+  \begin{tabular}{lrr}
+    \toprule
+     & Tested on first data & Tested on corrected data\\
+    \midrule
+    Model A (trained on first data) & 0.30\,\% (0.043\,\%) & 0.37\,\% (0.049\,\%)\\
+    Model B (trained on corrected data) & 0.30\,\% (0.044\,\%) & 0.33\,\% (0.046\,\%)\\
+    Persistence & 3.15\,\% (0.420\,\%) & 3.20\,\% (0.421\,\%)\\
+    \bottomrule
+  \end{tabular}
+\end{table}
+
+On the corrected data, model B is about 11\,\% more accurate than model A (0.33 against 0.37\,\%), and both are
+about 10 times better than persistence. On the first data both models are equally good. The gain is in the fast
+settings, where the data changed most (\cref{tab:ab_cases}); in the calm settings both models are the same.
+
+\begin{table}[h]
+  \centering
+  \caption{Test error per test setting on the corrected data (persistence in brackets).}
+  \label{tab:ab_cases}
+  \begin{tabular}{lrrrrrrrr}
+    \toprule
+     & N14 & N15 & N19 & N20 & N23 & N24 & N27 & N28\\
+    \midrule
+    Model A & 0.23 & 0.58 & 0.12 & 0.08 & 0.25 & 1.17 & 0.23 & 0.32\\
+    Model B & 0.14 & 0.59 & 0.09 & 0.08 & 0.23 & 1.16 & 0.16 & 0.21\\
+    Persistence & (1.32) & (5.62) & (2.58) & (1.43) & (3.29) & (7.24) & (1.90) & (2.25)\\
+    \bottomrule
+  \end{tabular}
+  \\[0.3em]{\small all values in \%}
+\end{table}
+
+Each model was trained only once (5 networks each), so part of the difference could be chance. That the gain
+appears in exactly the fast settings and nowhere else speaks for a real effect. \todo{repeat both trainings with
+other seeds}
+
+\section{Transition runs on the corrected data}
+\todo{results of models A and B trained on the transition runs (paper-like setup), to compare with 0.61\,\% vs
+2.74\,\%}

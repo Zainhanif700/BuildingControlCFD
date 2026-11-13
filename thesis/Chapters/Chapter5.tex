@@ -1,0 +1,59 @@
+\chapter{The forecast model}
+\label{ch:model}
+
+\section{Task}
+As in \citet{bian2025}, the model looks at the \cotwo{} map of the last 6~minutes (12 maps, 30~s apart) and
+forecasts the \cotwo{} map of the next 3~minutes (6 maps). The maps are taken on the horizontal plane at
+1.6~m, the height of the heads of standing people in the paper. On the 8~cm grid this plane is the cell layer
+at 1.58~m with 21,956 points. Besides the \cotwo{} history, the model receives the speeds of the 8 windows and
+the number of people.
+
+\section{Network}
+The network follows the GNOT idea \citep{hao2023gnot} (\tref{tab:model}). Every point where a forecast is wanted
+(query) is described by its position, encoded with Fourier features, and its own \cotwo{} history. A fixed set
+of 900 randomly chosen points of the plane carries the \cotwo{} history of the whole room, and the window speeds
+and the number of people enter as additional input. In three attention blocks the query points collect
+information from these inputs. For every query point the network outputs, for each of the 6 forecast times,
+the change from the last known \cotwo{} value and the logarithm of its variance, so the model also gives an
+uncertainty.
+
+\begin{table}[h]
+  \centering
+  \caption{The forecast model.}
+  \label{tab:model}
+  \begin{tabular}{>{\raggedright}p{4cm}p{9.7cm}}
+    \toprule
+    Item & Setting\\
+    \midrule
+    Input & \cotwo{} of the last 6~min on the 1.6~m plane (12 maps), 8 window speeds, number of people\\
+    Output & \cotwo{} change for the next 3~min (6 maps) with variance\\
+    Network & cross-attention blocks (GNOT type), 3 blocks, width 128, 4 heads, about 480,000 parameters\\
+    Loss & Gaussian negative log-likelihood, as in the paper\\
+    Optimiser & AdamW, learning rate $5\times10^{-4}$ with one-cycle schedule, 20,000 steps,
+               8 samples $\times$ 1,024 query points per step\\
+    Ensemble & 5 networks with different random seeds; the forecast is their mean\\
+    Hardware, time & NVIDIA RTX A2000 (12~GB), about 1.5~h for the 5 networks\\
+    \bottomrule
+  \end{tabular}
+\end{table}
+
+\section{Training data}
+Each sample is a window of 9~minutes from one 30-minute run: 6~minutes of history and 3~minutes to forecast.
+With a new sample every 30~s this gives 44 samples per run. Two kinds of runs are used:
+\begin{itemize}
+  \item \emph{Direct runs}: the room starts with fresh air, and the \cotwo{} of the people builds up.
+  \item \emph{Transition runs} (paper-like): the room starts with the \cotwo{} of another setting
+        (\cref{ch:dataset}); the numbers of people before and after the change are drawn between 10 and 80.
+\end{itemize}
+
+\section{Error measure}
+The error of one sample is the relative $\ell_2$ error of the forecast over the plane and the 6 forecast times
+(eq.~12 in \citet{bian2025}), and the reported error is the mean over all test samples. I report it in two
+ways. The strict version uses the \cotwo{} above the outdoor level. The paper's version uses the total \cotwo{}
+including the 400~ppm of the outdoor air; since these 400~ppm are the same in the forecast and in the data, they
+make the error look much smaller.
+
+As a baseline I use the simplest possible forecast: the \cotwo{} in 3~minutes is the same as now
+(persistence). A useful model has to be clearly better than this. Because our open windows exchange the air of
+the room much faster than the ceiling vents in the paper, the \cotwo{} changes differently than in their room,
+and the comparison with the baseline on the same data is the fairest measure.

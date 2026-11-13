@@ -1,0 +1,165 @@
+\chapter{Building the \cotwo{} dataset}
+\label{ch:dataset}
+
+\section{Why the \cotwo{} is computed separately}
+The forecast model needs the \cotwo{} for 30~minutes per setting, as in \citet{bian2025}: the \cotwo{} is
+still rising after 10~minutes when the ventilation is weak, and 30~minutes give 44 training samples of
+9~minutes each (6~minutes of history and 3~minutes of forecast). A 30-minute OpenFOAM run would take about
+two days per setting on one core. I therefore split the work into two parts:
+\begin{enumerate}
+  \item OpenFOAM computes the airflow for 600~s and saves the velocity and the turbulent viscosity.
+  \item My own solver computes the \cotwo{} for the full 30~minutes on the GPU from this airflow, and saves it
+        every 30~s.
+\end{enumerate}
+When the windows open, the airflow needs about 2.5~minutes to develop. After that it fluctuates around the
+same pattern, because the window setting does not change during a run. The \cotwo{} solver therefore uses the
+real OpenFOAM flow for the first 150~s. The flow saved between 150 and 600~s is averaged into one mean flow
+field, and from 160~s on the solver keeps this mean flow fixed until 30~minutes (the change from the last
+real flow to the mean flow takes 10~s). Only the airflow is kept fixed; the \cotwo{} is computed at every
+time step.
+
+\section{The \cotwo{} solver}
+The solver works on the same 8~cm grid as OpenFOAM, on the GPU (PyTorch). Before use, every flow field is
+made divergence-free: the velocities on the cell faces are corrected with a pressure-like field from a
+Poisson equation (conjugate gradients), so that exactly as much air leaves through the open door as comes in
+through the windows. The advection is computed in flux form with a minmod-limited upwind scheme, so the
+\cotwo{} never becomes negative and the total amount of \cotwo{} changes only through the source and the
+outflow. The time integration is a three-stage strong-stability-preserving Runge--Kutta scheme with a time
+step limited by the Courant number (0.5) and by the diffusion. The diffusivity is $D+\nu_t/\mathrm{Sc}_t$
+(\cref{eq:co2}). Fresh air enters with \cotwo{}~$=0$ (outdoor level), and \cotwo{} leaves through the door
+with the outflowing air. \todo{short validation of the solver itself: closed room / mass balance tests}
+
+\section{Checks against OpenFOAM}
+OpenFOAM computes the \cotwo{} itself on its own flow. I use this as the reference and compare it with my
+\cotwo{} at the last OpenFOAM time, in two ways: as the relative $\ell_2$ difference of the \cotwo{} above
+the outdoor level in the whole room (strict), and in the metric of \citet{bian2025}, which includes the
+400~ppm of the outdoor air and is evaluated on the planes at 1.1 and 1.6~m.
+
+In the first setup the checks showed two weaknesses: the total amount of \cotwo{} was not kept exactly, and
+the mean flow mixed the \cotwo{} too little, because the averaging removes the fluctuations. After making the
+solver mass-conserving and using a turbulent Schmidt number of $\mathrm{Sc}_t=0.3$ instead of 0.7
+\citep{tominaga2007}, the difference in the paper's metric fell from 6--9\,\% to 1--4\,\%. In one setting
+that was simulated in OpenFOAM for the full 30~minutes, my \cotwo{} stayed within about 3\,\% of OpenFOAM's
+over the whole time.
+
+\section{Reproducibility and simulated time}
+To check that the data can be reproduced, I simulated setting N10 a second time
+and built its dataset again. The \cotwo{} of both runs differs by 1.1\,\% over all points and times, and by
+at most 0.15\,\% in the paper's metric. Using only the first 450~s of the OpenFOAM run instead of 600~s
+changes the \cotwo{} by 3.1\,\% (paper's metric at most 0.48\,\%) and would make the simulations about
+1.33 times faster.
+
+\section{The save interval of the flow}
+Comparing all 28 settings with OpenFOAM's \cotwo{} showed large differences in some settings with high
+window speeds, already when my solver used the real OpenFOAM flow without any averaging (for example
+114\,\% in N14 and 131\,\% in N28 after 600~s). The settings with these differences all have W1 and W3 open
+at high speed and a strongly fluctuating flow.
+
+The reason was the save interval. OpenFOAM saved the flow every 10~s, and my solver interpolates linearly
+between the saves. At 2~m/s the air moves about 20~m in 10~s, more than the length of the room, so the saves
+miss most of what the air does. To test this, I simulated N28 for 150~s with a save every second and computed
+the \cotwo{} from every 1st, 2nd, 5th and 10th save (\cref{tab:saves}).
+
+\begin{table}[h]
+  \centering
+  \caption{N28: my \cotwo{} against OpenFOAM's \cotwo{} for different save intervals of the flow (relative
+  $\ell_2$ difference in the whole room / total \cotwo{} ours : OpenFOAM).}
+  \label{tab:saves}
+  \small
+  \begin{tabular}{lrrrrr}
+    \toprule
+    Saved every & 30~s & 60~s & 90~s & 120~s & 150~s\\
+    \midrule
+    1~s  & 3.1\,\% / 1.001 & 2.1\,\% / 0.998 & 2.2\,\% / 0.998 & 2.0\,\% / 1.000 & 2.0\,\% / 1.001\\
+    2~s  & 4.3\,\% / 1.004 & 4.4\,\% / 0.999 & 4.0\,\% / 1.002 & 4.0\,\% / 1.008 & 4.7\,\% / 1.012\\
+    5~s  & 12.5\,\% / 1.021 & 16.0\,\% / 1.002 & 13.1\,\% / 1.027 & 17.7\,\% / 1.077 & 19.4\,\% / 1.103\\
+    10~s & 30.6\,\% / 1.032 & 29.7\,\% / 0.997 & 27.2\,\% / 1.060 & 40.0\,\% / 1.156 & 45.4\,\% / 1.232\\
+    \bottomrule
+  \end{tabular}
+\end{table}
+
+With saves every second my solver matches OpenFOAM within about 2\,\%. N14 gives the same picture: 1.9--3.7\,\%
+with 1~s saves and 24--45\,\% with 10~s saves. For the calm setting N01 (one window at 0.5~m/s) the save
+interval hardly matters (25.8\,\% with 10~s and 25.6\,\% with 1~s saves at 150~s, both with $\mathrm{Sc}_t=0.3$).
+So my solver itself is accurate; only its input was too coarse in fast settings.
+
+\section{The flow after 150~s}
+With a run of 450~s and saves every second for N28 and N01, I also tested how the \cotwo{} after 150~s can be
+made more accurate (\cref{tab:after150}). The real flow saved every second gives about 2\,\% at all times,
+which is the best that is possible with this solver.
+
+\begin{table}[h]
+  \centering
+  \caption{Methods for the \cotwo{} after 150~s, against OpenFOAM's \cotwo{} at 450~s (relative $\ell_2$
+  difference in the whole room; in brackets the paper's metric at 1.1~m).}
+  \label{tab:after150}
+  \small
+  \begin{tabular}{>{\raggedright}p{8.2cm}rr}
+    \toprule
+    Method & N28 (fast) & N01 (calm)\\
+    \midrule
+    10~s saves to 150~s, then mean flow, $\mathrm{Sc}_t=0.3$ (first dataset) & 106.9\,\% (3.4\,\%) & 32.8\,\% (10.1\,\%)\\
+    1~s saves to 150~s, then mean flow, $\mathrm{Sc}_t=0.3$ & 100.7\,\% (3.2\,\%) & 33.1\,\% (10.2\,\%)\\
+    1~s saves to 150~s, then mean flow, $\mathrm{Sc}_t=0.7$ & 143.6\,\% (5.6\,\%) & 35.2\,\% (11.9\,\%)\\
+    real flow to 300~s, then the 150--300~s flow in a loop, $\mathrm{Sc}_t=0.7$ & 42.2\,\% (1.5\,\%) & 76.0\,\% (31.6\,\%)\\
+    real flow to 450~s (upper limit), $\mathrm{Sc}_t=0.7$ & 1.9\,\% (0.1\,\%) & 1.4\,\% (0.3\,\%)\\
+    \bottomrule
+  \end{tabular}
+\end{table}
+
+Neither alternative works for both settings. In the fast setting the fixed mean flow keeps too much
+\cotwo{} in the room (about 1.8 times OpenFOAM's amount in N28 at 450~s): the mean flow has calm zones that trap the
+\cotwo{}, while the real, fluctuating flow flushes them. Repeating the real flow in a loop helps there, but in
+the calm setting it is much worse, probably because the slow flow keeps changing and the first part is not
+typical for the later part. A turbulent Schmidt number of 0.7 is right while the real flow is used
+(1.9\,\% at 150~s instead of 25.6\,\% in N01), but with the mean flow 0.3 is better. I therefore keep the mean
+flow after 150~s and treat its error as a known limitation. The only way to remove it would be to simulate
+the full 30~minutes in OpenFOAM.
+
+\section{The corrected dataset}
+Based on these tests I rebuilt the dataset (data~v3) in the same way for all 28 settings:
+\begin{itemize}
+  \item OpenFOAM is run again for the first 150~s with a save every second;
+  \item for 0--150~s my solver uses this flow with $\mathrm{Sc}_t=0.7$, as OpenFOAM;
+  \item after 150~s it uses the mean flow of the first dataset with $\mathrm{Sc}_t=0.3$.
+\end{itemize}
+At 150~s the new dataset matches OpenFOAM's \cotwo{} within 1.0--2.2\,\% in the settings I have checked so far (paper's
+metric at most 0.1\,\%), compared with up to 45\,\% before. \todo{range for all 28 settings from the stored checks}
+
+\Cref{tab:v3v2} shows how much the data changed. The differences are in the first minutes, when the fresh air
+spreads into the room. After about 10~minutes both datasets become the same, because they use the same mean
+flow, and at 30~minutes they are identical. Since the difference after 20~minutes is at most 0.15\,\%, more
+than ten times smaller than the accuracy of the solver, the last 10~minutes of 20 of the 28 settings were taken from
+the first dataset to save computing time.
+
+\begin{table}[h]
+  \centering
+  \caption{Difference between the corrected and the first dataset (relative $\ell_2$ difference of the
+  \cotwo{} in the whole room), for the first 8 settings that were finished.}
+  \label{tab:v3v2}
+  \begin{tabular}{lrrrrr}
+    \toprule
+    Setting & 1~min & 2.5~min & 5~min & 10~min & 30~min\\
+    \midrule
+    N01 & 24.8\,\% & 29.3\,\% & 1.4\,\% & 0.2\,\% & 0.0\,\%\\
+    N07 & 32.1\,\% & 26.3\,\% & 2.1\,\% & 0.6\,\% & 0.1\,\%\\
+    N09 & 34.5\,\% & 18.5\,\% & 1.5\,\% & 0.2\,\% & 0.0\,\%\\
+    N10 & 36.8\,\% & 31.1\,\% & 1.8\,\% & 0.4\,\% & 0.1\,\%\\
+    N14 & 38.1\,\% & 35.9\,\% & 5.1\,\% & 0.7\,\% & 0.0\,\%\\
+    N20 & 29.2\,\% & 23.8\,\% & 0.9\,\% & 0.2\,\% & 0.0\,\%\\
+    N27 & 43.8\,\% & 27.2\,\% & 1.9\,\% & 0.4\,\% & 0.0\,\%\\
+    N28 & 36.3\,\% & 36.1\,\% & 7.8\,\% & 1.6\,\% & 0.0\,\%\\
+    \bottomrule
+  \end{tabular}
+\end{table}
+
+\section{Paper-like transition data}
+In \citet{bian2025} every run starts from the steady state of another setting. I do the same without new
+OpenFOAM runs: for each setting I start from the \cotwo{} of a randomly chosen other setting after 30~minutes,
+switch off the people, and let the new flow carry this \cotwo{} away. Because \cref{eq:co2} is linear, the
+\cotwo{} of the new setting's people can then be added with any number of people, and the numbers before and
+after the change are drawn between 10 and 80 during training, as in the paper.
+
+For the corrected dataset the transition runs had to be computed again for the full 30~minutes. Here the
+\cotwo{} only decays, so the difference to the old transition runs does not become small over time; for the
+runs computed so far it is 2.6--13.6\,\% at 30~minutes. \todo{final range for all 28 settings}

@@ -1,0 +1,59 @@
+\chapter{Background}
+\label{ch:background}
+
+\section{\cotwo{} in classrooms}
+People breathe out air with about 40,000~ppm \cotwo{}, while the outdoor air has about 400~ppm. In a closed
+room the \cotwo{} therefore rises as long as people are inside, and it can only fall when fresh air comes
+in. In this thesis, as in \citet{bian2025}, each person breathes out 6~L/min, so 20 people add about
+79~ppm\,m\textsuperscript{3} of \cotwo{} per second above the outdoor level.
+\todo{guideline values for CO2 in classrooms, e.g. 1000 ppm, with reference}
+
+\section{Airflow simulation}
+The airflow in a room is described by the incompressible Navier--Stokes equations. At the speeds that come
+through an open window the flow is turbulent, and the small eddies cannot be resolved on a mesh of the
+whole room. In Reynolds-averaged (RANS) models only the mean flow is computed, and the effect of the eddies
+is described by a turbulent viscosity $\nu_t$. I use the k-$\omega$ SST model of \citet{menter1994}, which
+is also used by \citet{bian2025} and is common for indoor airflow. It solves two extra equations, one for the
+turbulent kinetic energy $k$ and one for its specific dissipation rate $\omega$, and computes $\nu_t$ from
+them. Near walls it behaves like a k-$\omega$ model and in the open room like a k-$\varepsilon$ model.
+
+The simulations are done with OpenFOAM \citep{weller1998}, version v2412 from openfoam.com, with the
+transient solver \texttt{pimpleFoam}. Even though RANS describes the mean flow, the transient solution of
+our room does not become fully steady: the jets from the open windows keep moving, and the flow fluctuates
+around a mean pattern (\cref{ch:dataset}).
+
+A different way to simulate the flow is the lattice Boltzmann method \citep{kruger2017}, which is well suited
+for GPUs. It is usually combined with a large-eddy simulation (LES), in which the large eddies are resolved
+and only the smallest ones are modelled, for example with the model of \citet{smagorinsky1963}. I tested this
+idea as a faster alternative in \cref{ch:computation}.
+
+\section{\cotwo{} transport}
+The \cotwo{} is carried by the air (advection) and mixed by molecular and turbulent diffusion:
+\begin{equation}
+  \frac{\partial c}{\partial t} + \nabla\cdot(\mathbf{u}\,c) = \nabla\cdot\big((D + \nu_t/\mathrm{Sc}_t)\,\nabla c\big) + S,
+  \label{eq:co2}
+\end{equation}
+where $c$ is the \cotwo{} above the outdoor level in ppm, $\mathbf{u}$ the air velocity, $D$ the molecular
+diffusivity of \cotwo{} in air, $\mathrm{Sc}_t$ the turbulent Schmidt number and $S$ the source from the
+people. The equation is linear in $c$, so the \cotwo{} grows exactly in proportion to the number of people.
+Because \cotwo{} does not change the airflow, the flow can be computed first and the \cotwo{} afterwards.
+
+\section{Neural operators}
+A neural operator learns a map between functions, for example from the \cotwo{} field now to the \cotwo{}
+field in three minutes, instead of a map between fixed vectors \citep{li2021fno}. GNOT \citep{hao2023gnot}
+is a transformer-based neural operator: the points where the output is wanted (queries) exchange
+information with the input data through attention. It works on unstructured point sets, which suits a room
+with columns and irregular measurement points.
+
+\section{The method of Bian and Shi}
+\citet{bian2025} simulated a classroom at UC San Diego with ceiling vents in ANSYS Fluent (k-$\omega$ SST).
+They ran 300 simulations of 30~minutes with different vent settings, each starting from the steady state of
+another setting, and trained a GNOT model that uses the \cotwo{} of the last 6~minutes to forecast the next
+3~minutes, with an uncertainty from a Gaussian likelihood. With an ensemble of five networks they reach a
+test error of 10.9\,\% in their metric, and they use the model to choose vent settings that keep the
+\cotwo{} low with little energy. \todo{check all numbers against the paper}
+
+\section{Physics-informed learning}
+Instead of learning from simulation data, a network can be trained to fulfil the equations themselves at
+random points of the domain \citep{raissi2019}. This idea was also extended to neural operators
+\citep{li2021pino}. I tried it for our room in \cref{ch:pinn}.

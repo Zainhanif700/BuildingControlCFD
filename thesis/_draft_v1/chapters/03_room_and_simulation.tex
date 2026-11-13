@@ -1,0 +1,102 @@
+\chapter{The room and the airflow simulations}
+\label{ch:room}
+
+\section{The classroom}
+The classroom is 15.53~m long, 9.16~m wide and 3.15~m high. The geometry comes from STL files of the
+real room. One long wall has 8 windows (W1--W8, each 0.61~m wide and as high as the room in the model),
+the opposite wall has 2 doors (1.06~m wide, 2.11~m high), and 4 round columns stand in the room
+(\cref{fig:room}). Fresh air comes in through the open windows and leaves through the open doors.
+
+\begin{figure}[h]
+  \centering
+  \figplaceholder{top view of the room with windows, doors, columns and seating area}
+  \caption{The classroom. \todo{draw}}
+  \label{fig:room}
+\end{figure}
+
+The people sit in a seating area of $9.5\times5$~m between 1.0 and 1.2~m height, where the \cotwo{} is
+released. This area is still a placeholder until the real seating plan is known
+\todo{update when the seating plan is available}. All simulations use 20 people; because
+\cref{eq:co2} is linear, the results can be scaled to any number of people.
+
+\section{Window settings}
+In the first setup, the 8 windows were grouped into three zones (W1--W3, W4--W6, W7--W8), and both doors were
+open. I simulated 39 settings with this setup (31 for training, 8 for testing).
+
+Later we changed the setup to the way the room will be used with the sensors: only windows W1, W3 and W6 can
+open, door~1 is open and door~2 is closed. Each of the three windows is closed or open with an inflow speed
+between 0.2 and 2.0~m/s. I chose 28 settings (\cref{tab:settings}): each window alone at 0.5, 1 and 2~m/s,
+all three together at the same speeds, and 16 random combinations. 8 of the random ones are kept for
+testing and never used in training. This thesis mainly reports the current setup.
+
+\begin{table}[h]
+  \centering
+  \caption{The 28 window settings of the current setup.}
+  \label{tab:settings}
+  \begin{tabular}{l>{\raggedright}p{7.6cm}l}
+    \toprule
+    Settings & Windows & Use\\
+    \midrule
+    N01--N09 & one window open (W1, W3 or W6) at 0.5, 1 or 2~m/s & training\\
+    N10--N12 & all three open at 0.5, 1 or 2~m/s & training\\
+    N13--N28 & random speeds 0.2--2.0~m/s, each window closed with probability 0.3 & 8 training, 8 test\\
+    \bottomrule
+  \end{tabular}
+\end{table}
+The test settings are N14, N15, N19, N20, N23, N24, N27 and N28.
+
+\section{Simulation setup}
+\Cref{tab:sim} summarises the OpenFOAM settings. Each open window is an inlet with a uniform velocity normal
+to the wall; the speed rises smoothly from zero and reaches the full value after about 2~s
+($v(t)=v_0\tanh(1.5\,t/\mathrm{s})$). The
+inlet turbulence intensity is 5\,\% with a length scale of 0.1~m. The doors are pressure outlets ($p=0$) that
+also allow backflow. Walls, columns, closed windows and the closed door are no-slip walls with wall functions.
+The \cotwo{} is also computed by OpenFOAM itself (scalar transport with $\mathrm{Sc}_t=0.7$), which I use as
+the reference for my own solver.
+
+\begin{table}[h]
+  \centering
+  \caption{OpenFOAM settings.}
+  \label{tab:sim}
+  \begin{tabular}{>{\raggedright}p{4.2cm}p{9.5cm}}
+    \toprule
+    Item & Setting\\
+    \midrule
+    Solver & OpenFOAM v2412, \texttt{pimpleFoam} (transient), k-$\omega$ SST with wall functions\\
+    Mesh & hexahedral, 8~cm cells, 856,284 cells after removing the columns\\
+    Air & kinematic viscosity $1.5\times10^{-5}$~m\textsuperscript{2}/s\\
+    Time step & adaptive, Courant number $\le 1$\\
+    Simulated time & 600~s\\
+    \cotwo{} source & 20 people, 6~L/min at 40,000~ppm each, spread evenly over the seating area\\
+    \cotwo{} diffusivity & $D=1.6\times10^{-5}$~m\textsuperscript{2}/s\\
+    \bottomrule
+  \end{tabular}
+\end{table}
+
+\section{Mesh study}
+The first setup used a 10~cm mesh. To check whether this is fine enough, I simulated two settings on meshes
+with 15, 10 and 8~cm cells and compared them with the 8~cm mesh (\cref{tab:mesh}). For the faster setting
+(S08) the 10~cm mesh gives about 30\,\% less \cotwo{} in the room and a less steady flow. The current setup
+therefore uses the 8~cm mesh.
+
+\begin{table}[h]
+  \centering
+  \caption{Mesh study: difference to the 8~cm mesh at 600~s (relative $\ell_2$ difference of the
+  velocity in the room and of the \cotwo{} above the outdoor level at 1.6~m; total \cotwo{} in the room
+  relative to the 8~cm mesh).}
+  \label{tab:mesh}
+  \begin{tabular}{llrrrr}
+    \toprule
+    Setting & Mesh & Cells & Velocity & \cotwo{} at 1.6~m & Total \cotwo{}\\
+    \midrule
+    S02 & 15~cm & 132,258 & 25.8\,\% & 47.3\,\% & 1.004\\
+        & 10~cm & 438,929 & 22.7\,\% & 42.4\,\% & 0.931\\
+    S08 & 15~cm & 132,258 & 28.6\,\% & 36.7\,\% & 0.749\\
+        & 10~cm & 438,929 & 40.4\,\% & 38.3\,\% & 0.697\\
+    \bottomrule
+  \end{tabular}
+\end{table}
+
+The wall resolution ($y^+$ on the walls, 8~cm mesh) is between 2 and 140 for S02 and between 21 and 571 for
+S08, which fits the use of wall functions. \todo{check whether the y+ range is acceptable for the wall
+functions used; mention checkMesh result for the 8 cm mesh}

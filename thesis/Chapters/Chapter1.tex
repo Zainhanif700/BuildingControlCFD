@@ -1,0 +1,67 @@
+\chapter{Introduction}
+\label{ch:intro}
+
+\section{Motivation}
+In a full classroom the \cotwo{} that the people breathe out builds up quickly. High \cotwo{} levels are
+a sign of stale air and are linked to tiredness and poorer concentration \todo{reference on CO2 and
+cognitive performance}. The usual answer is to open the windows. This works, but in winter every open
+window lets heat out, and since most rooms have no sensors, nobody knows how long and how far the windows
+need to be open.
+
+A model that forecasts the \cotwo{} in the room a few minutes ahead could help with this decision. With
+such a forecast, the windows could be opened only when the \cotwo{} is about to become too high, and
+closed again as soon as it is safe. Computing the airflow in the room with computational fluid dynamics
+(CFD) is accurate, but one simulation takes hours, which is far too slow for a decision every few minutes.
+\citet{bian2025} showed that a neural operator trained on CFD results can forecast the \cotwo{} in a
+classroom within a fraction of a second and can be used for control.
+
+\section{Goal of this thesis}
+The goal of this thesis is to apply the method of \citet{bian2025} to a real classroom of our university,
+which is ventilated through windows instead of ceiling vents, and to prepare it for the real sensor data of
+the wireless sensor network (WSN) that is being installed in the room. In particular I want to answer
+these questions:
+\begin{enumerate}
+  \item Can the method be transferred to our room with open-source software (OpenFOAM instead of
+        ANSYS Fluent)?
+  \item How accurate is the generated training data, and how accurate is the forecast?
+  \item Can the simulations be made faster, for example by running them on the GPU?
+  \item Can the network be trained from the equations alone, without simulation data?
+  \item What is needed to use the model with the real sensor data?
+\end{enumerate}
+
+\section{Approach}
+\fref{fig:pipeline} shows the pipeline. For every window setting I simulate the airflow in the room with
+OpenFOAM. From this airflow my own GPU solver computes the \cotwo{} of the people in the room for
+30~minutes. The forecast model, a GNOT-type neural operator, is trained on these results: it receives the
+\cotwo{} at 1.6~m height over the last 6~minutes, the window speeds and the number of people, and predicts
+the \cotwo{} for the next 3~minutes.
+
+\begin{figure}[h]
+  \centering
+  \figplaceholder{pipeline: room geometry $\rightarrow$ OpenFOAM airflow $\rightarrow$ own \cotwo{} solver
+  (GPU) $\rightarrow$ dataset $\rightarrow$ GNOT training $\rightarrow$ forecast}
+  \caption{Overview of the pipeline. \todo{draw}}
+  \label{fig:pipeline}
+\end{figure}
+
+\section{Contributions}
+\begin{itemize}
+  \item A complete, scripted pipeline from the room geometry to the trained forecast model, built only on
+        open-source software.
+  \item A mass-conserving GPU solver for the \cotwo{} that reproduces OpenFOAM's own \cotwo{} within about
+        2\,\%, and a study of how often the airflow has to be saved to reach this accuracy.
+  \item A corrected dataset for the current room setup and a comparison of models trained on the old and the
+        corrected data.
+  \item A test of GPU alternatives to OpenFOAM, including an own lattice Boltzmann solver, and a survey of
+        the available software.
+  \item A test of training without simulation data (physics-informed), which shows the limits of this idea
+        for our room.
+\end{itemize}
+
+\section{Structure}
+\cref{ch:background} gives the background on CFD, turbulence modelling and neural operators.
+\cref{ch:room} describes the room and the OpenFOAM simulations, and \cref{ch:dataset} how the \cotwo{}
+dataset is built and checked. \cref{ch:model} describes the forecast model and \cref{ch:results} its
+results. \cref{ch:computation} covers run times and the GPU alternatives, \cref{ch:pinn} the training
+without data, and \cref{ch:sensors} the preparation for the real sensor data. \cref{ch:conclusion}
+summarises the results.

@@ -1,0 +1,34 @@
+\chapter{Conclusion and outlook}
+\label{ch:conclusion}
+
+\section{Summary}
+I transferred the method of \citet{bian2025} to a window-ventilated classroom of our university, using only
+open-source software for the simulations. The answers to the questions of \cref{ch:intro} are:
+\begin{enumerate}
+  \item The method works with OpenFOAM. The pipeline from the room geometry to the trained model runs from
+        scripts.
+  \item My \cotwo{} solver reproduces OpenFOAM's own \cotwo{} within about 2\,\% when the flow is saved every
+        second. Saving it only every 10~s, as in the first dataset, caused differences of up to 45\,\% in fast
+        settings; the corrected dataset fixes this for the first 150~s. The forecast error is 4.5 times
+        (transition runs) to 10 times (direct runs) smaller than persistence, and the model trained on the
+        corrected data is more accurate on the corrected test data.
+  \item Running the cases on 4 cores is 2.7 times faster, and 450~s instead of 600~s would save another 25\,\%.
+        A lattice Boltzmann solver on the GPU was neither faster nor close enough to OpenFOAM. Among the available
+        software only ANSYS Fluent supports the same model fully on the GPU.
+  \item Training only from the equations did not reach a useful accuracy for this room (velocity error about
+        50\,\%).
+  \item For the real sensor data, the model has to work with few measurement points, window states and all
+        windows and doors (\cref{ch:sensors}).
+\end{enumerate}
+
+\section{Limitations}
+\begin{itemize}
+  \item After 150~s the \cotwo{} is computed on the mean flow. In strongly fluctuating settings this keeps too much
+        \cotwo{} in the room; in the paper's metric the difference stays at a few per cent.
+  \item The seating area is a placeholder until the real seating plan is known.
+  \item The dataset covers only W1, W3 and W6 with fixed doors.
+  \item The model has not yet been tested on real measurements.
+\end{itemize}
+
+\section{Outlook}
+\todo{sensor data, all windows and doors, control of the windows as in the paper}

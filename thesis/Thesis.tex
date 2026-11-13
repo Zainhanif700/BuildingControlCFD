@@ -1,0 +1,193 @@
+%% ----------------------------------------------------------------
+%% Thesis.tex -- MAIN FILE (template of the faculty; compile with: latexmk -pdf Thesis.tex)
+%% ----------------------------------------------------------------
+
+\documentclass[a4paper, 11pt, oneside]{Thesis}
+\graphicspath{{Figures/}}
+
+\usepackage[square, numbers, comma, sort&compress]{natbib}
+\usepackage{verbatim}
+\usepackage{vector}
+\usepackage{xcolor}
+\usepackage{array}
+\hypersetup{urlcolor=blue, colorlinks=true}
+
+% draft helpers (remove the TODO markers before submission)
+\newcommand{\todo}[1]{\textcolor{red}{[TODO: #1]}}
+\newcommand{\cotwo}{CO\textsubscript{2}}
+\newcommand{\figplaceholder}[1]{\fbox{\parbox{0.9\linewidth}{\centering\vspace{2em}\textcolor{gray}{Figure: #1}\vspace{2em}}}}
+
+%% ----------------------------------------------------------------
+\begin{document}
+\frontmatter
+
+\title  {Neural Operator based Air Flow and Pollutant Distribution Simulation for Indoor Air Quality}
+\authors  {Zain Hanif}
+\addresses  {\groupname\\\deptname\\\univname}
+\date       {\today}
+\subject    {Master's Thesis}
+\keywords   {indoor air quality, CO2 forecast, CFD, OpenFOAM, neural operator, GNOT}
+
+\maketitle
+%% ----------------------------------------------------------------
+
+\setstretch{1.3}
+
+\fancyhead{}
+\rhead{\thepage}
+\lhead{}
+
+\pagestyle{fancy}
+
+%% ----------------------------------------------------------------
+\Declaration{
+
+\addtocontents{toc}{\vspace{1em}}
+
+I, Zain Hanif, declare that this thesis titled, `Neural Operator based Air Flow and Pollutant Distribution Simulation
+for Indoor Air Quality', and the work presented in it are my own. I confirm that:
+
+\begin{itemize}
+\item[\tiny{$\blacksquare$}] This work was done wholly or mainly while in candidature for a research degree at this University.
+
+\item[\tiny{$\blacksquare$}] Where any part of this thesis has previously been submitted for a degree or any other qualification at this University or any other institution, this has been clearly stated.
+
+\item[\tiny{$\blacksquare$}] Where I have consulted the published work of others, this is always clearly attributed.
+
+\item[\tiny{$\blacksquare$}] Where I have quoted from the work of others, the source is always given. With the exception of such quotations, this thesis is entirely my own work.
+
+\item[\tiny{$\blacksquare$}] I have acknowledged all main sources of help.
+
+\item[\tiny{$\blacksquare$}] Where the thesis is based on work done by myself jointly with others, I have made clear exactly what was done by others and what I have contributed myself.
+\\
+\end{itemize}
+
+
+Signed:\\
+\rule[1em]{25em}{0.5pt}
+
+Date:\\
+\rule[1em]{25em}{0.5pt}
+}
+\clearpage
+
+%% ----------------------------------------------------------------
+\pagestyle{empty}
+
+\addtotoc{Abstract}
+\abstract{
+\addtocontents{toc}{\vspace{1em}}
+
+\input{Chapters/Abstract}
+
+}
+
+\clearpage
+%% ----------------------------------------------------------------
+
+\setstretch{1.3}
+
+\acknowledgements{
+\addtocontents{toc}{\vspace{1em}}
+
+\todo{acknowledgements: supervisor Prof.\ Matthias Wagner, the lab (Mr.\ Merkl), Dr.\ Butt, \ldots}
+
+}
+\clearpage
+%% ----------------------------------------------------------------
+
+\pagestyle{fancy}
+
+%% ----------------------------------------------------------------
+\lhead{\emph{Contents}}
+\tableofcontents
+
+%% ----------------------------------------------------------------
+\lhead{\emph{List of Figures}}
+\listoffigures
+
+%% ----------------------------------------------------------------
+\lhead{\emph{List of Tables}}
+\listoftables
+
+%% ----------------------------------------------------------------
+\setstretch{1.5}
+\clearpage
+\lhead{\emph{Abbreviations}}
+\listofsymbols{ll}
+{
+\textbf{CFD} & \textbf{C}omputational \textbf{F}luid \textbf{D}ynamics \\
+\textbf{GNOT} & \textbf{G}eneral \textbf{N}eural \textbf{O}perator \textbf{T}ransformer \\
+\textbf{GPU} & \textbf{G}raphics \textbf{P}rocessing \textbf{U}nit \\
+\textbf{LBM} & \textbf{L}attice \textbf{B}oltzmann \textbf{M}ethod \\
+\textbf{LES} & \textbf{L}arge-\textbf{E}ddy \textbf{S}imulation \\
+\textbf{PINN} & \textbf{P}hysics-\textbf{I}nformed \textbf{N}eural \textbf{N}etwork \\
+\textbf{RANS} & \textbf{R}eynolds-\textbf{A}veraged \textbf{N}avier--\textbf{S}tokes \\
+\textbf{SST} & \textbf{S}hear \textbf{S}tress \textbf{T}ransport (turbulence model) \\
+\textbf{WSN} & \textbf{W}ireless \textbf{S}ensor \textbf{N}etwork \\
+}
+
+%% ----------------------------------------------------------------
+\clearpage
+\lhead{\emph{Physical Constants}}
+\listofconstants{lrcl}
+{
+Kinematic viscosity of air & $\nu$ & $=$ & $1.5\times10^{-5}\ \mbox{m}^{2}\mbox{s}^{-1}$\\
+Molecular diffusivity of \cotwo{} in air & $D$ & $=$ & $1.6\times10^{-5}\ \mbox{m}^{2}\mbox{s}^{-1}$\\
+\cotwo{} in the outdoor air & $c_\mathrm{out}$ & $=$ & $400\ \mbox{ppm}$\\
+\cotwo{} in exhaled air & & $=$ & $40{,}000\ \mbox{ppm}$\\
+}
+
+%% ----------------------------------------------------------------
+\clearpage
+\lhead{\emph{Symbols}}
+\listofnomenclature{lll}
+{
+$c$ & \cotwo{} above the outdoor level & ppm \\
+$\mathbf{u}$ & air velocity & m\,s$^{-1}$ \\
+$k$ & turbulent kinetic energy & m$^{2}$\,s$^{-2}$ \\
+$S$ & \cotwo{} source of the people & ppm\,s$^{-1}$ \\
+$\mathrm{Sc}_t$ & turbulent Schmidt number & -- \\
+$V_i$ & inflow speed at window $i$ & m\,s$^{-1}$ \\
+& & \\
+$\nu_t$ & turbulent viscosity & m$^{2}$\,s$^{-1}$ \\
+$\omega$ & specific dissipation rate & s$^{-1}$ \\
+}
+
+%% ----------------------------------------------------------------
+\setstretch{1.3}
+
+\addtocontents{toc}{\vspace{2em}}
+
+%% ----------------------------------------------------------------
+\mainmatter
+\pagestyle{fancy}
+
+\input{Chapters/Chapter1}  % Introduction
+\input{Chapters/Chapter2}  % Background
+\input{Chapters/Chapter3}  % The room and the airflow simulations
+\input{Chapters/Chapter4}  % Building the CO2 dataset
+\input{Chapters/Chapter5}  % The forecast model
+\input{Chapters/Chapter6}  % Results
+\input{Chapters/Chapter7}  % Computing time and GPU alternatives
+\input{Chapters/Chapter8}  % Training without simulation data
+\input{Chapters/Chapter9}  % Towards real sensor data
+\input{Chapters/Chapter10} % Conclusion and outlook
+
+%% ----------------------------------------------------------------
+\addtocontents{toc}{\vspace{2em}}
+
+\appendix
+
+\input{Appendices/AppendixA}  % Parameters and code
+
+\addtocontents{toc}{\vspace{2em}}
+\backmatter
+
+%% ----------------------------------------------------------------
+\label{Bibliography}
+\lhead{\emph{Bibliography}}
+\bibliographystyle{unsrtnat}
+\bibliography{Bibliography}
+
+\end{document}

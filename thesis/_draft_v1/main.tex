@@ -1,0 +1,67 @@
+% Master's thesis, first draft. Compile: latexmk -pdf main.tex   (or pdflatex, bibtex, pdflatex, pdflatex)
+\documentclass[11pt,a4paper,oneside]{report}
+
+\usepackage[T1]{fontenc}
+\usepackage[utf8]{inputenc}
+\usepackage{lmodern}
+\usepackage[margin=2.5cm]{geometry}
+\usepackage{amsmath,amssymb}
+\usepackage{graphicx}
+\usepackage{booktabs}
+\usepackage{array}
+\usepackage{xcolor}
+\usepackage{setspace}
+\usepackage[numbers,sort&compress]{natbib}
+\usepackage[hidelinks]{hyperref}
+\usepackage{cleveref}
+
+\onehalfspacing
+\setlength{\parskip}{0.4em}
+\setlength{\parindent}{0pt}
+
+% open points in the draft, shown in red (remove before submission)
+\newcommand{\todo}[1]{\textcolor{red}{[TODO: #1]}}
+\newcommand{\cotwo}{CO\textsubscript{2}}
+\newcommand{\figplaceholder}[1]{\fbox{\parbox{0.9\linewidth}{\centering\vspace{2em}\textcolor{gray}{Figure: #1}\vspace{2em}}}}
+
+\begin{document}
+
+\begin{titlepage}
+  \centering
+  {\large Frankfurt University of Applied Sciences\\Faculty 2: Computer Science and Engineering\par}
+  \vspace{3cm}
+  {\LARGE\bfseries Neural Operator based Air Flow and Pollutant Distribution Simulation for Indoor Air Quality\par}
+  \vspace{1.5cm}
+  {\large Master's Thesis\par}
+  \vspace{1cm}
+  {\large Zain Hanif\par}
+  \vfill
+  {\large Supervisor: Prof.\ Matthias Wagner \todo{full title}\\
+  Second examiner: \todo{name}\\[1em]
+  \todo{study programme, matriculation number}\\
+  Draft of \today\par}
+\end{titlepage}
+
+\chapter*{Abstract}
+\input{chapters/00_abstract}
+
+\tableofcontents
+
+\input{chapters/01_introduction}
+\input{chapters/02_background}
+\input{chapters/03_room_and_simulation}
+\input{chapters/04_dataset}
+\input{chapters/05_forecast_model}
+\input{chapters/06_results}
+\input{chapters/07_computation}
+\input{chapters/08_physics_only}
+\input{chapters/09_sensor_data}
+\input{chapters/10_conclusion}
+
+\appendix
+\input{chapters/A_parameters}
+
+\bibliographystyle{plainnat}
+\bibliography{references}
+
+\end{document}

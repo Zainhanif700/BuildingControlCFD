@@ -1,0 +1,54 @@
+\chapter{Training without simulation data}
+\label{ch:pinn}
+
+\section{Idea}
+In the second approach the network never sees simulation data \citep{raissi2019,li2021pino}. At random points in
+the room it is told how much its prediction breaks the equations for airflow and \cotwo{}, and it is trained until
+the equations are almost fulfilled. Some rules are built into the network so that they always hold exactly: no air
+through the walls, the right amount of air through each window and door, the start from rest, and \cotwo{}
+proportional to the number of people. The inputs are the 8 window speeds, the number of people and the time (up to
+2~minutes), and the output is the air velocity and the \cotwo{} everywhere in the room.
+
+\begin{table}[h]
+  \centering
+  \caption{Settings of the physics-only approach.}
+  \label{tab:pinn}
+  \begin{tabular}{>{\raggedright}p{4cm}p{9.7cm}}
+    \toprule
+    Item & Setting\\
+    \midrule
+    Network & GNOT, about 322,000 parameters, 2 cross-attention blocks, width 128\\
+    Inputs & 8 window speeds (0--5~m/s), number of people (0--50), time (0--120~s)\\
+    Equations & incompressible Navier--Stokes without turbulence model, constant viscosity 0.01~m\textsuperscript{2}/s;
+                \cotwo{} advection--diffusion with $D=0.005$~m\textsuperscript{2}/s\\
+    Training & 1,000 random points per step, Adam (learning rate $10^{-3}$), 20,000--50,000 steps\\
+    Reference & OpenFOAM solution of the same equations, window~1 at 1~m/s, 10~cm grid\\
+    \bottomrule
+  \end{tabular}
+\end{table}
+
+\section{What happened}
+I compared every version with an OpenFOAM solution of the same equations, and also checked a closed room, where
+the exact \cotwo{} solution is known. Over 25 versions I fixed several problems (\cref{tab:pinnfix}).
+
+\begin{table}[h]
+  \centering
+  \caption{Problems found in the physics-only approach.}
+  \label{tab:pinnfix}
+  \begin{tabular}{>{\raggedright}p{6.5cm}p{7.2cm}}
+    \toprule
+    Problem & What I did\\
+    \midrule
+    \cotwo{} stayed at zero & rescaled all quantities so that every term has a similar size\\
+    air leaked through the walls & built the wall and window rules into the network\\
+    the sharp edges of the incoming jets could not be learned & smoothed the built-in base flow inside the room\\
+    the network found a too smooth flow that still fits the equations & gave the wall condition more weight\\
+    \bottomrule
+  \end{tabular}
+\end{table}
+
+The velocity error against OpenFOAM fell from 74\,\% to about 50\,\% and then stopped improving; between 30,000
+and 50,000 training steps nothing changed. The total amount of \cotwo{} is about right, but it is in the wrong
+places, because the predicted airflow is too slow. One training run took about 17~hours on the GPU. Such wrong but
+equation-fitting solutions are a known problem of physics-only training \todo{reference}. For our room this
+approach is not accurate enough, and the rest of the thesis uses the CFD data.
