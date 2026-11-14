@@ -1,10 +1,12 @@
-Opening windows is the simplest way to bring fresh air into a classroom, but it costs heating energy, and
-without measurements nobody knows how long the windows really need to be open. A model that predicts how
-the \cotwo{} in the room will develop in the next minutes could help to open the windows only as much as
-needed. In this thesis I apply the method of \citet{bian2025} to a real classroom of our university. I
-simulate the airflow in the room with OpenFOAM (k-$\omega$ SST turbulence model), compute the \cotwo{}
-from the people in the room with my own GPU solver, and train a neural operator (GNOT) that uses the
-\cotwo{} of the last 6~minutes to forecast the next 3~minutes.
+Opening the windows is the simplest way to bring fresh air into a classroom. In cold weather, however, the
+warm room air flows out and the heating needs more energy, and without measurements nobody knows how long the
+windows really have to be open. A model that predicts how the \cotwo{} in the room will develop in the next
+minutes could help to open the windows only as long as needed. In this thesis I apply the method of
+\citet{bian2025} to a real classroom of our university. I first reproduced their results with their published
+code and data (ensemble error 11.46\,\% against 10.90\,\% in the paper). Then I simulate the airflow in our room
+with OpenFOAM (k-$\omega$ SST turbulence model), compute the \cotwo{} from the people in the room with my own
+GPU solver, and train a neural operator (GNOT) that uses the \cotwo{} of the last 6~minutes to forecast the next
+3~minutes. Only the \cotwo{} is forecast; temperature and heating energy are not modelled.
 
 For the current setup of the room (windows W1, W3 and W6, 28 window settings) the forecast error is
 4.5 times smaller than when assuming that the \cotwo{} stays the same for the paper-like runs that start
@@ -16,5 +18,9 @@ I also tested whether the simulations can run on the GPU: a lattice Boltzmann so
 faster nor close enough to OpenFOAM, and from the other software I checked only a commercial code
 supports the same turbulence model fully on the GPU. A second approach that trains the network only from
 the equations, without simulation data, did not reach a useful accuracy.
+
+I am currently extending the simulations to a larger set in which almost all windows and both doors can be
+open or closed, and I am preparing the use of the real sensor data of the wireless sensor network that is
+being installed in the room.
 
 \todo{update the numbers once the transition comparison and the sensor work are finished}

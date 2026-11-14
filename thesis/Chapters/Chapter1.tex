@@ -2,18 +2,31 @@
 \label{ch:intro}
 
 \section{Motivation}
-In a full classroom the \cotwo{} that the people breathe out builds up quickly. High \cotwo{} levels are
-a sign of stale air and are linked to tiredness and poorer concentration \todo{reference on CO2 and
-cognitive performance}. The usual answer is to open the windows. This works, but in winter every open
-window lets heat out, and since most rooms have no sensors, nobody knows how long and how far the windows
-need to be open.
+People breathe out carbon dioxide (\cotwo{}). In a closed room the \cotwo{} therefore builds up, and it builds
+up faster the more people are in the room. A full classroom is a typical example. The amount of \cotwo{} in
+the air is given in ppm (parts per million); outdoors it is about 400~ppm. High values mean that a lot of
+exhaled air is in the room. They are linked to tiredness and poorer concentration \todo{reference on CO2 and
+cognitive performance}. \cotwo{} cannot be seen or smelled, so people in the room do not notice it directly.
+
+The simplest way to lower the \cotwo{} is to open the windows, so that fresh air comes in and the used air
+leaves. This works, but it has a cost. In cold weather the warm room air flows out and cold air flows in, so
+the heating needs more energy to keep the room warm. The windows should therefore be open as long as needed,
+and no longer. Since most rooms have no sensors, nobody knows how long that is.
 
 A model that forecasts the \cotwo{} in the room a few minutes ahead could help with this decision. With
 such a forecast, the windows could be opened only when the \cotwo{} is about to become too high, and
-closed again as soon as it is safe. Computing the airflow in the room with computational fluid dynamics
-(CFD) is accurate, but one simulation takes hours, which is far too slow for a decision every few minutes.
-\citet{bian2025} showed that a neural operator trained on CFD results can forecast the \cotwo{} in a
-classroom within a fraction of a second and can be used for control.
+closed again as soon as it is safe. In this thesis I only forecast the \cotwo{}. The temperature and the
+heating energy are not modelled; the forecast tells when the \cotwo{} will become too high, which is what
+decides when the windows have to be opened.
+
+How can such a forecast be made? One way is a computer simulation of the airflow in the room, called
+computational fluid dynamics (CFD). The room is cut into many small cells, and the program calculates the air
+speed in every cell, step by step in time. This is accurate, but one simulation takes hours, which is far too
+slow for a decision every few minutes. \citet{bian2025} showed a way around this: they ran many simulations
+once, in advance, and trained a neural network on the results. A neural network is a computer program with
+many adjustable numbers that learns from examples; after the training it answers in a fraction of a second.
+Their network (a neural operator, see \cref{ch:background}) forecasts the \cotwo{} in a classroom and was
+used to choose ventilation settings.
 
 \section{Goal of this thesis}
 The goal of this thesis is to apply the method of \citet{bian2025} to a real classroom of our university,
@@ -24,34 +37,46 @@ these questions:
   \item Can the method be transferred to our room with open-source software (OpenFOAM instead of
         ANSYS Fluent)?
   \item How accurate is the generated training data, and how accurate is the forecast?
+  \item Does the approach also work when almost all windows and both doors can be opened and closed, as in
+        the real room?
   \item Can the simulations be made faster, for example by running them on the GPU?
   \item Can the network be trained from the equations alone, without simulation data?
   \item What is needed to use the model with the real sensor data?
 \end{enumerate}
 
 \section{Approach}
-\fref{fig:pipeline} shows the pipeline. For every window setting I simulate the airflow in the room with
-OpenFOAM. From this airflow my own GPU solver computes the \cotwo{} of the people in the room for
-30~minutes. The forecast model, a GNOT-type neural operator, is trained on these results: it receives the
-\cotwo{} at 1.6~m height over the last 6~minutes, the window speeds and the number of people, and predicts
-the \cotwo{} for the next 3~minutes.
+The idea of the method is to do the slow work once, in advance, and to use the results to train a fast
+model. \fref{fig:pipeline} shows the steps. For every window setting (which windows are open and how fast the
+air comes in) I simulate the airflow in the room with OpenFOAM, a free CFD program. From this airflow my own
+program, which runs on the graphics card (GPU), computes how the \cotwo{} of 20 people spreads in the room
+over 30~minutes. These \cotwo{} maps form the dataset. The forecast model, a neural network of the type GNOT,
+is trained on it: it receives the \cotwo{} at 1.6~m height over the last 6~minutes, the window speeds and the
+number of people, and predicts the \cotwo{} for the next 3~minutes. After the training, a forecast takes only
+a fraction of a second.
 
 \begin{figure}[h]
   \centering
-  \figplaceholder{pipeline: room geometry $\rightarrow$ OpenFOAM airflow $\rightarrow$ own \cotwo{} solver
-  (GPU) $\rightarrow$ dataset $\rightarrow$ GNOT training $\rightarrow$ forecast}
-  \caption{Overview of the pipeline. \todo{draw}}
+  \includegraphics[width=\textwidth]{pipeline.png}
+  \caption{Overview of the pipeline. Steps 1 to 4 are done once for every window setting, in advance. Step 5
+  trains the model on all settings, and step 6 is the fast forecast.}
   \label{fig:pipeline}
 \end{figure}
+
+So far I have simulated two sets of window settings (\cref{ch:room}). At the moment I am running a third,
+larger set in which almost all windows and both doors can be open or closed, as in the real room. It is
+described as work in progress at the end of \cref{ch:room}; the results will be added later.
 
 \section{Contributions}
 \begin{itemize}
   \item A complete, scripted pipeline from the room geometry to the trained forecast model, built only on
         open-source software.
+  \item A reproduction of the results of \citet{bian2025} with their published code and data.
   \item A mass-conserving GPU solver for the \cotwo{} that reproduces OpenFOAM's own \cotwo{} within about
         2\,\%, and a study of how often the airflow has to be saved to reach this accuracy.
   \item A corrected dataset for the current room setup and a comparison of models trained on the old and the
         corrected data.
+  \item A larger set of settings in which almost all windows and both doors can be open or closed (in
+        progress).
   \item A test of GPU alternatives to OpenFOAM, including an own lattice Boltzmann solver, and a survey of
         the available software.
   \item A test of training without simulation data (physics-informed), which shows the limits of this idea

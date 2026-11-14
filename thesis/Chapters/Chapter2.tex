@@ -1,26 +1,40 @@
 \chapter{Background}
 \label{ch:background}
 
+This chapter explains the ideas that the rest of the thesis builds on: how \cotwo{} behaves in a room, how a
+computer can simulate the air in a room, and what a neural operator is.
+
 \section{\cotwo{} in classrooms}
-People breathe out air with about 40,000~ppm \cotwo{}, while the outdoor air has about 400~ppm. In a closed
-room the \cotwo{} therefore rises as long as people are inside, and it can only fall when fresh air comes
-in. In this thesis, as in \citet{bian2025}, each person breathes out 6~L/min, so 20 people add about
-79~ppm\,m\textsuperscript{3} of \cotwo{} per second above the outdoor level.
+People breathe out air with about 40,000~ppm \cotwo{}, while the outdoor air has about 400~ppm. (The unit ppm
+means parts per million, so 40,000~ppm is 4\,\% of the air.) In a closed room the \cotwo{} therefore rises as
+long as people are inside, and it can only fall when fresh air comes in. In this thesis, as in
+\citet{bian2025}, each person breathes out 6~L/min, so 20 people add about 79~ppm\,m\textsuperscript{3} of
+\cotwo{} per second above the outdoor level. For our room of about 450~m\textsuperscript{3} this is roughly
+10~ppm more per minute in a closed room, if the air were mixed perfectly (my own calculation).
 \todo{guideline values for CO2 in classrooms, e.g. 1000 ppm, with reference}
 
 \section{Airflow simulation}
-The airflow in a room is described by the incompressible Navier--Stokes equations. At the speeds that come
-through an open window the flow is turbulent, and the small eddies cannot be resolved on a mesh of the
-whole room. In Reynolds-averaged (RANS) models only the mean flow is computed, and the effect of the eddies
-is described by a turbulent viscosity $\nu_t$. I use the k-$\omega$ SST model of \citet{menter1994}, which
-is also used by \citet{bian2025} and is common for indoor airflow. It solves two extra equations, one for the
-turbulent kinetic energy $k$ and one for its specific dissipation rate $\omega$, and computes $\nu_t$ from
-them. Near walls it behaves like a k-$\omega$ model and in the open room like a k-$\varepsilon$ model.
+To know where the \cotwo{} goes, one has to know how the air moves. A computer can calculate this. In
+computational fluid dynamics (CFD), the room is cut into many small cells (the mesh), and the program
+calculates the air velocity and the pressure in every cell, step by step in time. The equations behind this
+are the incompressible Navier--Stokes equations: they say that no air is lost and that the air moves
+according to the forces on it, such as pressure differences and friction. (Incompressible means that the
+density of the air is treated as constant.)
 
-The simulations are done with OpenFOAM \citep{weller1998}, version v2412 from openfoam.com, with the
-transient solver \texttt{pimpleFoam}. Even though RANS describes the mean flow, the transient solution of
-our room does not become fully steady: the jets from the open windows keep moving, and the flow fluctuates
-around a mean pattern (\cref{ch:dataset}).
+At the speeds that come through an open window the flow is turbulent: it forms many small, irregular eddies.
+The cells of a mesh for a whole room are much larger than the smallest eddies, so these cannot be calculated
+directly. In Reynolds-averaged (RANS) models only the average flow is computed, and the effect of the eddies
+is described by an additional turbulent viscosity $\nu_t$ (a kind of extra internal friction of the air). I
+use the k-$\omega$ SST model of \citet{menter1994}, which is also used by \citet{bian2025} and is common for
+indoor airflow. It solves two extra equations, one for the turbulent kinetic energy $k$ (the energy in the
+eddies) and one for its specific dissipation rate $\omega$ (how fast this energy is turned into heat), and
+computes $\nu_t$ from them. Near walls it behaves like a k-$\omega$ model and in the open room like a
+k-$\varepsilon$ model.
+
+The simulations are done with OpenFOAM \citep{weller1998}, a free CFD program, version v2412 from
+openfoam.com, with the transient solver \texttt{pimpleFoam}. Even though RANS describes the mean flow, the
+transient solution of our room does not become fully steady: the jets from the open windows keep moving, and
+the flow fluctuates around a mean pattern (\cref{ch:dataset}).
 
 A different way to simulate the flow is the lattice Boltzmann method \citep{kruger2017}, which is well suited
 for GPUs. It is usually combined with a large-eddy simulation (LES), in which the large eddies are resolved
@@ -28,7 +42,8 @@ and only the smallest ones are modelled, for example with the model of \citet{sm
 idea as a faster alternative in \cref{ch:computation}.
 
 \section{\cotwo{} transport}
-The \cotwo{} is carried by the air (advection) and mixed by molecular and turbulent diffusion:
+The \cotwo{} at a point changes for three reasons: the air carries it along (advection), it spreads out by
+itself and through the eddies (diffusion), and the people add new \cotwo{} (source). In an equation:
 \begin{equation}
   \frac{\partial c}{\partial t} + \nabla\cdot(\mathbf{u}\,c) = \nabla\cdot\big((D + \nu_t/\mathrm{Sc}_t)\,\nabla c\big) + S,
   \label{eq:co2}
@@ -38,22 +53,29 @@ diffusivity of \cotwo{} in air, $\mathrm{Sc}_t$ the turbulent Schmidt number and
 people. The equation is linear in $c$, so the \cotwo{} grows exactly in proportion to the number of people.
 Because \cotwo{} does not change the airflow, the flow can be computed first and the \cotwo{} afterwards.
 
-\section{Neural operators}
-A neural operator learns a map between functions, for example from the \cotwo{} field now to the \cotwo{}
-field in three minutes, instead of a map between fixed vectors \citep{li2021fno}. GNOT \citep{hao2023gnot}
-is a transformer-based neural operator: the points where the output is wanted (queries) exchange
-information with the input data through attention. It works on unstructured point sets, which suits a room
-with columns and irregular measurement points.
+\section{Neural networks and neural operators}
+A neural network is a computer program with many adjustable numbers. It learns from examples: it is shown
+inputs together with the correct answers, and its numbers are adjusted until its answers come close to the
+correct ones (training). After the training it can answer for new inputs, and it does so very fast.
+
+Most networks map a short list of numbers to another list of numbers. Here, the input and the output are not
+short lists but whole \cotwo{} maps of the room, with values at thousands of points. A neural operator is a
+network built for this: it learns a map between such fields, for example from the \cotwo{} map now to the
+\cotwo{} map in three minutes \citep{li2021fno}. GNOT \citep{hao2023gnot} is a neural operator of the
+transformer type: the points where an answer is wanted (queries) look at the input data through a mechanism
+called attention, which lets each point decide which input values matter most for it. It works on
+unstructured point sets, which suits a room with columns and irregular measurement points.
 
 \section{The method of Bian and Shi}
 \citet{bian2025} simulated a classroom at UC San Diego with ceiling vents in ANSYS Fluent (k-$\omega$ SST).
-They ran 300 simulations of 30~minutes with different vent settings, each starting from the steady state of
-another setting, and trained a GNOT model that uses the \cotwo{} of the last 6~minutes to forecast the next
-3~minutes, with an uncertainty from a Gaussian likelihood. With an ensemble of five networks they reach a
-test error of 10.9\,\% in their metric, and they use the model to choose vent settings that keep the
-\cotwo{} low with little energy. \todo{check all numbers against the paper}
+They ran 300 simulations of 30~minutes with different vent settings, each starting from a steady state
+computed for one of 10 vent settings, and trained a GNOT model that uses the \cotwo{} of the last 6~minutes to
+forecast the next 3~minutes, with an uncertainty from a Gaussian likelihood. With an ensemble of five networks
+(five networks trained separately, whose forecasts are averaged) they reach a test error of 10.9\,\% in their
+metric, and they use the model to choose vent settings that keep the \cotwo{} low with little energy.
 
 \section{Physics-informed learning}
-Instead of learning from simulation data, a network can be trained to fulfil the equations themselves at
-random points of the domain \citep{raissi2019}. This idea was also extended to neural operators
-\citep{li2021pino}. I tried it for our room in \cref{ch:pinn}.
+Instead of learning from simulation data, a network can be trained to obey the physical equations
+themselves: at many random points of the domain, the network is told how much its answer violates the
+equations, and it is adjusted to reduce this \citep{raissi2019}. This idea was also extended to neural
+operators \citep{li2021pino}. I tried it for our room in \cref{ch:pinn}.

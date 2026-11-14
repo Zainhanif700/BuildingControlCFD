@@ -27,7 +27,33 @@ through the windows. The advection is computed in flux form with a minmod-limite
 outflow. The time integration is a three-stage strong-stability-preserving Runge--Kutta scheme with a time
 step limited by the Courant number (0.5) and by the diffusion. The diffusivity is $D+\nu_t/\mathrm{Sc}_t$
 (\eref{eq:co2}). Fresh air enters with \cotwo{}~$=0$ (outdoor level), and \cotwo{} leaves through the door
-with the outflowing air. \todo{short validation of the solver itself: closed room / mass balance tests}
+with the outflowing air.
+
+I checked the solver with five tests (\tref{tab:solvertests}).
+
+\begin{table}[h]
+  \centering
+  \caption{Tests of the mass-conserving \cotwo{} solver.}
+  \label{tab:solvertests}
+  \begin{tabular}{>{\raggedright}p{7cm}>{\raggedright\arraybackslash}p{6.7cm}}
+    \toprule
+    Test & Result\\
+    \midrule
+    no flow: same result as my first \cotwo{} solver & largest difference 0\\
+    flow correction: divergence-free, and the air through the door equals the air through the windows
+      & largest relative divergence $1.2\times10^{-11}$; 2.8823 in and 2.8822 out
+        (expected 2.8822~m\textsuperscript{3}/s)\\
+    uniform \cotwo{} in a closed room with a swirling flow & stays uniform, largest deviation $4.5\times10^{-10}$\\
+    closed room with a source & \cotwo{} amount = start amount + injected amount (ratio 1.0000000000)\\
+    no negative values (limiter) & smallest value $2.3\times10^{-3}$ in the test case\\
+    \bottomrule
+  \end{tabular}
+\end{table}
+
+My first \cotwo{} solver had no such limiter. In the first dataset it produced small negative values, down
+to $-15$~ppm. In one case after 30~minutes, the cells below $-1$~ppm were 1.3\,\% of the cells, and the
+negative amount was 0.08\,\% of the total \cotwo{}. In the tests, the new solver does not produce
+negative values.
 
 \section{Checks against OpenFOAM}
 OpenFOAM computes the \cotwo{} itself on its own flow. I use this as the reference and compare it with my
@@ -42,6 +68,25 @@ solver mass-conserving and using a turbulent Schmidt number of $\mathrm{Sc}_t=0.
 that was simulated in OpenFOAM for the full 30~minutes, my \cotwo{} stayed within about 3\,\% of OpenFOAM's
 over the whole time.
 
+I chose the Schmidt number on three cases of the first setup (\tref{tab:sct}). The values from 0.25 to 0.35
+all give clearly lower errors than 0.7, so I used 0.3 in the middle.
+
+\begin{table}[h]
+  \centering
+  \caption{Choice of the turbulent Schmidt number (first setup, 10~cm mesh): difference to OpenFOAM's
+  \cotwo{} at 10~min in the paper's metric, at 1.1~m / 1.6~m height.}
+  \label{tab:sct}
+  \begin{tabular}{lrrr}
+    \toprule
+    $\mathrm{Sc}_t$ & 3 windows, 1~m/s & 3 windows, 0.5~m/s & 8 windows, 0.5~m/s\\
+    \midrule
+    0.70 & 7.3 / 6.5\,\% & 6.1 / 5.6\,\% & 2.9 / 2.4\,\%\\
+    0.35 & 4.6 / 3.8\,\% & 4.2 / 4.0\,\% & 1.9 / 1.2\,\%\\
+    0.25 & 4.0 / 3.0\,\% & 4.2 / 3.8\,\% & 2.7 / 1.4\,\%\\
+    \bottomrule
+  \end{tabular}
+\end{table}
+
 \section{Reproducibility and simulated time}
 To check that the data can be reproduced, I simulated setting N10 a second time
 and built its dataset again. The \cotwo{} of both runs differs by 1.1\,\% over all points and times, and by
@@ -52,8 +97,8 @@ changes the \cotwo{} by 3.1\,\% (paper's metric at most 0.48\,\%) and would make
 \section{The save interval of the flow}
 Comparing all 28 settings with OpenFOAM's \cotwo{} showed large differences in some settings with high
 window speeds, already when my solver used the real OpenFOAM flow without any averaging (for example
-114\,\% in N14 and 131\,\% in N28 after 600~s). The settings with these differences all have W1 and W3 open
-at high speed and a strongly fluctuating flow.
+114\,\% in N14 and 131\,\% in N28 after 600~s). The settings with these differences all have W1, W3 and W6 open
+at speeds between about 0.9 and 2~m/s and a strongly fluctuating flow.
 
 The reason was the save interval. OpenFOAM saved the flow every 10~s, and my solver interpolates linearly
 between the saves. At 2~m/s the air moves about 20~m in 10~s, more than the length of the room, so the saves

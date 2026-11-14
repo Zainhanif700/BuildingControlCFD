@@ -9,8 +9,10 @@ the opposite wall has 2 doors (1.06~m wide, 2.11~m high), and 4 round columns st
 
 \begin{figure}[h]
   \centering
-  \figplaceholder{top view of the room with windows, doors, columns and seating area}
-  \caption{The classroom. \todo{draw}}
+  \includegraphics[width=0.95\textwidth]{room_plan.png}
+  \caption{The classroom in the model, seen from above. The 8 windows W1 to W8 are on one long wall (the
+  numbers give the distance of the left edge of each window from the left wall), the 2 doors are on the
+  opposite wall, and the grey circles are the 4 columns. The dashed rectangle is the assumed seating area.}
   \label{fig:room}
 \end{figure}
 
@@ -126,3 +128,18 @@ the turbulent viscosity sets it to zero below $y^+\approx11$ (viscous sublayer) 
 above. They are least accurate in the buffer layer ($5\lesssim y^+\lesssim30$). Most wall cells are in
 the log-law range, and the flow directly at the walls is not the quantity of interest in this study.
 \todo{mention checkMesh result for the 8 cm mesh}
+
+\section{Next step: all windows and doors (work in progress)}
+In the setup above only three windows and one door can be open. In the real room all 8 windows and both
+doors can be opened, and in the real room six windows will get sensors while two will stay closed
+\todo{which two windows stay closed}. I am therefore running a larger set of settings in which almost all
+windows can be open and both doors can be open or closed:
+\begin{itemize}
+  \item each window is closed, an inlet (air comes in at 0.2--2.0~m/s) or an outlet (air leaves through it);
+  \item each door is open or closed;
+  \item every setting has at least one inlet and one outlet, because the air that comes in has to leave again.
+\end{itemize}
+The set contains 68 settings: the 28 settings from above plus 40 new ones, 10 for each of the four
+combinations of the two doors. These simulations use the same OpenFOAM setup as above, with the flow saved
+every second for the first 150~s (\cref{ch:dataset}). They are still running. The results, and a model trained
+on them, will be added here. \todo{results of the runs with all windows and doors}
