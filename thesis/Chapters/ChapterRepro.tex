@@ -1,0 +1,58 @@
+\chapter{Reproducing the paper}
+\label{ch:repro}
+
+Before changing anything, I ran the published code and data of \citet{bian2025} on our lab computer
+(NVIDIA RTX A2000, 12~GB) to check that I can reach their accuracy.
+
+\section{Setup}
+The authors' dataset contains 3,893 training and 1,126 test samples. Each sample holds the \cotwo{}
+at 7,492 points of the room for the last 12 time steps (6~minutes), the 13 control values (number of
+people and the airflow rate and angle of 6 vent groups) and the \cotwo{} of the next 6 time steps
+(3~minutes). The network (GNOT, 552,969 parameters) was trained for 200 epochs, which took about
+6~hours per network. I trained five networks with the seeds 2023 to 2027 and used their mean as
+the forecast, as in the paper.
+
+\section{Result}
+\tref{tab:repro} compares my networks with Table~3 of the paper (relative $\ell_2$ error).
+
+\begin{table}[h]
+  \centering
+  \caption{Reproduction of \citet{bian2025}: relative $\ell_2$ error of the single networks and of
+  the ensemble.}
+  \label{tab:repro}
+  \begin{tabular}{lrrrr}
+    \toprule
+     & \multicolumn{2}{c}{This work} & \multicolumn{2}{c}{Paper}\\
+     & Train & Test & Train & Test\\
+    \midrule
+    Network 1 & 5.85\,\% & 12.70\,\% & 6.35\,\% & 12.09\,\%\\
+    Network 2 & 5.88\,\% & 12.71\,\% & 6.33\,\% & 11.83\,\%\\
+    Network 3 & 5.84\,\% & 12.70\,\% & 6.33\,\% & 11.82\,\%\\
+    Network 4 & 5.92\,\% & 12.53\,\% & 6.35\,\% & 12.74\,\%\\
+    Network 5 & 5.81\,\% & 12.97\,\% & 6.33\,\% & 13.01\,\%\\
+    Ensemble  & 5.48\,\% & 11.46\,\% & 5.9\,\%  & 10.90\,\%\\
+    \bottomrule
+  \end{tabular}
+\end{table}
+
+The single networks are in the same range as in the paper (12.5--13.0\,\% against 11.8--13.0\,\%),
+and the ensemble is clearly better than every single network, as in the paper. My ensemble error is
+0.56 percentage points higher than the published one. One difference is the loss: the training
+script in the repository trains networks that predict only the mean \cotwo{} with a relative
+$\ell_2$ loss, while the paper's networks also predict a variance and are trained with a Gaussian
+negative log-likelihood. Different random seeds and hardware may also contribute.
+
+\section{Problems in the published code}
+To run the code I had to fix a few things:
+\begin{itemize}
+  \item the training script called the likelihood loss with the wrong arguments and stopped with
+        an error; I used the relative $\ell_2$ loss of the repository instead;
+  \item the variant with mean and variance output (GNOTE) failed because a tuple was treated as a
+        tensor, and its likelihood loss was never used;
+  \item a data file needed by the control notebook had been deleted in a later commit and had to be
+        taken from an older commit;
+  \item the notebooks expected a second GPU (\texttt{cuda:1});
+  \item the code only runs with specific package versions (PyTorch 2.3.0, DGL 2.2.1, NumPy below 2.0).
+\end{itemize}
+I packed the working version with a single evaluation command, so that it can be run again from
+the repository \todo{repository link}.
