@@ -2,92 +2,68 @@
 \label{ch:intro}
 
 \section{Motivation}
-People breathe out carbon dioxide (\cotwo{}). In a closed room the \cotwo{} therefore builds up, and it builds
-up faster the more people are in the room. A full classroom is a typical example. The amount of \cotwo{} in
-the air is given in ppm (parts per million); outdoors it is about 400~ppm. High values mean that a lot of
-exhaled air is in the room. They are linked to tiredness and poorer concentration \todo{reference on CO2 and
-cognitive performance}. \cotwo{} cannot be seen or smelled, so people in the room do not notice it directly.
+In a lecture with 40 or 50 students the air in the classroom gets bad quickly. The reason is the \cotwo{} that
+we breathe out. Outdoor air has about 400~ppm of \cotwo{}, and in a full room without fresh air the value can
+go above 1000~ppm within one lecture. In a study people made clearly worse decisions at 1000~ppm than at 600~ppm
+\citep{satish2012}, and the German Umweltbundesamt rates values below 1000~ppm as harmless and values above
+2000~ppm as not acceptable \citep{uba2008}. We cannot see or smell \cotwo{}, so normally nobody in the room
+notices it.
 
-The simplest way to lower the \cotwo{} is to open the windows, so that fresh air comes in and the used air
-leaves. This works, but it has a cost. In cold weather the warm room air flows out and cold air flows in, so
-the heating needs more energy to keep the room warm. The windows should therefore be open as long as needed,
-and no longer. Since most rooms have no sensors, nobody knows how long that is.
+In our classrooms the only way to get fresh air is to open the windows. In winter this is a problem, because
+the warm air goes out and the room has to be heated again. If we knew how the \cotwo{} will develop in the
+next minutes, we could open the windows at the right time and close them again when the air is good. For this
+we need a model that predicts the \cotwo{} in the room. In this thesis I only predict the \cotwo{}. The
+temperature and the heating energy are not part of the model.
 
-A model that forecasts the \cotwo{} in the room a few minutes ahead could help with this decision. With
-such a forecast, the windows could be opened only when the \cotwo{} is about to become too high, and
-closed again as soon as it is safe. In this thesis I only forecast the \cotwo{}. The temperature and the
-heating energy are not modelled; the forecast tells when the \cotwo{} will become too high, which is what
-decides when the windows have to be opened.
-
-How can such a forecast be made? One way is a computer simulation of the airflow in the room, called
-computational fluid dynamics (CFD). The room is cut into many small cells, and the program calculates the air
-speed in every cell, step by step in time. This is accurate, but one simulation takes hours, which is far too
-slow for a decision every few minutes. \citet{bian2025} showed a way around this: they ran many simulations
-once, in advance, and trained a neural network on the results. A neural network is a computer program with
-many adjustable numbers that learns from examples; after the training it answers in a fraction of a second.
-Their network (a neural operator, see \cref{ch:background}) forecasts the \cotwo{} in a classroom and was
-used to choose ventilation settings.
+The airflow in a room can be calculated with computational fluid dynamics (CFD), but one simulation takes
+many hours, so it cannot be used while a lecture is running. \citet{bian2025} solved this for a classroom with
+ceiling vents. They ran many CFD simulations before, trained a neural network on the results, and this
+network gives a prediction in less than a second.
 
 \section{Goal of this thesis}
-The goal of this thesis is to apply the method of \citet{bian2025} to a real classroom of our university,
-which is ventilated through windows instead of ceiling vents, and to prepare it for the real sensor data of
-the wireless sensor network (WSN) that is being installed in the room. In particular I want to answer
-these questions:
-\begin{enumerate}
-  \item Can the method be transferred to our room with open-source software (OpenFOAM instead of
-        ANSYS Fluent)?
-  \item How accurate is the generated training data, and how accurate is the forecast?
-  \item Does the approach also work when almost all windows and both doors can be opened and closed, as in
-        the real room?
-  \item Can the simulations be made faster, for example by running them on the GPU?
-  \item Can the network be trained from the equations alone, without simulation data?
-  \item What is needed to use the model with the real sensor data?
-\end{enumerate}
+The goal of this thesis is to use the method of \citet{bian2025} for classroom 1-130 of our university. This
+room has no ceiling vents. It is ventilated through 8 windows and 2 doors. A wireless sensor network (WSN) is
+being installed in the room, and later the model should work with the data of these sensors. I use only
+open-source software, with OpenFOAM for the simulations instead of ANSYS Fluent.
 
 \section{Approach}
-The idea of the method is to do the slow work once, in advance, and to use the results to train a fast
-model. \fref{fig:pipeline} shows the steps. For every window setting (which windows are open and how fast the
-air comes in) I simulate the airflow in the room with OpenFOAM, a free CFD program. From this airflow my own
-program, which runs on the graphics card (GPU), computes how the \cotwo{} of 20 people spreads in the room
-over 30~minutes. These \cotwo{} maps form the dataset. The forecast model, a neural network of the type GNOT,
-is trained on it: it receives the \cotwo{} at 1.6~m height over the last 6~minutes, the window speeds and the
-number of people, and predicts the \cotwo{} for the next 3~minutes. After the training, a forecast takes only
-a fraction of a second.
+I run OpenFOAM simulations of the room and use this data to train the GNOT model. \fref{fig:pipeline} shows
+the steps. One simulation belongs to one window scenario, which says which windows are open and how fast the
+air comes in. OpenFOAM calculates the airflow, and my own \cotwo{} solver calculates from this airflow how the
+\cotwo{} of the people spreads in the room over 30~minutes. The model is trained on these \cotwo{} maps. It
+gets the \cotwo{} of the last 6~minutes at 1.6~m height, the window speeds and the number of people, and it
+predicts the \cotwo{} of the next 3~minutes. I use 1.6~m, which is about the head height of a standing person. The \cotwo{} is
+stored for the whole room, so another height can be used later without new simulations.
 
 \begin{figure}[h]
   \centering
   \includegraphics[width=\textwidth]{pipeline.png}
-  \caption{Overview of the pipeline. Steps 1 to 4 are done once for every window setting, in advance. Step 5
-  trains the model on all settings, and step 6 is the fast forecast.}
+  \caption{Steps from the room to the forecast.}
   \label{fig:pipeline}
 \end{figure}
 
-So far I have simulated two sets of window settings (\cref{ch:room}). At the moment I am running a third,
-larger set in which almost all windows and both doors can be open or closed, as in the real room. It is
-described as work in progress at the end of \cref{ch:room}; the results will be added later.
+I simulated the room in three steps. In the first setup the windows were opened in three groups and both
+doors were open (39 scenarios). In the second setup only the windows W1, W3 and W6 can be opened and door~1 is
+open (28 scenarios). Most results in this thesis are from this setup. In the third setup all 8 windows and
+both doors can be open or closed. These 40 scenarios are running at the moment. \fref{fig:room} in
+\cref{ch:room} shows where the windows and doors are.
 
-\section{Contributions}
+\section{What I did}
 \begin{itemize}
-  \item A complete, scripted pipeline from the room geometry to the trained forecast model, built only on
-        open-source software.
-  \item A reproduction of the results of \citet{bian2025} with their published code and data.
-  \item A mass-conserving GPU solver for the \cotwo{} that reproduces OpenFOAM's own \cotwo{} within about
-        2\,\%, and a study of how often the airflow has to be saved to reach this accuracy.
-  \item A corrected dataset for the current room setup and a comparison of models trained on the old and the
-        corrected data.
-  \item A larger set of settings in which almost all windows and both doors can be open or closed (in
-        progress).
-  \item A test of GPU alternatives to OpenFOAM, including an own lattice Boltzmann solver, and a survey of
-        the available software.
-  \item A test of training without simulation data (physics-informed), which shows the limits of this idea
-        for our room.
+  \item I reproduced the results of \citet{bian2025} with their code and data.
+  \item I built the complete chain from the room geometry to the trained model with open-source software.
+  \item I wrote a \cotwo{} solver for the GPU that matches the \cotwo{} of OpenFOAM within about 2\,\%, and I
+        found out how often the airflow has to be saved for this.
+  \item I built the dataset a second time with this correction and compared the models trained on the old and
+        on the new data.
+  \item I started the simulations with all windows and doors.
+  \item I tested faster simulations, a GPU solver and training without simulation data. These did not become
+        part of the final method.
 \end{itemize}
 
 \section{Structure}
-\cref{ch:background} gives the background on CFD, turbulence modelling and neural operators.
-\cref{ch:repro} reproduces the results of \citet{bian2025} with their published code and data.
-\cref{ch:room} describes the room and the OpenFOAM simulations, and \cref{ch:dataset} how the \cotwo{}
-dataset is built and checked. \cref{ch:model} describes the forecast model and \cref{ch:results} its
-results. \cref{ch:sensors} describes the preparation for the real sensor data. \cref{ch:notused} describes
-ideas that I tested and did not use: faster simulations, the GPU, and training without simulation data.
-\cref{ch:conclusion} summarises the results.
+The thesis follows the order of the work. After the background in \cref{ch:background}, \cref{ch:repro}
+shows the reproduction of the paper. \cref{ch:room} is about the room and the OpenFOAM simulations and
+\cref{ch:dataset} about the \cotwo{} dataset. The model is described in \cref{ch:model} and its results in
+\cref{ch:results}. \cref{ch:sensors} is about the sensor data, \cref{ch:notused} about the things I tested
+and did not use, and \cref{ch:conclusion} is the conclusion.

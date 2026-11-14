@@ -1,8 +1,8 @@
 \chapter{Reproducing the paper}
 \label{ch:repro}
 
-Before changing anything, I ran the published code and data of \citet{bian2025} on our lab computer
-(NVIDIA RTX A2000, 12~GB) to check that I can reach their accuracy.
+Before I changed anything, I ran the published code and data of \citet{bian2025} on our lab computer
+(NVIDIA RTX A2000, 12~GB). I wanted to see if I get the same accuracy as in the paper.
 
 \section{Setup}
 The authors' dataset contains 3,893 training and 1,126 test samples. Each sample holds the \cotwo{}
@@ -17,8 +17,7 @@ the forecast, as in the paper.
 
 \begin{table}[h]
   \centering
-  \caption{Reproduction of \citet{bian2025}: relative $\ell_2$ error of the single networks and of
-  the ensemble.}
+  \caption{My networks compared with the paper.}
   \label{tab:repro}
   \begin{tabular}{lrrrr}
     \toprule
@@ -54,5 +53,6 @@ To run the code I had to fix a few things:
   \item the notebooks expected a second GPU (\texttt{cuda:1});
   \item the code only runs with specific package versions (PyTorch 2.3.0, DGL 2.2.1, NumPy below 2.0).
 \end{itemize}
-I packed the working version with a single evaluation command, so that it can be run again from
-the repository \todo{repository link}.
+The version with these fixes is in my repository
+(\url{https://github.com/Zainhanif700/BuildingControlCFD}). The script \texttt{scripts/run\_evaluation.sh}
+runs the evaluation of the five networks.

@@ -1,110 +1,108 @@
 \chapter{Approaches I tested and did not use}
 \label{ch:notused}
 
-During the work I tested several ideas that did not become part of the final pipeline. I describe them
-briefly here, with the reason why I did not use them.
+During the work I tested some ideas that are not part of the final method. I describe them shortly and say
+why I did not use them.
 
 \section{Making the simulations faster}
-The OpenFOAM simulations are the slowest part of the pipeline: one setting of 600~s took 15--90~hours on one
-CPU core of our lab computer, depending on the window speeds (faster air needs smaller time steps). The
-\cotwo{} solver and the training run on the GPU: computing the \cotwo{} of one setting takes 1.25--4~hours, and
-training the 5 networks about 1.5~hours. \tref{tab:speed} shows what I tried on the slowest setting (N12, all
-three windows at 2~m/s).
+The OpenFOAM simulations are the slowest part. One scenario of 600~s took between 15 and 90~hours on one CPU
+core of our lab computer. Scenarios with faster air take longer, because they need smaller time steps. The
+\cotwo{} solver and the training run on the GPU and are much faster. The \cotwo{} of one scenario takes 1.25 to
+4~hours and the training of the 5 networks about 1.5~hours. \tref{tab:speed} shows what I tried with the
+slowest scenario N12, where all three windows are open at 2~m/s.
 
 \begin{table}[h]
   \centering
-  \caption{Speed tests on setting N12.}
+  \caption{Speed tests with scenario N12.}
   \label{tab:speed}
   \begin{tabular}{>{\raggedright}p{5cm}rp{6.3cm}}
     \toprule
     Change & Speed-up & Result\\
     \midrule
-    4 cores instead of 1 & 2.7$\times$ & identical results; used when only few settings run\\
+    4 cores instead of 1 & 2.7$\times$ & same results\\
     450~s instead of 600~s & 1.33$\times$ & \cotwo{} 1.2--1.5\,\% different (N10: 3.1\,\%)\\
     300~s instead of 600~s & 2$\times$ & about 4\,\% different\\
-    Courant number 2 instead of 1 & 1.8$\times$ & flow about 20\,\% different; rejected\\
-    looser solver tolerances & 1.1$\times$ & not used\\
+    Courant number 2 instead of 1 & 1.8$\times$ & flow about 20\,\% different\\
+    looser solver tolerances & 1.1$\times$ & almost no gain\\
     \bottomrule
   \end{tabular}
 \end{table}
 
-For many settings it is most efficient to run one setting per core; I use 4 cores only for single or slow
-settings. A shorter simulated time of 450~s would save a quarter of the time with small differences, but I
-kept 600~s for all settings so that the whole dataset is consistent. The larger Courant number changes the
-flow too much, and looser tolerances hardly help.
+With many scenarios it is best to run one scenario on each core. I use 4 cores for one scenario only when few
+scenarios are left. A simulated time of 450~s would save a quarter of the time with small differences, but I
+kept 600~s for all scenarios so that the dataset is the same everywhere. The larger Courant number changes the
+flow too much.
+
+I also ran one short test on other computers. The first 20~s of scenario N10 on one core took 950~s on an
+Apple M5 Max and 4,197~s on an NVIDIA DGX Spark. On the DGX 20 scenarios were running at the same time, and on
+the Mac only this one, so the two numbers are not a direct comparison. A full run of N10 with 600~s took
+about 8~hours on the Mac.
 
 \section{Running the simulations on the GPU}
-To find out whether the simulations can be made much faster on the GPU, I wrote a lattice Boltzmann solver in
-PyTorch (D3Q19, regularised BGK collision with a Smagorinsky model \citep{smagorinsky1963,kruger2017}). It uses
-the same room, windows, door, columns and seating area. I tested setting N10 on a 4~cm lattice (7 million
-nodes) for 600~s and compared it with OpenFOAM:
+I wanted to know if the simulations can run much faster on the GPU. For this I wrote a lattice Boltzmann
+solver in PyTorch, with a Smagorinsky model for the turbulence \citep{smagorinsky1963,kruger2017}. It uses the
+same room. I ran scenario N10 for 600~s on a lattice with 4~cm cells and compared it with OpenFOAM:
 \begin{itemize}
-  \item it took 7.3~hours on the RTX A2000, which is not faster than OpenFOAM on 4 cores;
-  \item the mean flow differs from OpenFOAM by 68\,\% and the \cotwo{} at 600~s by 71\,\% (paper's metric
-        11.1\,\%, while my \cotwo{} solver on the OpenFOAM flow gives 4.1\,\%).
+  \item The run took 7.3~hours on the RTX A2000. This is not faster than OpenFOAM on 4 cores.
+  \item The mean flow is 68\,\% different from OpenFOAM and the \cotwo{} at 600~s is 71\,\% different. In the
+        paper's metric this is 11.1\,\%. My \cotwo{} solver on the OpenFOAM flow has 4.1\,\% here.
 \end{itemize}
-The jet from window W1 slows down to 0.27~m/s within 2~m in OpenFOAM (RANS), but still has 0.47~m/s there in
-the lattice Boltzmann solution (LES), which points to the different turbulence modelling. Without
-measurements neither result can be called correct, and the dataset should stay consistent, so I did not use
-this solver.
+One difference is the air jet from window W1. In OpenFOAM it slows down to 0.27~m/s after 2~m, and in the
+lattice Boltzmann solver it still has 0.47~m/s there. The two solvers use different turbulence models, and
+without measurements I cannot say which one is closer to the real room. The dataset should come from one
+solver, so I stayed with OpenFOAM.
 
-I also checked other software that could run the same turbulence model (transient k-$\omega$ SST with a
-transported scalar) on the GPU \todo{add references for each}:
+I also looked at other software that could run the same turbulence model on the GPU:
 \begin{itemize}
   \item \textbf{OpenFOAM with GPU linear solvers} (AmgX, PETSc4FOAM, Ginkgo): only the pressure solver runs on
-        the GPU, so the gain is limited.
-  \item \textbf{OpenFOAM v2606}: the first official release with GPU offloading; still experimental, and it is
-        not documented which solvers and turbulence models run on the GPU.
-  \item \textbf{RapidCFD}: an OpenFOAM fork that runs fully on the GPU, but it is based on OpenFOAM 2.3.1 and
-        CUDA 8 and could not be built with the current tools on our computer.
-  \item \textbf{nekRS}: open source and GPU-based, but with a different discretisation and a large effort to
+        the GPU, so the gain is small.
+  \item \textbf{OpenFOAM v2606}: the first official version with GPU support. It is still experimental.
+  \item \textbf{RapidCFD}: runs OpenFOAM completely on the GPU, but it is based on the old OpenFOAM 2.3.1 and
+        I could not build it on our computer.
+  \item \textbf{nekRS}: open source and made for GPUs, but it works differently and needs a lot of work to
         set up.
-  \item \textbf{Lattice Boltzmann codes} (e.g.\ FluidX3D): fast, but LES instead of RANS (see above).
-  \item \textbf{ANSYS Fluent}: its GPU solver supports k-$\omega$ SST, transient runs and species transport, so
-        it could reproduce our setup. It needs a commercial or academic licence; the free student version
-        seems to be limited to about 512,000 cells, less than our mesh.
-        \todo{confirm the limit with official documentation}
+  \item \textbf{ANSYS Fluent}: its GPU solver supports the same turbulence model, so it could run our setup.
+        It needs a licence, and the free student version seems to be limited to about 512,000 cells, which is
+        less than our mesh.
 \end{itemize}
-\todo{run time of the same short test on the DGX Spark and the M5 Max}
 
 \section{Training without simulation data}
-In this approach the network never sees simulation data \citep{raissi2019,li2021pino}. At random points in the
-room it is told how much its prediction breaks the equations for airflow and \cotwo{}, and it is trained until
-the equations are almost fulfilled. Some rules are built into the network so that they always hold exactly:
-no air through the walls, the right amount of air through each window and door, the start from rest, and
-\cotwo{} proportional to the number of people. The inputs are the 8 window speeds, the number of people and the
-time (up to 2~minutes), and the output is the air velocity and the \cotwo{} everywhere in the room (a GNOT
-network with about 322,000 parameters).
+In this approach the network does not see any simulation data \citep{raissi2019,li2021pino}. It is trained
+only with the equations for the airflow and the \cotwo{}. At random points in the room the training checks how
+much the prediction of the network breaks the equations, and the network is changed to make this smaller.
+Some rules are built into the network so that they are always true. No air goes through the walls, the right
+amount of air goes through each window and door, the air starts from rest, and the \cotwo{} is proportional to
+the number of people. The inputs are the 8 window speeds, the number of people and the time up to 2~minutes.
+The outputs are the air velocity and the \cotwo{} at any point of the room. The network is a GNOT with about
+322,000 parameters.
 
-I compared every version with an OpenFOAM solution of the same equations, and also with a closed room, where
-an independent finite-difference solution of the \cotwo{} is available. Over 25 versions I fixed several
-problems (\tref{tab:pinnfix}).
+I compared each version with an OpenFOAM solution of the same equations. For a closed room I also compared
+the \cotwo{} with a separate finite-difference solution. I made 25 versions and fixed several problems
+(\tref{tab:pinnfix}).
 
 \begin{table}[h]
   \centering
-  \caption{Problems found in the physics-only approach.}
+  \caption{Problems of the training without data.}
   \label{tab:pinnfix}
   \begin{tabular}{>{\raggedright}p{6.5cm}p{7.2cm}}
     \toprule
     Problem & What I did\\
     \midrule
-    \cotwo{} stayed at zero & rescaled all quantities so that every term has a similar size\\
-    air leaked through the walls & built the wall and window rules into the network\\
-    the sharp edges of the incoming jets could not be learned & smoothed the built-in base flow inside the room\\
-    the network found a too smooth flow that still fits the equations & gave the wall condition more weight\\
+    \cotwo{} stayed at zero & scaled all values so that every term has a similar size\\
+    air went through the walls & built the wall and window rules into the network\\
+    the sharp edges of the air jets could not be learned & made the built-in base flow smoother inside the room\\
+    the network found a flow that is too smooth but still fits the equations & gave the wall condition more weight\\
     \bottomrule
   \end{tabular}
 \end{table}
 
-In the closed room the \cotwo{} became reasonably accurate: about 13\,\% difference to the finite-difference
-solution on a horizontal plane in the best version. With open windows the airflow did not: the velocity error
-against OpenFOAM fell from 74\,\% to about 50\,\% and then stopped improving, and 30,000 or 50,000 training
-steps made no difference. The total amount of \cotwo{} is about right, but it is in the wrong places, because
-the predicted airflow is too slow. One training run took about 17~hours on the GPU. Such wrong but
-equation-fitting solutions are a known problem of physics-only training \todo{reference}.
+In the closed room the \cotwo{} was quite good, with about 13\,\% difference to the finite-difference solution
+in the best version. With open windows the airflow was not good. The velocity error against OpenFOAM went
+down from 74\,\% to about 50\,\% and then stayed there, also with longer training. The total amount of
+\cotwo{} is about right, but it is at the wrong places, because the predicted airflow is too slow. One
+training took about 17~hours on the GPU.
 
-While testing I also found a bug in how the training points were chosen: the window speeds were tied to the
-position of the points, so some windows were never trained as open, and some walls never saw air flowing along
-them. It was present from about version 4 to version 15 and fixed in version 16, so conclusions about which
-change helped before version 16 are less reliable. For our room this approach was not accurate enough, and
-the rest of the thesis uses the CFD data.
+During the tests I also found a bug in the way the training points were chosen. The window speeds depended on
+the position of the points, so some windows were never trained as open. This bug was in the versions 4 to 15
+and I fixed it in version 16. So the comparison of the versions before 16 is less reliable. For our room this
+approach was not accurate enough, and I continued with the simulation data.

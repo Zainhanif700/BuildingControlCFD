@@ -2,37 +2,37 @@
 \label{ch:conclusion}
 
 \section{Summary}
-I transferred the method of \citet{bian2025} to a window-ventilated classroom of our university, using only
-open-source software for the simulations. The answers to the questions of \cref{ch:intro} are:
-\begin{enumerate}
-  \item The method works with OpenFOAM. The pipeline from the room geometry to the trained model runs from
+In this thesis I used the method of \citet{bian2025} for classroom 1-130 of our university, which is
+ventilated through windows. I used only open-source software for the simulations. These are the main results:
+\begin{itemize}
+  \item I could reproduce the paper with its own code and data. My ensemble has an error of 11.46\,\% and the
+        paper 10.90\,\%.
+  \item The method works with OpenFOAM. All steps from the room geometry to the trained model run from
         scripts.
-  \item My \cotwo{} solver reproduces OpenFOAM's own \cotwo{} within about 2\,\% when the flow is saved every
-        second. Saving it only every 10~s, as in the first dataset, caused differences of up to 45\,\% in fast
-        settings; the corrected dataset fixes this for the first 150~s. The forecast error is 4.5 times
-        (transition runs) to 10 times (direct runs) smaller than persistence, and the model trained on the
-        corrected data is more accurate on the corrected test data.
-  \item The approach is now being tested with almost all windows and both doors open or closed, as in the real
-        room. The simulations are running, and the results will be added
-        \todo{results of the runs with all windows and doors}.
-  \item Running the cases on 4 cores is 2.7 times faster, and 450~s instead of 600~s would save another 25\,\%.
-        A lattice Boltzmann solver on the GPU was neither faster nor close enough to OpenFOAM. Among the available
-        software only ANSYS Fluent supports the same model fully on the GPU (\cref{ch:notused}).
-  \item Training only from the equations did not reach a useful accuracy for this room (velocity error about
-        50\,\%, \cref{ch:notused}).
-  \item For the real sensor data, the model has to work with few measurement points, window states and all
-        windows and doors (\cref{ch:sensors}).
-\end{enumerate}
+  \item My \cotwo{} solver is within about 2\,\% of the \cotwo{} of OpenFOAM when the airflow is saved every
+        second. With a save every 10~s the difference was up to 45\,\% in scenarios with fast air. I built
+        the dataset again with this correction.
+  \item The error of the model is 4.5 times smaller than persistence for the transition runs and about 10
+        times smaller for the direct runs. The model trained on the corrected data is a little better on the
+        corrected test data.
+  \item The simulations run 2.7 times faster on 4 cores. A GPU solver that I wrote was not faster and too
+        different from OpenFOAM, and training without simulation data was not accurate enough
+        (\cref{ch:notused}).
+\end{itemize}
 
 \section{Limitations}
 \begin{itemize}
-  \item After 150~s the \cotwo{} is computed on the mean flow. In strongly fluctuating settings this keeps too much
-        \cotwo{} in the room; in the paper's metric the difference stays at a few per cent.
-  \item The seating area is a placeholder until the real seating plan is known.
-  \item The results in this version use only the dataset with W1, W3 and W6 and fixed doors; the larger set
-        with all windows and doors is still running.
-  \item The model has not yet been tested on real measurements.
+  \item After 150~s the \cotwo{} is calculated with the mean airflow. In scenarios where the air changes a
+        lot, this keeps too much \cotwo{} in the room. In the paper's metric the difference is a few per cent.
+  \item The results in this thesis are from the setup with the windows W1, W3 and W6. The scenarios with all
+        windows and doors are still running.
+  \item The temperature is not simulated.
+  \item The model is tested only against simulations and not against measurements from the room.
 \end{itemize}
 
 \section{Outlook}
-\todo{sensor data, all windows and doors, control of the windows as in the paper}
+The next step is to train the model on all 68 scenarios, so that it works with all windows and doors. After
+that I will build the chain for the sensor data and test it with synthetic sensor data (\cref{ch:sensors}).
+When the stations in the room deliver data, the forecast can be compared with real measurements for the first
+time. In the end the model can be used like in the paper, to tell when the windows should be opened and
+closed.

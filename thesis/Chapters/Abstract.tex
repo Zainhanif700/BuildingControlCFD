@@ -1,26 +1,25 @@
-Opening the windows is the simplest way to bring fresh air into a classroom. In cold weather, however, the
-warm room air flows out and the heating needs more energy, and without measurements nobody knows how long the
-windows really have to be open. A model that predicts how the \cotwo{} in the room will develop in the next
-minutes could help to open the windows only as long as needed. In this thesis I apply the method of
-\citet{bian2025} to a real classroom of our university. I first reproduced their results with their published
-code and data (ensemble error 11.46\,\% against 10.90\,\% in the paper). Then I simulate the airflow in our room
-with OpenFOAM (k-$\omega$ SST turbulence model), compute the \cotwo{} from the people in the room with my own
-GPU solver, and train a neural operator (GNOT) that uses the \cotwo{} of the last 6~minutes to forecast the next
-3~minutes. Only the \cotwo{} is forecast; temperature and heating energy are not modelled.
+In a full classroom the \cotwo{} goes up quickly, and the usual way to bring it down is to open the windows.
+In winter this costs heating energy, and nobody knows how long the windows really have to stay open. A model
+that predicts the \cotwo{} of the next few minutes can help here. In this thesis I apply the method of
+\citet{bian2025} to classroom 1-130 of our university, which has windows instead of ceiling vents. First I ran
+their published code and data and got an error of 11.46\,\%, close to the 10.90\,\% of the paper. Then I
+simulated the airflow in our room with OpenFOAM and trained a neural operator (GNOT) on this data. The model
+looks at the \cotwo{} of the last 6~minutes and predicts the next 3~minutes.
 
-For the current setup of the room (windows W1, W3 and W6, 28 window settings) the forecast error is
-4.5 times smaller than when assuming that the \cotwo{} stays the same for the paper-like runs that start
-from another setting, and about 10 times smaller for runs that start from fresh air. While checking the data, I found
-that saving the OpenFOAM flow only every 10~s made the \cotwo{} up to 45\,\% different from OpenFOAM's own
-\cotwo{} at high window speeds; with saves every second the difference is about 2\,\%. I rebuilt the
-dataset with this correction, and the model trained on it is more accurate on the corrected test data.
-I also tested whether the simulations can run on the GPU: a lattice Boltzmann solver I wrote was neither
-faster nor close enough to OpenFOAM, and from the other software I checked only a commercial code
-supports the same turbulence model fully on the GPU. A second approach that trains the network only from
-the equations, without simulation data, did not reach a useful accuracy.
+The classroom has 8 windows and 2 doors. In the setup of this thesis three of the windows can be opened, and I
+simulated 28 window scenarios, where some windows are closed and some are open with different air speeds. A
+full OpenFOAM run of 30~minutes would take about two days for each scenario. So I only simulate the airflow
+for 10~minutes in OpenFOAM and compute the \cotwo{} for the 30~minutes with my own \cotwo{} solver on the GPU.
+When I checked this solver against OpenFOAM, I found that saving the airflow only every 10~s made the \cotwo{}
+up to 45\,\% different at high window speeds. With a save every second the difference is about 2\,\%, so I
+built the dataset again with this correction.
 
-I am currently extending the simulations to a larger set in which almost all windows and both doors can be
-open or closed, and I am preparing the use of the real sensor data of the wireless sensor network that is
-being installed in the room.
+To judge the model I compare it with the simplest possible guess, that the \cotwo{} in 3~minutes is the same
+as now. The error of the model is 4.5 times smaller than this guess when a run starts with the \cotwo{} left
+from another window scenario, as in the paper, and about 10 times smaller when a run starts with fresh air. I
+also tried to run the simulations on the GPU and to train the network without simulation data. Both did not
+work well enough and are described briefly.
 
-\todo{update the numbers once the transition comparison and the sensor work are finished}
+At the moment I am running 40 more scenarios in which all 8 windows and both doors can be open or closed.
+Sensors for \cotwo{} and air speed are being installed at the windows and doors of the room, and the next step
+is to use the model with their data.

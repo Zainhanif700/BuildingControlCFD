@@ -2,40 +2,73 @@
 \label{ch:results}
 
 \section{First setup}
-With the first setup (three window zones, both doors open, 10~cm mesh, 39 settings) and transition runs, the
-model has a test error of 0.11\,\% of the \cotwo{} above the outdoor level, against 0.39\,\% for persistence,
-so its error is about 4 times smaller (paper's metric: 0.01\,\% against 0.05\,\%). Training with only 5, 10,
-20 and 31 of the training settings gives 0.70, 0.39, 0.30 and 0.27 times the persistence error, so the
-learning curve levels off. \todo{figure of a test setting from the progress report}
+In the first setup the windows were opened in three groups, both doors were open and the mesh had 10~cm
+cells. I trained the model on the transition runs of 31 scenarios and tested it on the other 8. The test error
+is 0.11\,\% of the \cotwo{} above the outdoor level. Persistence has 0.39\,\%, so the model is about 4 times
+better. In the paper's metric the values are 0.01\,\% and 0.05\,\%. I also trained the model with only 5, 10
+and 20 of the training scenarios. \fref{fig:lc1} shows that the error goes down fast at the beginning and
+changes only a little between 20 and 31 scenarios.
 
-\section{Current setup, first dataset}
-For the current setup (W1, W3, W6; 28 settings, 8~cm mesh) with the first dataset and transition runs, the
-test error is 0.61\,\% against 2.74\,\% for persistence, 4.5 times smaller. The learning curve
-(\tref{tab:lc}) shows that 15 training settings already give almost the same result as 20.
+\fref{fig:s37series} and \fref{fig:s37maps} show one test scenario of the first setup. In S37 only the windows
+W7 and W8 are open, and the model did not see this scenario in training. The lines are the simulation and the
+dots are the forecasts of the model, each made 3~minutes before. In the first minutes the \cotwo{} of the
+scenario before is pushed out of the room, and after that the \cotwo{} of the people builds up slowly. The
+maps show that the forecast and the simulation look the same, and the difference is only a few ppm.
+
+\begin{figure}[h]
+  \centering
+  \includegraphics[width=\textwidth]{s37_series.png}
+  \caption{Test scenario S37, \cotwo{} at four points.}
+  \label{fig:s37series}
+\end{figure}
+
+\begin{figure}[h]
+  \centering
+  \includegraphics[width=\textwidth]{s37_maps.png}
+  \caption{Test scenario S37, simulation and forecast.}
+  \label{fig:s37maps}
+\end{figure}
+
+\begin{figure}[h]
+  \centering
+  \includegraphics[width=0.75\textwidth]{learning_curve.png}
+  \caption{Learning curve of the first setup.}
+  \label{fig:lc1}
+\end{figure}
+
+\section{Second setup}
+In the second setup the windows W1, W3 and W6 can be opened, and the mesh has 8~cm cells. There are 20
+scenarios for training and 8 for testing. With the first dataset and the transition runs the test error is
+0.61\,\% and persistence has 2.74\,\%, so the model is 4.5 times better. \tref{tab:lc} shows the test error
+for fewer training scenarios. With 15 scenarios the result is almost the same as with 20.
 
 \begin{table}[h]
   \centering
-  \caption{Learning curve, current setup, first dataset: test error of the model (5 networks) for different
-  numbers of training settings. Persistence: 2.74\,\%.}
+  \caption{Learning curve of the second setup.}
   \label{tab:lc}
   \begin{tabular}{lrrrr}
     \toprule
-    Training settings & 5 & 10 & 15 & 20\\
+    Training scenarios & 5 & 10 & 15 & 20\\
     \midrule
     Test error & 0.76\,\% & 0.71\,\% & 0.62\,\% & 0.61\,\%\\
     \bottomrule
   \end{tabular}
 \end{table}
 
-\section{Current setup, corrected dataset}
-To see what the correction of the data (\cref{ch:dataset}) means for the forecast, I trained the model twice
-in exactly the same way, once on the first dataset (model A) and once on the corrected dataset (model B), first
-with the direct runs. Then I tested both models on the test settings of both datasets (\tref{tab:ab}).
+\section{First and corrected dataset}
+In \cref{ch:dataset} I built the dataset of the second setup again with the airflow saved every second. To
+see what this means for the forecast, I trained the model two times in exactly the same way. Model A is
+trained on the first dataset and model B on the corrected dataset. Then I tested both models on the test
+scenarios of both datasets.
+
+\tref{tab:ab} shows the result for the direct runs. On the corrected data model B has an error of 0.33\,\%
+and model A 0.37\,\%. Both are about 10 times better than persistence. On the first data both models are
+equally good.
 
 \begin{table}[h]
   \centering
-  \caption{Test error of models trained on the first (A) and the corrected (B) dataset, direct runs, 20
-  people; in brackets the paper's metric.}
+  \caption[Models A and B, direct runs.]{Test error of models A and B for the direct runs (in brackets the
+  paper's metric).}
   \label{tab:ab}
   \begin{tabular}{lrr}
     \toprule
@@ -48,13 +81,14 @@ with the direct runs. Then I tested both models on the test settings of both dat
   \end{tabular}
 \end{table}
 
-On the corrected data, model B is about 11\,\% more accurate than model A (0.33 against 0.37\,\%), and both are
-about 10 times better than persistence. On the first data both models are equally good. The gain is in the fast
-settings, where the data changed most (\tref{tab:ab_cases}); in the calm settings both models are the same.
+\tref{tab:ab_cases} shows the error for each test scenario. Model B is better in the scenarios with high
+window speeds (N14, N27, N28). These are the scenarios where the data changed most. In the calm scenarios both
+models are the same.
 
 \begin{table}[h]
   \centering
-  \caption{Test error per test setting on the corrected data (persistence in brackets).}
+  \caption[Test error per test scenario.]{Test error per test scenario on the corrected data in \%
+  (direct runs).}
   \label{tab:ab_cases}
   \footnotesize
   \begin{tabular}{lrrrrrrrr}
@@ -63,16 +97,37 @@ settings, where the data changed most (\tref{tab:ab_cases}); in the calm setting
     \midrule
     Model A & 0.23 & 0.58 & 0.12 & 0.08 & 0.25 & 1.17 & 0.23 & 0.32\\
     Model B & 0.14 & 0.59 & 0.09 & 0.08 & 0.23 & 1.16 & 0.16 & 0.21\\
-    Persistence & (1.32) & (5.62) & (2.58) & (1.43) & (3.29) & (7.24) & (1.90) & (2.25)\\
+    Persistence & 1.32 & 5.62 & 2.58 & 1.43 & 3.29 & 7.24 & 1.90 & 2.25\\
     \bottomrule
   \end{tabular}
-  \\[0.3em]{\small all values in \%}
 \end{table}
 
-Each model was trained only once (5 networks each), so part of the difference could be chance. That the gain
-appears in exactly the fast settings and nowhere else speaks for a real effect. \todo{repeat both trainings with
-other seeds}
+I did the same comparison with the transition runs (\tref{tab:abtr}). Here the difference between the two
+models is smaller. On the corrected data model B has 0.64\,\% and model A 0.67\,\%, and persistence has
+2.57\,\%. Model A on the first data gives 0.61\,\% again, the same value as in the section before.
 
-\section{Transition runs on the corrected data}
-\todo{results of models A and B trained on the transition runs (paper-like setup), to compare with 0.61\,\% vs
-2.74\,\%}
+\begin{table}[h]
+  \centering
+  \caption[Models A and B, transition runs.]{Test error of models A and B for the transition runs (in
+  brackets the paper's metric).}
+  \label{tab:abtr}
+  \begin{tabular}{lrr}
+    \toprule
+     & Tested on first data & Tested on corrected data\\
+    \midrule
+    Model A (trained on first data) & 0.61\,\% (0.240\,\%) & 0.67\,\% (0.247\,\%)\\
+    Model B (trained on corrected data) & 0.60\,\% (0.235\,\%) & 0.64\,\% (0.239\,\%)\\
+    Persistence & 2.74\,\% & 2.57\,\%\\
+    \bottomrule
+  \end{tabular}
+\end{table}
+
+Each model was trained only one time with 5 networks, so a part of the difference can be chance. But the
+difference shows up in the scenarios with high window speeds and not in the others, which fits to the
+correction of the data. For the next trainings I use the corrected dataset.
+
+\section{All windows and doors}
+The 40 new scenarios with all windows and doors (\sref{sec:allopen}) are running at the moment. When they are
+finished, I will train the model on all 68 scenarios. The model then also gets the information which windows
+and doors are open. I will compare it with the results of the second setup and look at how many scenarios are
+needed.

@@ -90,7 +90,8 @@ Date:\\
 \acknowledgements{
 \addtocontents{toc}{\vspace{1em}}
 
-\todo{acknowledgements: supervisor Prof.\ Matthias Wagner, the lab (Mr.\ Merkl), Dr.\ Butt, \ldots}
+I thank my supervisor Prof.\ Dr.\ Matthias Wagner and my co-supervisor Dr.\ Fatima Butt for their support
+and for the regular meetings during this thesis. I also thank Mr.\ David Merkl for the lab computer.
 
 }
 \clearpage
@@ -117,13 +118,21 @@ Date:\\
 \listofsymbols{ll}
 {
 \textbf{CFD} & \textbf{C}omputational \textbf{F}luid \textbf{D}ynamics \\
+\textbf{CO\textsubscript{2}} & Carbon dioxide \\
+\textbf{CPU} & \textbf{C}entral \textbf{P}rocessing \textbf{U}nit \\
 \textbf{GNOT} & \textbf{G}eneral \textbf{N}eural \textbf{O}perator \textbf{T}ransformer \\
 \textbf{GPU} & \textbf{G}raphics \textbf{P}rocessing \textbf{U}nit \\
 \textbf{LBM} & \textbf{L}attice \textbf{B}oltzmann \textbf{M}ethod \\
 \textbf{LES} & \textbf{L}arge-\textbf{E}ddy \textbf{S}imulation \\
+\textbf{NLL} & \textbf{N}egative \textbf{L}og-\textbf{L}ikelihood \\
+\textbf{OpenFOAM} & \textbf{Open} Source \textbf{F}ield \textbf{O}peration \textbf{a}nd \textbf{M}anipulation \\
+\textbf{PINO} & \textbf{P}hysics-\textbf{I}nformed \textbf{N}eural \textbf{O}perator \\
 \textbf{PINN} & \textbf{P}hysics-\textbf{I}nformed \textbf{N}eural \textbf{N}etwork \\
+\textbf{ppm} & \textbf{p}arts \textbf{p}er \textbf{m}illion \\
 \textbf{RANS} & \textbf{R}eynolds-\textbf{A}veraged \textbf{N}avier--\textbf{S}tokes \\
 \textbf{SST} & \textbf{S}hear \textbf{S}tress \textbf{T}ransport (turbulence model) \\
+\textbf{STL} & file format for 3D geometry (\textbf{st}ereo\textbf{l}ithography) \\
+\textbf{W1--W8} & the 8 windows of the classroom \\
 \textbf{WSN} & \textbf{W}ireless \textbf{S}ensor \textbf{N}etwork \\
 }
 
@@ -136,6 +145,9 @@ Kinematic viscosity of air & $\nu$ & $=$ & $1.5\times10^{-5}\ \mbox{m}^{2}\mbox{
 Molecular diffusivity of \cotwo{} in air & $D$ & $=$ & $1.6\times10^{-5}\ \mbox{m}^{2}\mbox{s}^{-1}$\\
 \cotwo{} in the outdoor air & $c_\mathrm{out}$ & $=$ & $400\ \mbox{ppm}$\\
 \cotwo{} in exhaled air & & $=$ & $40{,}000\ \mbox{ppm}$\\
+Exhaled air per person & & $=$ & $6\ \mbox{L}\,\mbox{min}^{-1}$\\
+Turbulent Schmidt number (OpenFOAM flow) & $\mathrm{Sc}_t$ & $=$ & $0.7$\\
+Turbulent Schmidt number (mean flow) & $\mathrm{Sc}_t$ & $=$ & $0.3$\\
 }
 
 %% ----------------------------------------------------------------
@@ -144,14 +156,20 @@ Molecular diffusivity of \cotwo{} in air & $D$ & $=$ & $1.6\times10^{-5}\ \mbox{
 \listofnomenclature{lll}
 {
 $c$ & \cotwo{} above the outdoor level & ppm \\
+$D$ & diffusivity of \cotwo{} in air & m$^{2}$\,s$^{-1}$ \\
+$N$ & number of people in the room & -- \\
+$p$ & pressure & m$^{2}$\,s$^{-2}$ \\
+$t$ & time & s \\
 $\mathbf{u}$ & air velocity & m\,s$^{-1}$ \\
 $k$ & turbulent kinetic energy & m$^{2}$\,s$^{-2}$ \\
 $S$ & \cotwo{} source of the people & ppm\,s$^{-1}$ \\
 $\mathrm{Sc}_t$ & turbulent Schmidt number & -- \\
 $V_i$ & inflow speed at window $i$ & m\,s$^{-1}$ \\
+$y^+$ & dimensionless distance of the first cell from the wall & -- \\
 & & \\
 $\nu_t$ & turbulent viscosity & m$^{2}$\,s$^{-1}$ \\
 $\omega$ & specific dissipation rate & s$^{-1}$ \\
+$\nu$ & kinematic viscosity of air & m$^{2}$\,s$^{-1}$ \\
 }
 
 %% ----------------------------------------------------------------

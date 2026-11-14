@@ -2,42 +2,42 @@
 \label{ch:room}
 
 \section{The classroom}
-The classroom is 15.53~m long, 9.16~m wide and 3.15~m high. The geometry comes from STL files of the
-real room. One long wall has 8 windows (W1--W8, each 0.61~m wide and as high as the room in the model),
-the opposite wall has 2 doors (1.06~m wide, 2.11~m high), and 4 round columns stand in the room
-(\fref{fig:room}). Fresh air comes in through the open windows and leaves through the open doors.
+The classroom is room 1-130. It is 15.53~m long, 9.16~m wide and 3.15~m high, and the geometry comes from STL
+files of the real room. One long wall has 8 windows, which I call W1 to W8. The opposite wall has 2 doors, and
+there are 4 round columns in the room (\fref{fig:room}). In the model each window is 0.61~m wide and as high
+as the room, and each door is 1.06~m wide and 2.11~m high. Fresh air comes in through the open windows and
+goes out through the open doors.
 
 \begin{figure}[h]
   \centering
   \includegraphics[width=0.95\textwidth]{room_plan.png}
-  \caption{The classroom in the model, seen from above. The 8 windows W1 to W8 are on one long wall (the
-  numbers give the distance of the left edge of each window from the left wall), the 2 doors are on the
-  opposite wall, and the grey circles are the 4 columns. The dashed rectangle is the assumed seating area.}
+  \caption{Model of classroom 1-130 (top view).}
   \label{fig:room}
 \end{figure}
 
-The people sit in a seating area of $9.5\times5$~m between 1.0 and 1.2~m height, where the \cotwo{} is
-released. This area is still a placeholder until the real seating plan is known
-\todo{update when the seating plan is available}. All simulations use 20 people; because
-\eref{eq:co2} is linear, the results can be scaled to any number of people.
+The people sit in a seating area of $9.5\times5$~m in the middle of the room. The \cotwo{} is released there
+between 1.0 and 1.2~m height. All simulations use 20 people. Because of \eref{eq:co2} the results can be
+scaled to any other number of people.
 
-\section{Window settings}
-In the first setup, the 8 windows were grouped into three zones (W1--W3, W4--W6, W7--W8), and both doors were
-open. I simulated 39 settings with this setup (31 for training, 8 for testing).
+\section{Window scenarios}
+A window scenario says which windows and doors are open and how fast the air comes in through each open
+window. I worked with three setups.
 
-Later we changed the setup to the way the room will be used with the sensors: only windows W1, W3 and W6 can
-open, door~1 is open and door~2 is closed. Each of the three windows is closed or open with an inflow speed
-between 0.2 and 2.0~m/s. I chose 28 settings (\tref{tab:settings}): each window alone at 0.5, 1 and 2~m/s,
-all three together at the same speeds, and 16 random combinations. 8 of the random ones are kept for
-testing and never used in training. This thesis mainly reports the current setup.
+In the first setup the 8 windows were opened in three groups (W1--W3, W4--W6, W7--W8) and both doors were
+open. I simulated 39 scenarios, 31 for training and 8 for testing.
+
+In the second setup only the windows W1, W3 and W6 can be opened, door~1 is open and door~2 is closed. This
+was the plan for the room with the sensors at that time. Each of the three windows is closed or open with an
+air speed between 0.2 and 2.0~m/s. I simulated 28 scenarios (\tref{tab:settings}). 8 of the random ones are
+only used for testing and the model never sees them in training.
 
 \begin{table}[h]
   \centering
-  \caption{The 28 window settings of the current setup.}
+  \caption{The 28 window scenarios of the second setup.}
   \label{tab:settings}
   \begin{tabular}{l>{\raggedright}p{7.6cm}l}
     \toprule
-    Settings & Windows & Use\\
+    Scenarios & Windows & Use\\
     \midrule
     N01--N09 & one window open (W1, W3 or W6) at 0.5, 1 or 2~m/s & training\\
     N10--N12 & all three open at 0.5, 1 or 2~m/s & training\\
@@ -45,16 +45,17 @@ testing and never used in training. This thesis mainly reports the current setup
     \bottomrule
   \end{tabular}
 \end{table}
-The test settings are N14, N15, N19, N20, N23, N24, N27 and N28.
+The test scenarios are N14, N15, N19, N20, N23, N24, N27 and N28.
+
+In the third setup all 8 windows and both doors can be open or closed. I am running these simulations at the
+moment (\sref{sec:allopen}).
 
 \section{Simulation setup}
-\tref{tab:sim} summarises the OpenFOAM settings. Each open window is an inlet with a uniform velocity normal
-to the wall; the speed rises smoothly from zero and reaches the full value after about 2~s
-($v(t)=v_0\tanh(1.5\,t/\mathrm{s})$). The
-inlet turbulence intensity is 5\,\% with a length scale of 0.1~m. The doors are pressure outlets ($p=0$) that
-also allow backflow. Walls, columns, closed windows and the closed door are no-slip walls with wall functions.
-The \cotwo{} is also computed by OpenFOAM itself (scalar transport with $\mathrm{Sc}_t=0.7$), which I use as
-the reference for my own solver.
+\tref{tab:sim} shows the OpenFOAM settings. At an open window the air comes in with the same speed over the
+whole opening. The speed starts at zero and reaches its full value after about 2~s. The open doors are
+outlets with a fixed pressure, and air can also come back in through them. Walls, columns, closed windows and
+closed doors are walls with wall functions. OpenFOAM also calculates the \cotwo{} itself, and I use this to
+check my own \cotwo{} solver (\cref{ch:dataset}).
 
 \begin{table}[h]
   \centering
@@ -67,51 +68,44 @@ the reference for my own solver.
     Solver & OpenFOAM v2412, \texttt{pimpleFoam} (transient), k-$\omega$ SST with wall functions\\
     Mesh & hexahedral, 8~cm cells, 856,284 cells after removing the columns\\
     Air & kinematic viscosity $1.5\times10^{-5}$~m\textsuperscript{2}/s\\
+    Inlet & speed $v(t)=v_0\tanh(1.5\,t/\mathrm{s})$, turbulence intensity 5\,\%, length scale 0.1~m\\
     Time step & adaptive, Courant number $\le 1$\\
     Simulated time & 600~s\\
     \cotwo{} source & 20 people, 6~L/min at 40,000~ppm each, spread evenly over the seating area\\
-    \cotwo{} diffusivity & $D=1.6\times10^{-5}$~m\textsuperscript{2}/s\\
+    \cotwo{} in OpenFOAM & $D=1.6\times10^{-5}$~m\textsuperscript{2}/s, $\mathrm{Sc}_t=0.7$\\
     \bottomrule
   \end{tabular}
 \end{table}
 
-\section{Simplifications of the geometry}
-The geometry of the model is a simplified version of the STL files of the real room. Compared with
-the STL files, the model differs in these points:
+\section{Simplifications}
+The model is simpler than the real room in some points:
 \begin{itemize}
-  \item a solid block on the door wall between the two doors ($x=7.39$--$8.23$~m, 0.72~m deep,
-        floor to ceiling, probably a shaft) is missing. It lies about 5~m from each door, where the
-        air moves slowly, so I expect its effect to be local, but I have not measured it;
-  \item the windows sit in recesses of 0.15--0.3~m in the real room; in the model they are flat
-        openings in a flat wall;
-  \item the walls of the real room are slightly stepped, and the ceiling is at 3.13~m instead of
-        3.15~m;
-  \item every window is an opening of the full room height (0.61~m $\times$ 3.15~m). The real
-        windows are smaller, so a measured window speed has to be converted through the volume flow
-        before it is used as model input (\cref{ch:sensors});
-  \item when a door is closed, the gap under it (about 1.5~m $\times$ 0.4~cm, estimated by the
-        supervisor) is neglected;
-  \item the air has a constant temperature: heat from people and walls and the resulting
-        buoyancy are not modelled.
+  \item In the real room the windows sit 0.15--0.3~m back in the wall. In the model the wall is flat.
+  \item The real walls have small steps, and the real ceiling is at 3.13~m instead of 3.15~m.
+  \item In the model every window is open over the full height of the room. The real windows are smaller.
+        So with real sensor data the measured air speed has to be converted to the same amount of air per
+        second before it goes into the model (\cref{ch:sensors}).
+  \item When a door is closed, the small gap under it is ignored.
+  \item The temperature is not simulated, so warm air does not rise in the model. \citet{bian2025} also leave
+        this out, because the air that is pushed in by the ventilation is much stronger. For open windows on a
+        cold day it can matter more, so this is a limit of my simulations.
 \end{itemize}
-Adding the block or the recesses would mean running all OpenFOAM cases again, so I keep them as
-simplifications.
 
 \section{Mesh study}
-The first setup used a 10~cm mesh. To check whether this is fine enough, I simulated two settings on meshes
-with 15, 10 and 8~cm cells and compared them with the 8~cm mesh (\tref{tab:mesh}). For the faster setting
-(S08) the 10~cm mesh gives about 30\,\% less \cotwo{} in the room and a less steady flow. The current setup
-therefore uses the 8~cm mesh.
+The first setup used a mesh with 10~cm cells. To check if this is fine enough, I simulated two scenarios with
+15, 10 and 8~cm cells and compared the results at 600~s with the 8~cm mesh (\tref{tab:mesh}). The table shows
+the difference of the velocity in the whole room and of the \cotwo{} at 1.6~m height. For the \cotwo{} I give
+two numbers. The first one uses only the \cotwo{} above the outdoor level. The second one is the metric of the
+paper, which includes the 400~ppm of the outdoor air and is much smaller because of that. The last column is
+the total \cotwo{} in the room divided by the value of the 8~cm mesh.
 
 \begin{table}[h]
   \centering
-  \caption{Mesh study: difference to the 8~cm mesh at 600~s (relative $\ell_2$ difference of the
-  velocity in the room and of the \cotwo{} at 1.6~m, once above the outdoor level and once in the
-  paper's metric with the 400~ppm included; total \cotwo{} in the room relative to the 8~cm mesh).}
+  \caption{Mesh study, difference to the 8~cm mesh.}
   \label{tab:mesh}
   \begin{tabular}{llrrrrr}
     \toprule
-    Setting & Mesh & Cells & Velocity & \cotwo{} at 1.6~m & Paper metric & Total \cotwo{}\\
+    Scenario & Mesh & Cells & Velocity & \cotwo{} at 1.6~m & Paper metric & Total \cotwo{}\\
     \midrule
     S02 & 15~cm & 132,258 & 25.8\,\% & 47.3\,\% & 5.47\,\% & 1.004\\
         & 10~cm & 438,929 & 22.7\,\% & 42.4\,\% & 4.91\,\% & 0.931\\
@@ -121,25 +115,30 @@ therefore uses the 8~cm mesh.
   \end{tabular}
 \end{table}
 
-The wall resolution ($y^+$ of the first cell, 8~cm mesh) is between 2 and 140 for S02 and between 21
-and 571 for S08, with averages of 42 and 163. The wall functions of OpenFOAM v2412 cover both ranges:
-the wall function for $\omega$ blends its viscous and its logarithmic value, and the wall function for
-the turbulent viscosity sets it to zero below $y^+\approx11$ (viscous sublayer) and uses the log law
-above. They are least accurate in the buffer layer ($5\lesssim y^+\lesssim30$). Most wall cells are in
-the log-law range, and the flow directly at the walls is not the quantity of interest in this study.
-\todo{mention checkMesh result for the 8 cm mesh}
+In the faster scenario S08 the 10~cm mesh has about 30\,\% less \cotwo{} in the room than the 8~cm mesh, and
+its flow is less steady. So I used the 8~cm mesh for all simulations after the first setup.
 
-\section{Next step: all windows and doors (work in progress)}
-In the setup above only three windows and one door can be open. In the real room all 8 windows and both
-doors can be opened, and in the real room six windows will get sensors while two will stay closed
-\todo{which two windows stay closed}. I am therefore running a larger set of settings in which almost all
-windows can be open and both doors can be open or closed:
+I also looked at $y^+$, which tells how well the first cell at the wall fits to the wall functions. On the
+8~cm mesh it is between 2 and 140 for S02 and between 21 and 571 for S08, and the mean values are 42 and 163.
+The wall functions of OpenFOAM work for small and for large values, so I use them without changes.
+
+\section{All windows and doors}
+\label{sec:allopen}
+In the real room all 8 windows and both doors can be opened, so the second setup with three windows is not
+enough. I am now running a third setup:
 \begin{itemize}
-  \item each window is closed, an inlet (air comes in at 0.2--2.0~m/s) or an outlet (air leaves through it);
+  \item each window is closed, or air comes in through it, or air goes out through it;
+  \item air comes in with a speed between 0.2 and 2.0~m/s;
   \item each door is open or closed;
-  \item every setting has at least one inlet and one outlet, because the air that comes in has to leave again.
+  \item in every scenario air comes in through at least one window and can go out through a door or another
+        window.
 \end{itemize}
-The set contains 68 settings: the 28 settings from above plus 40 new ones, 10 for each of the four
-combinations of the two doors. These simulations use the same OpenFOAM setup as above, with the flow saved
-every second for the first 150~s (\cref{ch:dataset}). They are still running. The results, and a model trained
-on them, will be added here. \todo{results of the runs with all windows and doors}
+There are 40 new scenarios, 10 for each of the four combinations of the two doors. 32 of them are for
+training and 8 for testing. Together with the 28 scenarios of the second setup this gives 68 scenarios. The
+OpenFOAM settings are the same as before, and the airflow of the first 150~s is saved every second
+(\cref{ch:dataset}). The model will also get the information which windows and doors are open.
+
+According to the current plan, six windows get a sensor and two windows stay closed, W8 and probably W5. Six
+of the 40 new scenarios have exactly these two windows closed, and all 28 scenarios of the second setup fit to
+this plan as well. When the simulations are finished I will train the model on all 68 scenarios and compare it
+with the results of the second setup.
