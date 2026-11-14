@@ -39,7 +39,7 @@ the flow fluctuates around a mean pattern (\cref{ch:dataset}).
 A different way to simulate the flow is the lattice Boltzmann method \citep{kruger2017}, which is well suited
 for GPUs. It is usually combined with a large-eddy simulation (LES), in which the large eddies are resolved
 and only the smallest ones are modelled, for example with the model of \citet{smagorinsky1963}. I tested this
-idea as a faster alternative in \cref{ch:computation}.
+idea as a faster alternative in \cref{ch:notused}.
 
 \section{\cotwo{} transport}
 The \cotwo{} at a point changes for three reasons: the air carries it along (advection), it spreads out by
@@ -78,4 +78,4 @@ metric, and they use the model to choose vent settings that keep the \cotwo{} lo
 Instead of learning from simulation data, a network can be trained to obey the physical equations
 themselves: at many random points of the domain, the network is told how much its answer violates the
 equations, and it is adjusted to reduce this \citep{raissi2019}. This idea was also extended to neural
-operators \citep{li2021pino}. I tried it for our room in \cref{ch:pinn}.
+operators \citep{li2021pino}. I tried it for our room in \cref{ch:notused}.
