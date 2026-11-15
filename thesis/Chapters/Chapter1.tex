@@ -2,38 +2,59 @@
 \label{ch:intro}
 
 \section{Motivation}
-In a lecture with 40 or 50 students the air in the classroom gets bad quickly. The reason is the \cotwo{} that
-we breathe out. Outdoor air has about 400~ppm of \cotwo{}, and in a full room without fresh air the value can
-go above 1000~ppm within one lecture. In a study people made clearly worse decisions at 1000~ppm than at 600~ppm
-\citep{satish2012}, and the German Umweltbundesamt rates values below 1000~ppm as harmless and values above
-2000~ppm as not acceptable \citep{uba2008}. We cannot see or smell \cotwo{}, so normally nobody in the room
-notices it.
+Everybody knows the feeling in a full classroom after one hour. The air is used, and it gets harder to
+concentrate. The reason is carbon dioxide, written as \cotwo{}. It is a gas that we breathe out with every
+breath. When many people sit in a closed room, more and more \cotwo{} collects in the air.
 
-In our classrooms the only way to get fresh air is to open the windows. In winter this is a problem, because
-the warm air goes out and the room has to be heated again. If we knew how the \cotwo{} will develop in the
-next minutes, we could open the windows at the right time and close them again when the air is good. For this
-we need a model that predicts the \cotwo{} in the room. In this thesis I only predict the \cotwo{}. The
-temperature and the heating energy are not part of the model.
+The amount of \cotwo{} in the air is measured in ppm. Fresh air outside has about 400~ppm. In a full classroom
+with closed windows the value can go above 1000~ppm during one lecture. This is the value where the air is no
+longer rated as good \citep{uba2008}, and in one study people made clearly worse decisions at 1000~ppm than
+at 600~ppm \citep{satish2012}. We cannot see or smell \cotwo{}, so nobody in the room notices when the value
+is too high.
 
-The airflow in a room can be calculated with computational fluid dynamics (CFD), but one simulation takes
-many hours, so it cannot be used while a lecture is running. \citet{bian2025} solved this for a classroom with
-ceiling vents. They ran many CFD simulations before, trained a neural network on the results, and this
-network gives a prediction in less than a second.
+The solution is simple. We open the windows, fresh air comes in and the \cotwo{} goes down. But in winter
+there is a cost. The warm air goes out through the open windows, and the room has to be heated again. So the
+windows should be open when it is needed, and closed again when the air is good. The problem is that nobody
+knows when this is.
+
+It would help to know how the \cotwo{} in the room will be in the next few minutes. Then we could open the
+windows at the right time. For this we need a model, which is a computer program that predicts the \cotwo{}.
+In this thesis I build such a model. It only predicts the \cotwo{}. The temperature and the heating are not
+part of it.
+
+One way to predict the \cotwo{} is to simulate the air in the room on a computer. The computer calculates
+how the air moves through the windows and through the room, and where the \cotwo{} goes. This kind of
+simulation is called computational fluid dynamics, short CFD. It is accurate, but one simulation takes many
+hours. A lecture is over long before the result is there.
+
+\citet{bian2025} found a way around this problem for a classroom with air vents in the ceiling. They ran
+many CFD simulations before, not during the lecture. Then they used the results to train a neural network. A
+neural network is a program that learns from examples. After it has seen many simulations, it can predict
+the \cotwo{} for a new situation in less than a second.
 
 \section{Goal of this thesis}
 The goal of this thesis is to use the method of \citet{bian2025} for classroom 1-130 of our university. This
-room has no ceiling vents. It is ventilated through 8 windows and 2 doors. A wireless sensor network (WSN) is
-being installed in the room, and later the model should work with the data of these sensors. I use only
-open-source software, with OpenFOAM for the simulations instead of ANSYS Fluent.
+room has no air vents. It has 8 windows and 2 doors. In practice 6 windows and one door are used, and the
+other two windows and the second door stay closed. Sensors are being installed in the room at the moment.
+They measure the \cotwo{} and the air at the windows and doors, and together they form a wireless sensor
+network (WSN). Later the model should work with the data of these
+sensors. For the simulations I use the free program OpenFOAM. The paper used the commercial program ANSYS
+Fluent.
 
 \section{Approach}
-I run OpenFOAM simulations of the room and use this data to train the GNOT model. \fref{fig:pipeline} shows
-the steps. One simulation belongs to one window scenario, which says which windows are open and how fast the
-air comes in. OpenFOAM calculates the airflow, and my own \cotwo{} solver calculates from this airflow how the
-\cotwo{} of the people spreads in the room over 30~minutes. The model is trained on these \cotwo{} maps. It
-gets the \cotwo{} of the last 6~minutes at 1.6~m height, the window speeds and the number of people, and it
-predicts the \cotwo{} of the next 3~minutes. I use 1.6~m, which is about the head height of a standing person. The \cotwo{} is
-stored for the whole room, so another height can be used later without new simulations.
+I run OpenFOAM simulations of the room and use this data to train the model. The model is a neural network
+of the type GNOT, which is explained in \cref{ch:background}. \fref{fig:pipeline} shows the steps.
+
+Each simulation is for one window scenario. A scenario says which windows are open and how fast the air
+comes in through them. For example, in one scenario only window W1 is open and the air comes in with 1~m/s.
+For each scenario OpenFOAM calculates how the air moves in the room. Then a second program, which I wrote
+myself, calculates how the \cotwo{} of the people spreads with this air over 30~minutes. The result is a
+series of \cotwo{} maps of the room, one map every 30~s.
+
+The model learns from these maps. It gets the \cotwo{} maps of the last 6~minutes, the air speeds at the
+windows and the number of people. From this it predicts the \cotwo{} maps of the next 3~minutes. I use the
+maps at a height of 1.6~m, which is about the head height of a standing person. The \cotwo{} is stored for the
+whole room, so another height can be used later without new simulations.
 
 \begin{figure}[h]
   \centering
@@ -54,7 +75,7 @@ both doors can be open or closed. These 40 scenarios are running at the moment. 
   \item I built the complete chain from the room geometry to the trained model with open-source software.
   \item I wrote a \cotwo{} solver for the GPU that matches the \cotwo{} of OpenFOAM within about 2\,\%, and I
         found out how often the airflow has to be saved for this.
-  \item I built the dataset a second time with this correction and compared the models trained on the old and
+  \item I built the dataset a second time with the airflow saved every second and compared the models trained on the old and
         on the new data.
   \item I started the simulations with all windows and doors.
   \item I tested faster simulations, a GPU solver and training without simulation data. These did not become

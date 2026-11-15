@@ -24,8 +24,16 @@ as in my model.
 \end{table}
 
 According to the current plan six of the eight windows get a station. Two windows stay closed, W8 and
-probably W5. The stations send their values to a server, which stores them in a database together with the
+probably W5. Door~2 also stays closed. \fref{fig:stations} shows where I assume the stations for now. Each
+station stands in front of its window or door and points at it. The stations send their values to a server, which stores them in a database together with the
 position of each station in the room.
+
+\begin{figure}[h]
+  \centering
+  \includegraphics[width=0.9\textwidth]{sensor_stations.png}
+  \caption{Sensor stations in classroom 1-130.}
+  \label{fig:stations}
+\end{figure}
 
 \section{Data flow}
 The model was trained on simulated \cotwo{} maps. To use it with the real sensors, the data has to go through

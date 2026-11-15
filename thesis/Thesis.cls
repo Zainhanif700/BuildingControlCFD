@@ -236,7 +236,7 @@
     {\normalsize \facname \par}
     {\normalsize \deptname \par}
     \bigskip
-    {\normalsize Doctor of Philosophy\par}
+    {\normalsize Masters in High Integrity Systems\par}
     \bigskip
     {\normalsize\bf \@title \par}
     \medskip
