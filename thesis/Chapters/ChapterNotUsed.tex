@@ -33,10 +33,31 @@ scenarios are left. A simulated time of 450~s would save a quarter of the time w
 kept 600~s for all scenarios so that the dataset is the same everywhere. The larger Courant number changes the
 flow too much.
 
-I also ran one short test on other computers. The first 20~s of scenario N10 on one core took 950~s on an
-Apple M5 Max and 4,197~s on an NVIDIA DGX Spark. On the DGX 20 scenarios were running at the same time, and on
-the Mac only this one, so the two numbers are not a direct comparison. A full run of N10 with 600~s took
-about 8~hours on the Mac.
+I also ran one short test on three computers: the first 20~s of scenario N10 on one core (\tref{tab:bench}). The
+Mac and the lab computer ran the test alone, so these two numbers can be compared: one core of the lab computer
+is about twice as slow as one core of the Mac. On the DGX 20 scenarios were running at the same time, so its
+number is not a direct comparison. A full run of N10 with 600~s took about 8~hours on the Mac, and all 28
+scenarios of the second setup took about 51~hours there, with 16 scenarios at a time on one core each.
+
+My earlier runs on the lab computer were not made for this comparison. They used 4 cores and a save every
+second. For N12 the first 20~s took 2,990~s on 4 cores. With the speed-up of 2.7 for 4 cores
+(\tref{tab:speed}) this is about 8,000~s on one core, which is similar to the 9,319~s of the DGX for N12 with
+20 runs at once. So the lab computer under its normal load and the DGX with 20 runs at once are about equally fast.
+
+\begin{table}[h]
+  \centering
+  \caption[Run time of the N10 test.]{Run time of the first 20~s of scenario N10 on one core.}
+  \label{tab:bench}
+  \begin{tabular}{lrll}
+    \toprule
+    Computer & Time [s] & Load & Compared with the Mac\\
+    \midrule
+    Apple M5 Max & 950 & running alone & 1.0\\
+    Lab computer (4 cores) & 2,026 & running alone & 2.1 times slower\\
+    NVIDIA DGX Spark & 4,197 & 20 runs at once & 4.4 times slower\\
+    \bottomrule
+  \end{tabular}
+\end{table}
 
 \section{Running the simulations on the GPU}
 I wanted to know if the simulations can run much faster on the GPU. For this I wrote a lattice Boltzmann
