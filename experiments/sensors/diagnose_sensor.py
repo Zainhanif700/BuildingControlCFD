@@ -102,7 +102,7 @@ def print_by_time(res):
         print(f"  {a:2d}-{b:2d}   {a * 0.5:4.1f}-{b * 0.5:4.1f}   {100 * r['model']:8.1f}   {100 * r['persistence']:9.1f}  {r['n']:7d}")
 
 
-def decisions(models, data, every=4, thresholds=(700.0, 800.0, 1000.0), seed=1234):
+def decisions(models, data, every=4, thresholds=(700.0, 800.0, 1000.0), seed=1234, margins=(0.0, 25.0, 50.0, 75.0)):
     """The question behind the forecast: will the CO2 in the seating area pass a limit within the next 3 minutes?
     Also the error of the room average. All CO2 values here are absolute (outside air 400 ppm added)."""
     (x0, x1), (y0, y1), _ = common.SEAT_BOX
@@ -112,6 +112,7 @@ def decisions(models, data, every=4, thresholds=(700.0, 800.0, 1000.0), seed=123
     rng = np.random.default_rng(seed)
     err = {"seat_model": [], "seat_pers": [], "plane_model": [], "plane_pers": [], "seat_true": []}
     counts = {t: {"model": np.zeros(4, int), "persistence": np.zeros(4, int)} for t in thresholds}   # tp fp fn tn
+    margin_counts = {(t, m): np.zeros(4, int) for t in thresholds for m in margins}   # model warns at limit - margin
     for k in range(len(data.cases)):
         for t0 in data.t0s[k][::every]:
             if data.H is not None:
@@ -136,10 +137,13 @@ def decisions(models, data, every=4, thresholds=(700.0, 800.0, 1000.0), seed=123
                 real = bool(true_seat.max() >= t)
                 for name, pred in (("model", bool(model_seat.max() >= t)), ("persistence", bool(pers_seat >= t))):
                     counts[t][name][(0 if real else 3) if pred == real else (1 if pred else 2)] += 1
-    return err, counts
+                for m in margins:
+                    pred = bool(model_seat.max() >= t - m)
+                    margin_counts[(t, m)][(0 if real else 3) if pred == real else (1 if pred else 2)] += 1
+    return err, counts, margin_counts
 
 
-def print_decisions(err, counts):
+def print_decisions(err, counts, margin_counts=None):
     print("\nTEST scenarios, the room average (mean absolute error in ppm, mean over all samples)")
     print(f"  seating-area mean:  model {np.mean(err['seat_model']):6.1f}   persistence {np.mean(err['seat_pers']):6.1f}"
           f"   (mean CO2 there: {np.mean(err['seat_true']):.0f} ppm)")
@@ -152,6 +156,11 @@ def print_decisions(err, counts):
         print(f"  {t:5.0f}  {m[0] + m[2]:5d}            {m[0]:5d} {m[2]:6d} {m[1]:11d}                    "
               f"{p[0]:5d} {p[2]:6d} {p[1]:11d}")
     print("  (the number of real events depends on the people numbers drawn for the samples, 10 to 80)")
+    if margin_counts:
+        print("\nwarning with a safety margin: the model warns when its forecast reaches limit - margin")
+        print("  limit  margin   real  found  missed  false alarm")
+        for (t, m), c in margin_counts.items():
+            print(f"  {t:5.0f}  {m:6.0f}  {c[0] + c[2]:5d}  {c[0]:5d}  {c[2]:6d}  {c[1]:11d}")
 
 
 def print_table(title, names, rows):

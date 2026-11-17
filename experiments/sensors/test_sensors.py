@@ -360,12 +360,20 @@ def test_diagnose(tmp):
         assert r["zero"] == 1.0
     print("ok  diagnosis runs for a saved member")
 
-    err, counts = dg.decisions(models, data, every=6, thresholds=(50.0, 100.0))
+    err, counts, margin_counts = dg.decisions(models, data, every=6, thresholds=(50.0, 100.0))
     assert all(np.isfinite(v).all() for v in err.values()) and len(err["seat_true"]) > 0
     for c in counts.values():
         for name in ("model", "persistence"):
             assert c[name].sum() == len(err["seat_true"])           # every sample is counted once
-    dg.print_decisions(err, counts)
+    for (t, m), c in margin_counts.items():
+        assert c.sum() == len(err["seat_true"])
+        if m == 0:
+            assert (c == counts[t]["model"]).all()                  # margin 0 is the normal warning
+    # a larger margin never finds fewer events
+    for t in (50.0, 100.0):
+        found = [margin_counts[(t, m)][0] for m in (0.0, 25.0, 50.0, 75.0)]
+        assert found == sorted(found)
+    dg.print_decisions(err, counts, margin_counts)
     print("ok  the decision test runs")
 
 
