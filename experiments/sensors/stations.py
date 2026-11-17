@@ -14,7 +14,7 @@ WINDOW_X = [2.395, 4.415, 5.095, 7.795, 9.805, 10.495, 13.195, 15.215]
 DOOR_X = [2.12, 12.85]
 
 CLOSED_WINDOWS = [5, 8]  # these windows stay closed and have no station
-CLOSED_DOORS = [2]       # door 2 stays closed and has no station
+CLOSED_DOORS = []        # door 2 can also be open, so it gets a station too (use [2] for the 7-station setup)
 
 # distance sensor: a larger distance than this means the window or door is open (assumed)
 OPEN_ABOVE_MM = 100.0
