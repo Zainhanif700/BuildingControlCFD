@@ -188,7 +188,8 @@ def load_members(tag, dev):
         m = SensorForecastGNOT(d=ck["d"], layers=ck["layers"], c_scale=ck["c_scale"],
                                anchor=ck.get("anchor", False), blind=ck.get("blind", False),
                                hist_len=ck.get("hist", 12), people_blind=ck.get("people_blind", False),
-                               physics=ck.get("physics", False)).to(dev)
+                               physics=ck.get("physics", False),
+                               direction_blind=ck.get("direction_blind", False)).to(dev)
         m.load_state_dict(ck["state"])
         models.append(m.eval())
     return models, ck
@@ -200,6 +201,10 @@ def main():
     ap.add_argument("--scenarios", required=True)
     ap.add_argument("--tag", required=True)
     ap.add_argument("--transitions", action="store_true")
+    ap.add_argument("--v-scale", type=float, default=1.0,
+                    help="sensitivity test: multiply all window speeds the model gets by this factor")
+    ap.add_argument("--quick", action="store_true",
+                    help="only the test table (no training table, warning test or error by time)")
     ap.add_argument("--split-seed", type=int, default=0,
                     help="the random split the models were trained on (0 = the fixed split of the scenario file)")
     ap.add_argument("--z", type=float, default=1.6)
@@ -217,12 +222,18 @@ def main():
     if a.split_seed:
         from train_sensor import resplit
         train_files, test_files = resplit(train_files, test_files, a.split_seed)
-    for title, files in (("TRAIN scenarios", train_files), ("TEST scenarios", test_files)):
+    sets = (("TEST scenarios", test_files),) if a.quick else (("TRAIN scenarios", train_files),
+                                                            ("TEST scenarios", test_files))
+    if a.v_scale != 1.0:
+        print(f"SENSITIVITY TEST: all window speeds are multiplied by {a.v_scale:g}")
+    for title, files in sets:
         data = SensorPlaneData(files, dev, z=a.z, transitions=a.transitions, stations=used,
                                hist_len=ck.get("hist", 12), t0_min=ck.get("t0_min", 0))
+        for v in data.V:                                   # window speeds are the first 8 entries
+            v[:8] *= a.v_scale
         rows = diagnose(models, data, every=a.every, near=a.near)
         print_table(title, [os.path.basename(f).replace(".npz", "") for f in files], rows)
-        if title.startswith("TEST"):
+        if title.startswith("TEST") and not a.quick:
             print_decisions(*decisions(models, data, every=a.every))
             print_by_time(by_time(models, data))
     print("\nuniform and persistence are only references; the sensors do not have the true map.")

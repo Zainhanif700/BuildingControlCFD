@@ -44,9 +44,11 @@ class SensorForecastGNOT(ForecastGNOT):
     anchor=True: the station histories are interpolated to the point (nearer stations count more), and the forecast
     is this interpolated value plus a change, like in the normal model."""
     def __init__(self, d=128, heads=4, layers=3, c_scale=1.0, d_scale=None, anchor=False, blind=False,
-                 hist_len=H_IN, people_blind=False, physics=False):
+                 hist_len=H_IN, people_blind=False, physics=False, direction_blind=False):
         super().__init__(d=d, heads=heads, layers=layers, c_scale=c_scale, d_scale=d_scale, open_flags=True)
         self.anchor = bool(anchor)
+        # the air speed sensor gives only the size of the speed: an outlet window looks like an inlet window
+        self.direction_blind = bool(direction_blind)
         self.physics = bool(physics)     # one more token with the well-mixed room balance (see physics_features)
         if self.physics:
             self.phys_in = nn.Sequential(nn.Linear(6, d), nn.GELU(), nn.Linear(d, d))
@@ -77,6 +79,8 @@ class SensorForecastGNOT(ForecastGNOT):
             h_hist = torch.zeros_like(h_hist)
         if self.people_blind:
             N = torch.full_like(N, 0.5 * N_MAX_FC)
+        if self.direction_blind:
+            V = torch.cat([V[:, :8].abs(), V[:, 8:]], 1)
         if self.anchor:
             q_hist = self.interpolate(q_xyz, h_xyz, h_hist)
             q = self.q_in(self._point_feats(q_xyz, q_hist))

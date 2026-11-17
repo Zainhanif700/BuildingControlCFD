@@ -52,7 +52,8 @@ def train_one(k, tr, te, a, dev, c_scale):
     torch.manual_seed(1000 + k)
     gen = torch.Generator().manual_seed(2000 + k)
     model = SensorForecastGNOT(d=a.d, layers=a.layers, c_scale=c_scale, anchor=a.anchor, blind=a.blind,
-                               hist_len=a.hist, people_blind=a.people_blind, physics=a.physics).to(dev)
+                               hist_len=a.hist, people_blind=a.people_blind, physics=a.physics,
+                               direction_blind=a.direction_blind).to(dev)
     opt = torch.optim.AdamW(model.parameters(), lr=a.lr, weight_decay=a.wd)
     sched = torch.optim.lr_scheduler.OneCycleLR(opt, max_lr=a.lr, total_steps=a.iters, pct_start=0.05)
     start, losses = time.time(), []
@@ -77,7 +78,7 @@ def train_one(k, tr, te, a, dev, c_scale):
     torch.save({"state": model.state_dict(), "c_scale": c_scale, "d": a.d, "layers": a.layers,
                 "stations": a.stations, "noise": a.noise, "anchor": a.anchor,
                 "blind": a.blind, "hist": a.hist, "t0_min": a.t0_min, "people_blind": a.people_blind,
-                "physics": a.physics},
+                "physics": a.physics, "direction_blind": a.direction_blind},
                os.path.join(a.out, f"member{k}.pth"))
     model.eval()
     return model
@@ -103,6 +104,8 @@ def main():
     ap.add_argument("--t0-min", type=int, default=0,
                     help="first time step used (so that runs with different histories use the same samples)")
     ap.add_argument("--n-train", type=int, default=0, help="use only this many (randomly chosen) training scenarios, 0 = all")
+    ap.add_argument("--direction-blind", action="store_true",
+                    help="the model only gets the size of the window speeds (a speed sensor cannot tell in from out)")
     ap.add_argument("--physics", action="store_true",
                     help="give the model the well-mixed room balance (fresh-air flow, final CO2 level, time constant)")
     ap.add_argument("--people-blind", action="store_true",

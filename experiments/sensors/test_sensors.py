@@ -296,7 +296,16 @@ def test_checks(tmp):
     res = dg.by_time([normal.eval()], SensorPlaneData(files[2:], dev), every=4)
     assert all(np.isfinite(r["model"]) for r in res.values() if r["n"] > 0)
     dg.print_by_time(res)
-    print("ok  people-blind, time split, random split, error by time")
+    # direction-blind: an outlet window (negative speed) looks like an inlet window of the same size
+    Vo = torch.zeros(2, 10)
+    Vo[:, 1] = -1.0
+    Vp = Vo.abs()
+    torch.manual_seed(0)
+    dmodel = SensorForecastGNOT(d=32, layers=1, c_scale=50.0, direction_blind=True).eval()
+    assert torch.allclose(dmodel(qx, qh, hx, hh, Vo, N)[0], dmodel(qx, qh, hx, hh, Vp, N)[0])
+    nmodel = SensorForecastGNOT(d=32, layers=1, c_scale=50.0).eval()
+    assert not torch.allclose(nmodel(qx, qh, hx, hh, Vo, N)[0], nmodel(qx, qh, hx, hh, Vp, N)[0])
+    print("ok  people-blind, time split, random split, error by time, direction-blind")
 
 
 def test_physics(tmp):
