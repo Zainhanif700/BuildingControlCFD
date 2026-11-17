@@ -218,6 +218,33 @@ def test_diagnose(tmp):
         assert r["zero"] == 1.0
     print("ok  diagnosis runs for a saved member")
 
+    err, counts = dg.decisions(models, data, every=6, thresholds=(50.0, 100.0))
+    assert all(np.isfinite(v).all() for v in err.values()) and len(err["seat_true"]) > 0
+    for c in counts.values():
+        for name in ("model", "persistence"):
+            assert c[name].sum() == len(err["seat_true"])           # every sample is counted once
+    dg.print_decisions(err, counts)
+    print("ok  the decision test runs")
+
+
+def test_virtual(tmp):
+    """Virtual stations: names, positions, and a member trained with them can be loaded by name."""
+    for n in (1, 2, 4):
+        v = st.virtual_stations(n)
+        assert len(v) == n and all(s.kind == "virtual" for s in v)
+        assert all(3.0 <= s.x <= 12.5 and 2.0 <= s.y <= 7.0 for s in v)       # inside the seating area
+    assert st.virtual_stations(0) == []
+    names = [s.name for s in st.STATIONS + st.virtual_stations(2)]
+    assert [s.name for s in st.by_name(names)] == names and len(set(names)) == len(names)
+    files = []
+    for k in range(2):
+        f = os.path.join(tmp, f"VS{k:02d}.npz")
+        fake_file(f, seed=40 + k)
+        files.append(f)
+    data = SensorPlaneData(files, torch.device("cpu"), stations=st.by_name(names))
+    assert len(data.hist_idx) == len(st.STATIONS) + 2
+    print("ok  virtual stations")
+
 
 if __name__ == "__main__":
     with tempfile.TemporaryDirectory() as tmp:
@@ -227,5 +254,6 @@ if __name__ == "__main__":
         test_model(tmp, m)
         test_anchor(tmp)
         test_blind(tmp)
+        test_virtual(tmp)
         test_diagnose(tmp)
     print("ALL TESTS PASSED")

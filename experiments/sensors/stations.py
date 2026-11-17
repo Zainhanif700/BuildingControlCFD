@@ -53,6 +53,29 @@ def all_stations():
 
 STATIONS = all_stations()
 
+# "What if" test only: virtual stations in the seating area (SEAT_BOX of the simulations is x 3-12.5, y 2-7).
+# They do not exist in the room. They show how much one or more sensors in the middle of the room would help.
+VIRTUAL_SETS = {
+    1: [(7.75, 4.5)],
+    2: [(5.4, 4.5), (10.1, 4.5)],
+    4: [(5.4, 3.25), (10.1, 3.25), (5.4, 5.75), (10.1, 5.75)],
+}
+
+
+def virtual_stations(n):
+    """The virtual stations of one set (n = 0, 1, 2 or 4), named X<n>_<i>."""
+    if n == 0:
+        return []
+    return [Station(100 + i, f"X{n}_{i}", "virtual", i, x, y) for i, (x, y) in enumerate(VIRTUAL_SETS[n], 1)]
+
+
+def by_name(names):
+    """Station objects (real and virtual) for a list of names, e.g. the names saved with a trained model."""
+    pool = {s.name: s for s in STATIONS}
+    for n in VIRTUAL_SETS:
+        pool.update({s.name: s for s in virtual_stations(n)})
+    return [pool[name] for name in names]
+
 if __name__ == "__main__":
     for s in STATIONS:
         print(f"{s.id}  {s.name:5s} {s.kind:6s} {s.number}  x = {s.x:5.2f}  y = {s.y:4.2f}  z = {s.z:.2f}")

@@ -43,7 +43,7 @@ def train_one(k, tr, te, a, dev, c_scale):
                   f"(persistence {100 * b_te:.2f}%)  {time.time() - start:.0f} s", flush=True)
             losses = []
     torch.save({"state": model.state_dict(), "c_scale": c_scale, "d": a.d, "layers": a.layers,
-                "stations": [s.name for s in st.STATIONS], "noise": a.noise, "anchor": a.anchor,
+                "stations": a.stations, "noise": a.noise, "anchor": a.anchor,
                 "blind": a.blind},
                os.path.join(a.out, f"member{k}.pth"))
     model.eval()
@@ -58,6 +58,8 @@ def main():
     ap.add_argument("--transitions", action="store_true")
     ap.add_argument("--anchor", action="store_true", help="interpolate the station histories to every point (see sensor_model.py)")
     ap.add_argument("--blind", action="store_true", help="test: the model does not get the station CO2")
+    ap.add_argument("--virtual", type=int, default=0, choices=[0, 1, 2, 4],
+                    help="what-if test: add this many virtual stations in the seating area (not in the real room)")
     ap.add_argument("--n-train", type=int, default=0, help="use only this many (randomly chosen) training scenarios, 0 = all")
     ap.add_argument("--z", type=float, default=1.6)
     ap.add_argument("--noise", type=float, default=10.0, help="noise on the station CO2 in training [ppm]")
@@ -79,8 +81,10 @@ def main():
     if a.n_train:
         keep = np.sort(np.random.default_rng(0).choice(len(train_files), a.n_train, replace=False))
         train_files = [train_files[i] for i in keep]
-    tr =SensorPlaneData(train_files, dev, z=a.z, transitions=a.transitions, noise=a.noise)
-    te = SensorPlaneData(test_files, dev, z=a.z, transitions=a.transitions)
+    used = st.STATIONS + st.virtual_stations(a.virtual)
+    a.stations = [s.name for s in used]
+    tr = SensorPlaneData(train_files, dev, z=a.z, transitions=a.transitions, noise=a.noise, stations=used)
+    te = SensorPlaneData(test_files, dev, z=a.z, transitions=a.transitions, stations=used)
     c_scale = c_scale_of(tr)
     print(f"{len(train_files)} train / {len(test_files)} test scenarios, {len(tr.hist_idx)} stations, "
           f"{tr.xyz.shape[0]} plane points, device {dev}", flush=True)
