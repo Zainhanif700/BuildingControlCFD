@@ -21,7 +21,8 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 def train_one(k, tr, te, a, dev, c_scale):
     torch.manual_seed(1000 + k)
     gen = torch.Generator().manual_seed(2000 + k)
-    model = SensorForecastGNOT(d=a.d, layers=a.layers, c_scale=c_scale, anchor=a.anchor, blind=a.blind).to(dev)
+    model = SensorForecastGNOT(d=a.d, layers=a.layers, c_scale=c_scale, anchor=a.anchor, blind=a.blind,
+                               hist_len=a.hist).to(dev)
     opt = torch.optim.AdamW(model.parameters(), lr=a.lr, weight_decay=1e-4)
     sched = torch.optim.lr_scheduler.OneCycleLR(opt, max_lr=a.lr, total_steps=a.iters, pct_start=0.05)
     start, losses = time.time(), []
@@ -44,7 +45,7 @@ def train_one(k, tr, te, a, dev, c_scale):
             losses = []
     torch.save({"state": model.state_dict(), "c_scale": c_scale, "d": a.d, "layers": a.layers,
                 "stations": a.stations, "noise": a.noise, "anchor": a.anchor,
-                "blind": a.blind},
+                "blind": a.blind, "hist": a.hist, "t0_min": a.t0_min},
                os.path.join(a.out, f"member{k}.pth"))
     model.eval()
     return model
@@ -58,8 +59,11 @@ def main():
     ap.add_argument("--transitions", action="store_true")
     ap.add_argument("--anchor", action="store_true", help="interpolate the station histories to every point (see sensor_model.py)")
     ap.add_argument("--blind", action="store_true", help="test: the model does not get the station CO2")
-    ap.add_argument("--virtual", type=int, default=0, choices=[0, 1, 2, 4],
-                    help="what-if test: add this many virtual stations in the seating area (not in the real room)")
+    ap.add_argument("--virtual", default="0", choices=["0"] + list(st.VIRTUAL_SETS),
+                    help="what-if test: add a set of virtual stations in the seating area (not in the real room)")
+    ap.add_argument("--hist", type=int, default=12, help="number of 30 s steps of station history the model gets")
+    ap.add_argument("--t0-min", type=int, default=0,
+                    help="first time step used (so that runs with different histories use the same samples)")
     ap.add_argument("--n-train", type=int, default=0, help="use only this many (randomly chosen) training scenarios, 0 = all")
     ap.add_argument("--z", type=float, default=1.6)
     ap.add_argument("--noise", type=float, default=10.0, help="noise on the station CO2 in training [ppm]")
@@ -83,8 +87,10 @@ def main():
         train_files = [train_files[i] for i in keep]
     used = st.STATIONS + st.virtual_stations(a.virtual)
     a.stations = [s.name for s in used]
-    tr = SensorPlaneData(train_files, dev, z=a.z, transitions=a.transitions, noise=a.noise, stations=used)
-    te = SensorPlaneData(test_files, dev, z=a.z, transitions=a.transitions, stations=used)
+    tr = SensorPlaneData(train_files, dev, z=a.z, transitions=a.transitions, noise=a.noise, stations=used,
+                         hist_len=a.hist, t0_min=a.t0_min)
+    te = SensorPlaneData(test_files, dev, z=a.z, transitions=a.transitions, stations=used,
+                         hist_len=a.hist, t0_min=a.t0_min)
     c_scale = c_scale_of(tr)
     print(f"{len(train_files)} train / {len(test_files)} test scenarios, {len(tr.hist_idx)} stations, "
           f"{tr.xyz.shape[0]} plane points, device {dev}", flush=True)

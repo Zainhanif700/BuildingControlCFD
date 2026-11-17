@@ -143,7 +143,8 @@ def load_members(tag, dev):
     for p in paths:
         ck = torch.load(p, map_location=dev)
         m = SensorForecastGNOT(d=ck["d"], layers=ck["layers"], c_scale=ck["c_scale"],
-                               anchor=ck.get("anchor", False), blind=ck.get("blind", False)).to(dev)
+                               anchor=ck.get("anchor", False), blind=ck.get("blind", False),
+                               hist_len=ck.get("hist", 12)).to(dev)
         m.load_state_dict(ck["state"])
         models.append(m.eval())
     return models, ck
@@ -168,7 +169,8 @@ def main():
 
     train_files, test_files = split(a.data_dir, a.scenarios, with_s00=False)
     for title, files in (("TRAIN scenarios", train_files), ("TEST scenarios", test_files)):
-        data = SensorPlaneData(files, dev, z=a.z, transitions=a.transitions, stations=used)
+        data = SensorPlaneData(files, dev, z=a.z, transitions=a.transitions, stations=used,
+                               hist_len=ck.get("hist", 12), t0_min=ck.get("t0_min", 0))
         rows = diagnose(models, data, every=a.every, near=a.near)
         print_table(title, [os.path.basename(f).replace(".npz", "") for f in files], rows)
         if title.startswith("TEST"):

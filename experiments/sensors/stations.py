@@ -56,15 +56,23 @@ STATIONS = all_stations()
 # "What if" test only: virtual stations in the seating area (SEAT_BOX of the simulations is x 3-12.5, y 2-7).
 # They do not exist in the room. They show how much one or more sensors in the middle of the room would help.
 VIRTUAL_SETS = {
-    1: [(7.75, 4.5)],
-    2: [(5.4, 4.5), (10.1, 4.5)],
-    4: [(5.4, 3.25), (10.1, 3.25), (5.4, 5.75), (10.1, 5.75)],
+    "1": [(7.75, 4.5)],                                              # middle of the seating area
+    "2": [(5.4, 4.5), (10.1, 4.5)],
+    "4": [(5.4, 3.25), (10.1, 3.25), (5.4, 5.75), (10.1, 5.75)],
+    # one sensor at other places of the seating area
+    "front": [(4.0, 4.5)],                                           # blackboard side
+    "back": [(11.5, 4.5)],                                           # door 2 side
+    "windowside": [(7.75, 6.6)],                                     # towards the window wall
+    "doorside": [(7.75, 2.4)],                                       # towards the door wall
+    # a grid of 16, to see what many sensors would give
+    "16": [(x, y) for y in (2.625, 3.875, 5.125, 6.375) for x in (4.19, 6.56, 8.94, 11.31)],
 }
 
 
 def virtual_stations(n):
-    """The virtual stations of one set (n = 0, 1, 2 or 4), named X<n>_<i>."""
-    if n == 0:
+    """The virtual stations of one set ("0" = none, "1", "2", "4", "front", ..., "16"), named X<set>_<i>."""
+    n = str(n)
+    if n == "0":
         return []
     return [Station(100 + i, f"X{n}_{i}", "virtual", i, x, y) for i, (x, y) in enumerate(VIRTUAL_SETS[n], 1)]
 

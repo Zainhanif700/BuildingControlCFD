@@ -12,7 +12,7 @@ import torch.nn as nn
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "gnot_openfoam_rans"))
 import common  # noqa: F401  (adds the geometry folders to the path)
-from forecast import ForecastGNOT, PlaneData, T_OUT, N_MAX_FC
+from forecast import ForecastGNOT, PlaneData, T_OUT, N_MAX_FC, H_IN
 from point_sampler import V_MAX
 
 import stations as st
@@ -23,12 +23,19 @@ class SensorForecastGNOT(ForecastGNOT):
     station values plus a change.
     anchor=True: the station histories are interpolated to the point (nearer stations count more), and the forecast
     is this interpolated value plus a change, like in the normal model."""
-    def __init__(self, d=128, heads=4, layers=3, c_scale=1.0, d_scale=None, anchor=False, blind=False):
+    def __init__(self, d=128, heads=4, layers=3, c_scale=1.0, d_scale=None, anchor=False, blind=False,
+                 hist_len=H_IN):
         super().__init__(d=d, heads=heads, layers=layers, c_scale=c_scale, d_scale=d_scale, open_flags=True)
         self.anchor = bool(anchor)
         self.blind = bool(blind)         # test only: the station CO2 is set to zero, only windows, doors and people count
-        if not self.anchor:
-            nf = 2 * self.ff.n_freq
+        self.hist_len = int(hist_len)    # number of 30 s steps of station history (12 = 6 min)
+        nf = 2 * self.ff.n_freq
+        if self.hist_len != H_IN:        # the parent model is built for 12 steps
+            self.h_in = nn.Sequential(nn.Linear(nf + self.hist_len, d), nn.GELU(), nn.Linear(d, d))
+        if self.anchor:
+            if self.hist_len != H_IN:
+                self.q_in = nn.Sequential(nn.Linear(nf + self.hist_len, d), nn.GELU(), nn.Linear(d, d))
+        else:
             self.q_in = nn.Sequential(nn.Linear(nf, d), nn.GELU(), nn.Linear(d, d))
 
     @staticmethod
@@ -72,13 +79,24 @@ class SensorForecastGNOT(ForecastGNOT):
 
 class SensorPlaneData(PlaneData):
     """Same data as PlaneData, but the history comes only from the plane points next to the stations."""
-    def __init__(self, paths, device, z=st.Z_STATION, transitions=False, noise=0.0, stations=None):
+    def __init__(self, paths, device, z=st.Z_STATION, transitions=False, noise=0.0, stations=None, hist_len=H_IN,
+                 t0_min=0):
         super().__init__(paths, device, seed=0, z=z, transitions=transitions)
         stations = stations or st.STATIONS
         xy = self.xyz[:, :2].cpu().numpy()
         cells = [int(np.argmin((xy[:, 0] - s.x) ** 2 + (xy[:, 1] - s.y) ** 2)) for s in stations]
         self.hist_idx = torch.tensor(cells, device=device)
         self.noise = float(noise)
+        # a longer history needs later start times; t0_min makes runs with different histories use the same samples
+        self.hist_len = int(hist_len)
+        self.t0s = [list(range(max(self.hist_len - 1, int(t0_min)), f.shape[0] - T_OUT)) for f in self.frames]
+
+    def sample(self, k, t0, N, NA=0.0):
+        """History (hist_len steps) and future frames for N people now and NA people before."""
+        f = self.frames[k] * (N / self.N_ref[k])
+        if self.H is not None:
+            f = f + self.H[k] * (NA / self.N_ref[k])
+        return f[t0 - self.hist_len + 1:t0 + 1].T, f[t0 + 1:t0 + 1 + T_OUT].T
 
     def batch(self, B, Q, gen, n_lo=10.0, n_hi=80.0):
         qx, qh, hx, hh, V, N, tg = super().batch(B, Q, gen, n_lo, n_hi)

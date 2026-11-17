@@ -189,6 +189,37 @@ def test_blind(tmp):
     print("ok  the blind model ignores the station CO2")
 
 
+def test_history_length(tmp):
+    """A longer station history: more steps in, later start times, same output form; 12 steps stays as before."""
+    files = []
+    for k in range(3):
+        f = os.path.join(tmp, f"HL{k:02d}.npz")
+        fake_file(f, seed=50 + k)
+        files.append(f)
+    dev = torch.device("cpu")
+    base = SensorPlaneData(files[:2], dev)
+    assert base.t0s[0][0] == 11
+    for hist_len in (24, 40):
+        tr = SensorPlaneData(files[:2], dev, noise=5.0, hist_len=hist_len, t0_min=39)
+        te = SensorPlaneData(files[2:], dev, hist_len=hist_len, t0_min=39)
+        assert tr.t0s[0][0] == 39 and len(tr.t0s[0]) == 61 - 6 - 39
+        gen = torch.Generator().manual_seed(0)
+        torch.manual_seed(0)
+        model = SensorForecastGNOT(d=32, layers=1, c_scale=50.0, hist_len=hist_len)
+        qx, qh, hx, hh, V, N, target = tr.batch(4, 32, gen)
+        assert hh.shape == (4, len(st.STATIONS), hist_len)
+        mean, logvar = model(qx, qh, hx, hh, V, N)
+        assert mean.shape == target.shape == (4, 32, 6) and torch.isfinite(mean).all()
+        err, base_err, n = evaluate([model], te, every=4)
+        assert n > 0 and np.isfinite(err)
+    # the anchored model also works with a longer history
+    model = SensorForecastGNOT(d=32, layers=1, c_scale=50.0, anchor=True, hist_len=24)
+    tr = SensorPlaneData(files[:2], dev, hist_len=24, t0_min=39)
+    qx, qh, hx, hh, V, N, target = tr.batch(2, 16, torch.Generator().manual_seed(1))
+    assert model(qx, qh, hx, hh, V, N)[0].shape == (2, 16, 6)
+    print("ok  longer station history")
+
+
 def test_diagnose(tmp):
     """The diagnosis runs for a saved member and gives finite numbers for every column."""
     import diagnose_sensor as dg
@@ -229,11 +260,14 @@ def test_diagnose(tmp):
 
 def test_virtual(tmp):
     """Virtual stations: names, positions, and a member trained with them can be loaded by name."""
-    for n in (1, 2, 4):
+    for n, count in (("1", 1), ("2", 2), ("4", 4), ("16", 16), ("front", 1), ("back", 1), ("windowside", 1),
+                     ("doorside", 1)):
         v = st.virtual_stations(n)
-        assert len(v) == n and all(s.kind == "virtual" for s in v)
+        assert len(v) == count and all(s.kind == "virtual" for s in v)
         assert all(3.0 <= s.x <= 12.5 and 2.0 <= s.y <= 7.0 for s in v)       # inside the seating area
-    assert st.virtual_stations(0) == []
+    assert st.virtual_stations(0) == [] and st.virtual_stations("0") == []
+    every = [s.name for k in st.VIRTUAL_SETS for s in st.virtual_stations(k)]
+    assert len(set(every)) == len(every)                                     # names are unique
     names = [s.name for s in st.STATIONS + st.virtual_stations(2)]
     assert [s.name for s in st.by_name(names)] == names and len(set(names)) == len(names)
     files = []
@@ -255,5 +289,6 @@ if __name__ == "__main__":
         test_anchor(tmp)
         test_blind(tmp)
         test_virtual(tmp)
+        test_history_length(tmp)
         test_diagnose(tmp)
     print("ALL TESTS PASSED")
