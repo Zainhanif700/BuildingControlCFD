@@ -191,6 +191,8 @@ def main():
     ap.add_argument("--scenarios", required=True)
     ap.add_argument("--tag", required=True)
     ap.add_argument("--transitions", action="store_true")
+    ap.add_argument("--split-seed", type=int, default=0,
+                    help="the random split the models were trained on (0 = the fixed split of the scenario file)")
     ap.add_argument("--z", type=float, default=1.6)
     ap.add_argument("--every", type=int, default=4, help="use every n-th time of each scenario")
     ap.add_argument("--near", type=float, default=2.0, help="distance to a station [m] for the near / far split")
@@ -203,6 +205,9 @@ def main():
     print(f"{len(models)} members, stations of the training: {ck['stations']}")
 
     train_files, test_files = split(a.data_dir, a.scenarios, with_s00=False)
+    if a.split_seed:
+        from train_sensor import resplit
+        train_files, test_files = resplit(train_files, test_files, a.split_seed)
     for title, files in (("TRAIN scenarios", train_files), ("TEST scenarios", test_files)):
         data = SensorPlaneData(files, dev, z=a.z, transitions=a.transitions, stations=used,
                                hist_len=ck.get("hist", 12), t0_min=ck.get("t0_min", 0))
