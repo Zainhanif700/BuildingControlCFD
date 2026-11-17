@@ -385,6 +385,12 @@ def test_lecture(tmp):
     assert np.allclose(down[:20], frames[:20], atol=1e-4)
     assert np.allclose(down[20:], frames[20:] - frames[:41], atol=1e-3)
     assert ld.people_at(0, ld.PEOPLE) == 5 and ld.people_at(700, ld.PEOPLE) == 45 and ld.people_at(1700, ld.PEOPLE) == 25
+    # smoothing spreads a jump: the largest increment gets smaller, the start stays near 0, the level stays similar
+    jump = np.concatenate([np.linspace(0, 36, 6), np.linspace(75, 120, 55)]).astype(np.float32)[:, None]    # a jump of 39
+    sm = ld.smooth_response(jump, 7)
+    assert sm.shape == jump.shape and np.diff(sm, axis=0).max() < 0.6 * np.diff(jump, axis=0).max()
+    assert abs(float(sm[0, 0])) < 6 and abs(float(sm[-1, 0] - jump[-1, 0])) < 10
+    assert np.array_equal(ld.smooth_response(jump, 0), jump)
 
     import diagnose_sensor as dg
     path = os.path.join(tmp, "LD00.npz")

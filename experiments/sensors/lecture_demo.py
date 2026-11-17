@@ -48,6 +48,20 @@ def people_at(t, timeline):
     return n
 
 
+def smooth_response(frames, width):
+    """Spreads the increments of the step response over `width` time steps (a moving average of the increments), so
+    that the jump when my CO2 calculation switches from the real flow to the mean flow (150 s) is spread out.
+    The response stays 0 at the start. Only for the graph, it changes the data, say so in the caption."""
+    if width <= 1:
+        return frames
+    inc = np.diff(frames, axis=0, prepend=0.0)                       # increments, the first one is the first value
+    pad = width // 2
+    padded = np.concatenate([np.zeros((pad, inc.shape[1]), inc.dtype), inc, np.repeat(inc[-1:], pad, axis=0)])
+    kernel = np.ones(width, np.float32) / width
+    smooth = np.stack([np.convolve(padded[:, j], kernel, mode="valid") for j in range(inc.shape[1])], axis=1)
+    return np.cumsum(smooth[:len(inc)], axis=0).astype(frames.dtype)
+
+
 def lecture_excess(frames, n_ref, timeline, base=BASE_EXCESS):
     """CO2 above outside air (time steps, points) for a changing number of people.
     frames: the simulation with n_ref people switched on at time 0."""
@@ -62,10 +76,11 @@ def lecture_excess(frames, n_ref, timeline, base=BASE_EXCESS):
     return out
 
 
-def run_lecture(models, path, timeline=PEOPLE, hist_len=mapper.N_HIST, margin=50.0, noise=st.CO2_NOISE_PPM):
-    """Forecast every 30 s through the whole chain. Returns the times, the seating-area averages and the warnings."""
+def run_lecture(models, path, timeline=PEOPLE, hist_len=mapper.N_HIST, margin=50.0, noise=st.CO2_NOISE_PPM, smooth=0):
+    """Forecast every 30 s through the whole chain. Returns the times, the seating-area averages and the warnings.
+    smooth: width in time steps for smoothing the step response (0 = off, see smooth_response)."""
     d = load_plane(path, z=st.Z_STATION)
-    frames = d["frames"]
+    frames = smooth_response(d["frames"], smooth)
     n_ref = d["N_ref"]
     excess = lecture_excess(frames, n_ref, timeline)
     xyz = torch.tensor(np.c_[d["xy"], np.full(len(d["xy"]), d["z"], np.float32)])
@@ -91,7 +106,7 @@ def run_lecture(models, path, timeline=PEOPLE, hist_len=mapper.N_HIST, margin=50
     future = np.array([truth[k + 1:k + 1 + T_OUT] for k in ks])                # what really happens in the next 3 min
     out = {"t": STEP * np.arange(frames.shape[0]), "truth": truth, "ks": ks, "fc": fc_seat, "future": future,
            "now": truth[ks], "people": np.array([people_at(STEP * k, timeline) for k in range(frames.shape[0])]),
-           "margin": margin, "name": os.path.basename(path).replace(".npz", "")}
+           "margin": margin, "name": os.path.basename(path).replace(".npz", ""), "smooth": smooth}
     for lim in LIMITS:
         out[f"warn_{lim:g}"] = fc_seat.max(1) >= lim - margin                  # the model warns
         out[f"real_{lim:g}"] = future.max(1) >= lim                            # it really passes the limit in 3 min
@@ -126,19 +141,18 @@ def plot(r, path):
     ax.plot(tt, r["fc"][:, -1], color="#d62728", lw=1.6, label="model forecast, made 3 minutes earlier")
     for lim, col in zip(LIMITS, ("#e6a817", "#d62728")):
         ax.axhline(lim, color=col, ls=":", lw=1)
-        ax.text(t_min[-1], lim + 6, f"{lim:g} ppm", ha="right", color=col, fontsize=9)
+        ax.text(0.3, lim + 6, f"{lim:g} ppm", ha="left", color=col, fontsize=9)
         warn = r[f"warn_{lim:g}"]
         for k in r["ks"][warn]:
             ax.axvspan(STEP * k / 60.0, STEP * (k + 1) / 60.0, ymin=0.0, ymax=0.04 if lim == LIMITS[0] else 0.08,
                        color=col, alpha=0.8)
     ax.set_ylabel("CO$_2$ [ppm]")
-    ax.set_title(f"Synthetic lecture (scenario {r['name']}): forecast and warning, margin {r['margin']:g} ppm")
+    extra = f", step response smoothed over {r['smooth']} steps" if r.get("smooth", 0) > 1 else ""
+    ax.set_title(f"Synthetic lecture (scenario {r['name']}): forecast and warning, margin {r['margin']:g} ppm{extra}")
     ax.legend(loc="upper left", fontsize=9, frameon=False)
-    ax.text(0.99, 0.02, "coloured bars at the bottom: the model warns (yellow 700 ppm, red 800 ppm)", transform=ax.transAxes,
-            ha="right", va="bottom", fontsize=8, color="#555")
     ax2.step(t_min, r["people"], where="post", color="#1f77b4")
     ax2.set_ylabel("people")
-    ax2.set_xlabel("time [min]")
+    ax2.set_xlabel("time [min]\ncoloured bars at the bottom of the upper graph: the model warns (yellow: 700 ppm, red: 800 ppm)")
     fig.tight_layout()
     fig.savefig(path, dpi=150)
     plt.close(fig)
@@ -152,6 +166,8 @@ def main():
     ap.add_argument("--scenario", default=None, help="name of the scenario, e.g. N24 (default: the first test scenario "
                     "that fits the plan and whose seating-area average reaches 700 to 900 ppm)")
     ap.add_argument("--margin", type=float, default=50.0)
+    ap.add_argument("--smooth", type=int, default=0, help="smooth the step response over this many steps of 30 s "
+                    "(the data have a jump at 150 s, where my CO2 calculation switches to the mean flow); 0 = off")
     ap.add_argument("--out", default="lecture.png")
     ap.add_argument("--device", default="cpu")
     a = ap.parse_args()
@@ -172,7 +188,7 @@ def main():
         if chosen is None and (a.scenario or 700.0 <= peak <= 900.0):
             chosen = f
     chosen = chosen or files[0]
-    r = run_lecture(models, chosen, margin=a.margin, hist_len=ck.get("hist", 12))
+    r = run_lecture(models, chosen, margin=a.margin, hist_len=ck.get("hist", 12), smooth=a.smooth)
     print(f"\nlecture with the scenario {r['name']}; people: {PEOPLE}")
     for line in summary(r):
         print("  " + line)
