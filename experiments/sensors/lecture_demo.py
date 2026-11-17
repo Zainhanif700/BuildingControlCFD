@@ -135,7 +135,7 @@ def summary(r):
 def plot(r, path):
     fig, (ax, ax2) = plt.subplots(2, 1, figsize=(11, 7), sharex=True, gridspec_kw={"height_ratios": [4, 1]})
     t_min = r["t"] / 60.0
-    ax.plot(t_min, r["truth"], color="black", lw=2, label="real average CO$_2$ in the seating area")
+    ax.plot(t_min, r["truth"], color="black", lw=2, label="true (simulated) average CO$_2$ in the seating area")
     tt = (STEP * (r["ks"] + T_OUT)) / 60.0                                       # time that the forecasts are for (3 min ahead)
     ax.plot(tt, r["now"], color="gray", lw=1.2, ls="--", label="simple forecast: stays as it is now")
     ax.plot(tt, r["fc"][:, -1], color="#d62728", lw=1.6, label="model forecast, made 3 minutes earlier")
