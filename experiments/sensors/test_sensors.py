@@ -133,6 +133,45 @@ def test_model(tmp, m):
     print("ok  mapper output fits into the model")
 
 
+def test_anchor(tmp):
+    """The anchored model: interpolation of the station values, training, and the same output form."""
+    h_xyz = torch.tensor([[[0.0, 0.0, 1.6], [10.0, 0.0, 1.6], [0.0, 8.0, 1.6]]])
+    flat = torch.full((1, 3, 12), 120.0)
+    q = torch.rand(1, 20, 3) * 10
+    assert torch.allclose(SensorForecastGNOT.interpolate(q, h_xyz, flat), torch.full((1, 20, 12), 120.0), atol=1e-3)
+    hh = torch.tensor([[[100.0] * 12, [200.0] * 12, [300.0] * 12]])
+    at_station = SensorForecastGNOT.interpolate(h_xyz[:, :1], h_xyz, hh)
+    assert abs(float(at_station[0, 0, 0]) - 100.0) < 15.0      # at a station the value is close to its own
+    mid = SensorForecastGNOT.interpolate(torch.tensor([[[9.0, 0.5, 1.6]]]), h_xyz, hh)
+    assert float(mid[0, 0, 0]) > 180.0                          # next to the second station: close to its value
+    print("ok  interpolation of the station histories")
+
+    files = []
+    for k in range(3):
+        f = os.path.join(tmp, f"AN{k:02d}.npz")
+        fake_file(f, seed=20 + k)
+        files.append(f)
+    dev = torch.device("cpu")
+    tr = SensorPlaneData(files[:2], dev, noise=5.0)
+    torch.manual_seed(0)
+    gen = torch.Generator().manual_seed(0)
+    model = SensorForecastGNOT(d=32, layers=1, c_scale=50.0, anchor=True)
+    opt = torch.optim.AdamW(model.parameters(), lr=2e-3)
+    first = last = None
+    for it in range(150):
+        qx, qh, hx, hh, V, N, target = tr.batch(4, 64, gen)
+        mean, logvar = model(qx, qh, hx, hh, V, N)
+        assert mean.shape == target.shape == (4, 64, 6)
+        loss = nll(mean, logvar, target, 50.0)
+        opt.zero_grad()
+        loss.backward()
+        opt.step()
+        first = float(loss) if first is None else first
+        last = float(loss)
+    assert last < first, (first, last)
+    print(f"ok  anchored sensor model trains (loss {first:.2f} -> {last:.2f})")
+
+
 def test_diagnose(tmp):
     """The diagnosis runs for a saved member and gives finite numbers for every column."""
     import diagnose_sensor as dg
@@ -169,5 +208,6 @@ if __name__ == "__main__":
         test_closed_window(tmp)
         test_missing_data()
         test_model(tmp, m)
+        test_anchor(tmp)
         test_diagnose(tmp)
     print("ALL TESTS PASSED")

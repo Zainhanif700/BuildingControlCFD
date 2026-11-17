@@ -21,7 +21,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 def train_one(k, tr, te, a, dev, c_scale):
     torch.manual_seed(1000 + k)
     gen = torch.Generator().manual_seed(2000 + k)
-    model = SensorForecastGNOT(d=a.d, layers=a.layers, c_scale=c_scale).to(dev)
+    model = SensorForecastGNOT(d=a.d, layers=a.layers, c_scale=c_scale, anchor=a.anchor).to(dev)
     opt = torch.optim.AdamW(model.parameters(), lr=a.lr, weight_decay=1e-4)
     sched = torch.optim.lr_scheduler.OneCycleLR(opt, max_lr=a.lr, total_steps=a.iters, pct_start=0.05)
     start, losses = time.time(), []
@@ -43,7 +43,7 @@ def train_one(k, tr, te, a, dev, c_scale):
                   f"(persistence {100 * b_te:.2f}%)  {time.time() - start:.0f} s", flush=True)
             losses = []
     torch.save({"state": model.state_dict(), "c_scale": c_scale, "d": a.d, "layers": a.layers,
-                "stations": [s.name for s in st.STATIONS], "noise": a.noise},
+                "stations": [s.name for s in st.STATIONS], "noise": a.noise, "anchor": a.anchor},
                os.path.join(a.out, f"member{k}.pth"))
     model.eval()
     return model
@@ -55,6 +55,7 @@ def main():
     ap.add_argument("--scenarios", required=True)
     ap.add_argument("--tag", required=True)
     ap.add_argument("--transitions", action="store_true")
+    ap.add_argument("--anchor", action="store_true", help="interpolate the station histories to every point (see sensor_model.py)")
     ap.add_argument("--z", type=float, default=1.6)
     ap.add_argument("--noise", type=float, default=10.0, help="noise on the station CO2 in training [ppm]")
     ap.add_argument("--members", type=int, default=5)

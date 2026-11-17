@@ -19,16 +19,35 @@ import stations as st
 
 
 class SensorForecastGNOT(ForecastGNOT):
-    def __init__(self, d=128, heads=4, layers=3, c_scale=1.0, d_scale=None):
+    """anchor=False: a point where we predict only has its position, the forecast is the mean of the newest
+    station values plus a change.
+    anchor=True: the station histories are interpolated to the point (nearer stations count more), and the forecast
+    is this interpolated value plus a change, like in the normal model."""
+    def __init__(self, d=128, heads=4, layers=3, c_scale=1.0, d_scale=None, anchor=False):
         super().__init__(d=d, heads=heads, layers=layers, c_scale=c_scale, d_scale=d_scale, open_flags=True)
-        nf = 2 * self.ff.n_freq
-        # a point where we predict has no CO2 history of its own, only its position
-        self.q_in = nn.Sequential(nn.Linear(nf, d), nn.GELU(), nn.Linear(d, d))
+        self.anchor = bool(anchor)
+        if not self.anchor:
+            nf = 2 * self.ff.n_freq
+            self.q_in = nn.Sequential(nn.Linear(nf, d), nn.GELU(), nn.Linear(d, d))
+
+    @staticmethod
+    def interpolate(q_xyz, h_xyz, h_hist, eps=0.25):
+        """History at the query points from the station histories: weights 1 / (distance^2 + eps)."""
+        w = 1.0 / (torch.cdist(q_xyz, h_xyz) ** 2 + eps)          # (B, M, stations)
+        w = w / w.sum(-1, keepdim=True)
+        return torch.bmm(w, h_hist)                               # (B, M, history steps)
 
     def forward(self, q_xyz, q_hist, h_xyz, h_hist, V, N):
         """q_hist is not used. It is only in the list so that the old training and test code still works."""
         B, M, _ = q_xyz.shape
-        q = self.q_in(self.ff(q_xyz.reshape(-1, 3)).reshape(B, M, -1))
+        if self.anchor:
+            q_hist = self.interpolate(q_xyz, h_xyz, h_hist)
+            q = self.q_in(self._point_feats(q_xyz, q_hist))
+            base = q_hist[..., -1:]
+        else:
+            q = self.q_in(self.ff(q_xyz.reshape(-1, 3)).reshape(B, M, -1))
+            # start from the mean of the newest station values and predict the difference to it
+            base = h_hist[..., -1].mean(1).reshape(B, 1, 1)
         hk = self.h_in(self._point_feats(h_xyz, h_hist)) + self.type_emb.weight[3]
 
         Vw, Dr = V[:, :8], V[:, 8:10]
@@ -43,8 +62,6 @@ class SensorForecastGNOT(ForecastGNOT):
             q = b["n1"](q + a)
             q = b["n2"](q + b["ff"](q))
         out = self.head(q)
-        # start from the mean of the newest station values and predict the difference to it
-        base = h_hist[..., -1].mean(1).reshape(B, 1, 1)
         mean = base + self.c_scale * out[..., :T_OUT]
         logvar = out[..., T_OUT:].clamp(-12.0, 6.0)
         return mean, logvar
