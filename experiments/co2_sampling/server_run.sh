@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# For an extra server: install OpenFOAM v2412 and Python with conda (in ~/anaconda3, nothing outside the home folder),
+# For another machine: install OpenFOAM v2412 and Python with conda (in ~/anaconda3, nothing outside the home folder),
 # then run OpenFOAM for a list of all-openings settings at low priority. Everything is removed again afterwards with
 #   rm -rf ~/BuildingControlCFD ~/anaconda3 ~/.conda ~/cfdpy ~/v4_*.log
 # Usage: bash server_run.sh setup

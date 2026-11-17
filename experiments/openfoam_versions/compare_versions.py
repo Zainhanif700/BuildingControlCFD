@@ -44,6 +44,12 @@ def speed(u):
     return np.linalg.norm(u, axis=1)
 
 
+def pct(rel):
+    """Relative difference as a percent text; small differences get more digits so they do not show as 0.0 %."""
+    p = 100 * rel
+    return f"{p:5.1f} %" if p >= 0.1 else f"{p:.1e} %"
+
+
 def main():
     runs = {}
     for arg in sys.argv[1:]:
@@ -64,9 +70,9 @@ def main():
         if len(ca["C"]) != len(cb["C"]) or np.abs(ca["C"] - cb["C"]).max() > 1e-6:
             print(f"{a} vs {b}: the meshes are NOT the same (cell number or order) -- field difference not computed")
             continue
-        row = [f"{t} s {100 * rel_diff(velocity(ca, t), velocity(cb, t)):5.1f} %" for t in TIMES]
+        row = [f"{t} s {pct(rel_diff(velocity(ca, t), velocity(cb, t)))}" for t in TIMES]
         print(f"{a} vs {b}: same mesh. Difference of the velocity field: " + ", ".join(row))
-        print(f"{'':{len(a) + len(b) + 5}}mean over {MEAN_FROM}-{MEAN_TO} s: {100 * rel_diff(means[a], means[b]):.1f} %")
+        print(f"{'':{len(a) + len(b) + 5}}mean over {MEAN_FROM}-{MEAN_TO} s: {pct(rel_diff(means[a], means[b]))}")
     print("\n(difference = norm of the velocity difference / norm of the first run's velocity, all cells equally weighted)")
 
 
