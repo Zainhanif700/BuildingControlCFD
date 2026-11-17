@@ -36,7 +36,8 @@ def diagnose(models, data, every=4, near=2.0, seed=1234):
     rng = np.random.default_rng(seed)
     rows = []
     for k in range(len(data.cases)):
-        acc = {key: [] for key in ("model", "persistence", "uniform", "zero", "near", "far")}
+        acc = {key: [] for key in ("model", "persistence", "uniform", "zero", "near", "far",
+                                   "rmse_ppm", "pers_rmse_ppm", "excess_ppm")}
         for t0 in data.t0s[k][::every]:
             if data.H is not None:                       # transition data: people now and before
                 nb, na = rng.uniform(10.0, 80.0, 2)
@@ -52,6 +53,10 @@ def diagnose(models, data, every=4, near=2.0, seed=1234):
             acc["persistence"].append(l2(hist[:, -1:].expand_as(fut), fut))
             acc["uniform"].append(l2(hist[data.hist_idx, -1].mean().expand_as(fut), fut))
             acc["zero"].append(1.0)
+            # the same in ppm (the data are CO2 above outside air in ppm): root mean square error and size of the signal
+            acc["rmse_ppm"].append(float(torch.sqrt(((mean - fut) ** 2).mean())))
+            acc["pers_rmse_ppm"].append(float(torch.sqrt(((hist[:, -1:].expand_as(fut) - fut) ** 2).mean())))
+            acc["excess_ppm"].append(float(fut.mean()))
             if near_mask.any():
                 acc["near"].append(l2(mean[near_mask], fut[near_mask]))
             if far_mask.any():
@@ -67,6 +72,12 @@ def print_table(title, names, rows):
     for name, r in zip(names, rows):
         print(f"  {name:10s} " + "".join(f"{100 * r[k]:13.1f}" for k in keys))
     print(f"  {'mean':10s} " + "".join(f"{100 * np.nanmean([r[k] for r in rows]):13.1f}" for k in keys))
+    ppm = ("rmse_ppm", "pers_rmse_ppm", "excess_ppm")
+    print(f"\n{title} in ppm: error of the model, error of persistence, mean CO2 above outside air in the forecast")
+    print("  scenario   " + "".join(f"{k:>14s}" for k in ppm))
+    for name, r in zip(names, rows):
+        print(f"  {name:10s} " + "".join(f"{r[k]:14.1f}" for k in ppm))
+    print(f"  {'mean':10s} " + "".join(f"{np.nanmean([r[k] for r in rows]):14.1f}" for k in ppm))
 
 
 def load_members(tag, dev):
