@@ -26,6 +26,17 @@ def loss_scale(target, c_scale, relative, floor):
     return target.pow(2).mean((1, 2), keepdim=True).sqrt().clamp_min(floor).detach()
 
 
+def resplit(train_files, test_files, seed):
+    """A random split of all scenarios with 8 N and 8 A scenarios for the test, like the fixed split."""
+    allf = list(train_files) + list(test_files)
+    names = [os.path.basename(f) for f in allf]
+    n_idx = [i for i, n in enumerate(names) if n.startswith("N")]
+    a_idx = [i for i, n in enumerate(names) if n.startswith("A")]
+    rng = np.random.default_rng(seed)
+    test = set(rng.choice(n_idx, 8, replace=False).tolist()) | set(rng.choice(a_idx, 8, replace=False).tolist())
+    return [f for i, f in enumerate(allf) if i not in test], [f for i, f in enumerate(allf) if i in test]
+
+
 def drop_stations(hx, hh, p, gen):
     """With probability p hide some stations (between half and all but one) for this training step.
     The model must then not rely on one exact station. hx: (B, S, 3), hh: (B, S, steps)."""
@@ -41,7 +52,7 @@ def train_one(k, tr, te, a, dev, c_scale):
     torch.manual_seed(1000 + k)
     gen = torch.Generator().manual_seed(2000 + k)
     model = SensorForecastGNOT(d=a.d, layers=a.layers, c_scale=c_scale, anchor=a.anchor, blind=a.blind,
-                               hist_len=a.hist).to(dev)
+                               hist_len=a.hist, people_blind=a.people_blind, physics=a.physics).to(dev)
     opt = torch.optim.AdamW(model.parameters(), lr=a.lr, weight_decay=a.wd)
     sched = torch.optim.lr_scheduler.OneCycleLR(opt, max_lr=a.lr, total_steps=a.iters, pct_start=0.05)
     start, losses = time.time(), []
@@ -65,7 +76,8 @@ def train_one(k, tr, te, a, dev, c_scale):
             losses = []
     torch.save({"state": model.state_dict(), "c_scale": c_scale, "d": a.d, "layers": a.layers,
                 "stations": a.stations, "noise": a.noise, "anchor": a.anchor,
-                "blind": a.blind, "hist": a.hist, "t0_min": a.t0_min},
+                "blind": a.blind, "hist": a.hist, "t0_min": a.t0_min, "people_blind": a.people_blind,
+                "physics": a.physics},
                os.path.join(a.out, f"member{k}.pth"))
     model.eval()
     return model
@@ -91,6 +103,14 @@ def main():
     ap.add_argument("--t0-min", type=int, default=0,
                     help="first time step used (so that runs with different histories use the same samples)")
     ap.add_argument("--n-train", type=int, default=0, help="use only this many (randomly chosen) training scenarios, 0 = all")
+    ap.add_argument("--physics", action="store_true",
+                    help="give the model the well-mixed room balance (fresh-air flow, final CO2 level, time constant)")
+    ap.add_argument("--people-blind", action="store_true",
+                    help="test: the model is not told the number of people (the real system does not know it)")
+    ap.add_argument("--split-seed", type=int, default=0,
+                    help="0 = the fixed split of the scenario file; otherwise a random split with 8 N and 8 A test scenarios")
+    ap.add_argument("--seen-config", action="store_true",
+                    help="test: the test scenarios are the training scenarios at LATER times (window setting seen in training)")
     ap.add_argument("--z", type=float, default=1.6)
     ap.add_argument("--noise", type=float, default=10.0, help="noise on the station CO2 in training [ppm]")
     ap.add_argument("--members", type=int, default=5)
@@ -108,15 +128,26 @@ def main():
     dev = torch.device(a.device)
 
     train_files, test_files = split(a.data_dir, a.scenarios, with_s00=False)
+    if a.split_seed:
+        train_files, test_files = resplit(train_files, test_files, a.split_seed)
     if a.n_train:
         keep = np.sort(np.random.default_rng(0).choice(len(train_files), a.n_train, replace=False))
         train_files = [train_files[i] for i in keep]
     used = st.STATIONS + st.virtual_stations(a.virtual)
     a.stations = [s.name for s in used]
-    tr = SensorPlaneData(train_files, dev, z=a.z, transitions=a.transitions, noise=a.noise, stations=used,
-                         hist_len=a.hist, t0_min=a.t0_min)
-    te = SensorPlaneData(test_files, dev, z=a.z, transitions=a.transitions, stations=used,
-                         hist_len=a.hist, t0_min=a.t0_min)
+    t0_split = 32                 # --seen-config: train on the time steps up to this one, test on the later ones
+    if a.seen_config:
+        tr = SensorPlaneData(train_files, dev, z=a.z, transitions=a.transitions, noise=a.noise, stations=used,
+                             hist_len=a.hist, t0_min=a.t0_min, t0_max=t0_split)
+        te = SensorPlaneData(train_files, dev, z=a.z, transitions=a.transitions, stations=used,
+                             hist_len=a.hist, t0_min=t0_split + 1)
+        test_files = train_files
+    else:
+        tr = SensorPlaneData(train_files, dev, z=a.z, transitions=a.transitions, noise=a.noise, stations=used,
+                             hist_len=a.hist, t0_min=a.t0_min)
+        te = SensorPlaneData(test_files, dev, z=a.z, transitions=a.transitions, stations=used,
+                             hist_len=a.hist, t0_min=a.t0_min)
+    print("test scenarios: " + " ".join(os.path.basename(f).replace(".npz", "") for f in test_files), flush=True)
     c_scale = c_scale_of(tr)
     print(f"{len(train_files)} train / {len(test_files)} test scenarios, {len(tr.hist_idx)} stations, "
           f"{tr.xyz.shape[0]} plane points, device {dev}", flush=True)

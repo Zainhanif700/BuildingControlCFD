@@ -69,6 +69,39 @@ def diagnose(models, data, every=4, near=2.0, seed=1234):
     return rows
 
 
+def by_time(models, data, every=2, bins=((11, 20), (21, 30), (31, 40), (41, 54)), seed=1234):
+    """Strict error of the model and of persistence for early and late forecast times (t0 = steps since the start,
+    one step = 30 s). Shows if the error sits in the first minutes of a scenario, when the CO2 changes fast."""
+    rng = np.random.default_rng(seed)
+    acc = {b: {"model": [], "persistence": []} for b in bins}
+    for k in range(len(data.cases)):
+        for t0 in data.t0s[k][::every]:
+            b = next((b for b in bins if b[0] <= t0 <= b[1]), None)
+            if data.H is not None:
+                nb, na = rng.uniform(10.0, 80.0, 2)
+                n, na = float(nb), float(na)
+            else:
+                n, na = data.N_ref[k], 0.0
+            if b is None:
+                continue
+            preds = [predict_full(m, data, k, t0, n, na) for m in models]
+            mean = torch.stack([p[0] for p in preds]).mean(0)
+            fut, hist = preds[0][1], preds[0][2]
+            if torch.linalg.norm(fut) == 0:
+                continue
+            acc[b]["model"].append(l2(mean, fut))
+            acc[b]["persistence"].append(l2(hist[:, -1:].expand_as(fut), fut))
+    return {b: {k: (float(np.mean(v)) if v else float("nan")) for k, v in d.items()} | {"n": len(d["model"])}
+            for b, d in acc.items()}
+
+
+def print_by_time(res):
+    print("\nTEST scenarios, strict error by time since the start of the scenario (step = 30 s)")
+    print("  steps      minutes      model  persistence  samples")
+    for (a, b), r in res.items():
+        print(f"  {a:2d}-{b:2d}   {a * 0.5:4.1f}-{b * 0.5:4.1f}   {100 * r['model']:8.1f}   {100 * r['persistence']:9.1f}  {r['n']:7d}")
+
+
 def decisions(models, data, every=4, thresholds=(700.0, 800.0, 1000.0), seed=1234):
     """The question behind the forecast: will the CO2 in the seating area pass a limit within the next 3 minutes?
     Also the error of the room average. All CO2 values here are absolute (outside air 400 ppm added)."""
@@ -128,6 +161,7 @@ def print_table(title, names, rows):
     for name, r in zip(names, rows):
         print(f"  {name:10s} " + "".join(f"{100 * r[k]:13.1f}" for k in keys))
     print(f"  {'mean':10s} " + "".join(f"{100 * np.nanmean([r[k] for r in rows]):13.1f}" for k in keys))
+    print(f"  {'median':10s} " + "".join(f"{100 * np.nanmedian([r[k] for r in rows]):13.1f}" for k in keys))
     ppm = ("rmse_ppm", "pers_rmse_ppm", "excess_ppm")
     print(f"\n{title} in ppm: error of the model, error of persistence, mean CO2 above outside air in the forecast")
     print("  scenario   " + "".join(f"{k:>14s}" for k in ppm))
@@ -144,7 +178,8 @@ def load_members(tag, dev):
         ck = torch.load(p, map_location=dev)
         m = SensorForecastGNOT(d=ck["d"], layers=ck["layers"], c_scale=ck["c_scale"],
                                anchor=ck.get("anchor", False), blind=ck.get("blind", False),
-                               hist_len=ck.get("hist", 12)).to(dev)
+                               hist_len=ck.get("hist", 12), people_blind=ck.get("people_blind", False),
+                               physics=ck.get("physics", False)).to(dev)
         m.load_state_dict(ck["state"])
         models.append(m.eval())
     return models, ck
@@ -175,6 +210,7 @@ def main():
         print_table(title, [os.path.basename(f).replace(".npz", "") for f in files], rows)
         if title.startswith("TEST"):
             print_decisions(*decisions(models, data, every=a.every))
+            print_by_time(by_time(models, data))
     print("\nuniform and persistence are only references; the sensors do not have the true map.")
 
 

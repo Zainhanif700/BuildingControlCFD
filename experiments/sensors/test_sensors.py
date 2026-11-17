@@ -263,6 +263,74 @@ def test_relative_loss(tmp):
     print("ok  relative loss scale")
 
 
+def test_checks(tmp):
+    """People-blind model, split by time (seen configuration), random split, error by time."""
+    import train_sensor as ts
+    import diagnose_sensor as dg
+    files = []
+    for k in range(4):
+        f = os.path.join(tmp, f"CK{k:02d}.npz")
+        fake_file(f, seed=60 + k)
+        files.append(f)
+    dev = torch.device("cpu")
+    tr = SensorPlaneData(files[:2], dev)
+    gen = torch.Generator().manual_seed(0)
+    qx, qh, hx, hh, V, N, _ = tr.batch(2, 16, gen)
+    torch.manual_seed(0)
+    model = SensorForecastGNOT(d=32, layers=1, c_scale=50.0, people_blind=True).eval()
+    a, _ = model(qx, qh, hx, hh, V, N)
+    b, _ = model(qx, qh, hx, hh, V, N * 0 + 77.0)
+    assert torch.allclose(a, b)                                       # the number of people does not matter
+    normal = SensorForecastGNOT(d=32, layers=1, c_scale=50.0)
+    assert float(normal(qx, qh, hx, hh, V, N)[0].sum()) != float(normal(qx, qh, hx, hh, V, N * 0 + 77.0)[0].sum())
+    early = SensorPlaneData(files[:1], dev, t0_max=20)
+    late = SensorPlaneData(files[:1], dev, t0_min=33)
+    assert early.t0s[0][0] == 11 and early.t0s[0][-1] == 20 and late.t0s[0][0] == 33 and late.t0s[0][-1] == 54
+    names_n = [f"N{i:02d}.npz" for i in range(1, 29)]
+    names_a = [f"A{i:02d}.npz" for i in range(1, 41)]
+    allf = names_n + names_a
+    tr_f, te_f = ts.resplit(allf[:52], allf[52:], seed=3)
+    assert len(tr_f) == 52 and len(te_f) == 16 and not set(tr_f) & set(te_f)
+    assert sum(f.startswith("N") for f in te_f) == 8 and sum(f.startswith("A") for f in te_f) == 8
+    assert ts.resplit(allf[:52], allf[52:], seed=3)[1] == te_f and ts.resplit(allf[:52], allf[52:], seed=4)[1] != te_f
+    res = dg.by_time([normal.eval()], SensorPlaneData(files[2:], dev), every=4)
+    assert all(np.isfinite(r["model"]) for r in res.values() if r["n"] > 0)
+    dg.print_by_time(res)
+    print("ok  people-blind, time split, random split, error by time")
+
+
+def test_physics(tmp):
+    """The physics token: numbers of the well-mixed balance and a model that uses them."""
+    import sensor_model as sm
+    V = torch.tensor([[1.0, 0, 0, 0, 0, 0, 0, 0, 1, 0],            # one inlet window at 1 m/s, door 1 open
+                      [0.0, 0, 0, 0, 0, 0, 0, 0, 1, 1]])           # nothing open but both doors
+    N = torch.tensor([[40.0], [40.0]])
+    f = sm.physics_features(V, N)
+    assert f.shape == (2, 6) and torch.isfinite(f).all()
+    q = 1.0 * 0.61 * 3.15
+    assert abs(float(f[0, 0]) - np.log10(q)) < 1e-5                           # log10 of the flow
+    assert abs(float(f[0, 2]) - 40 * 3.96 / q / 500.0) < 5e-3                  # CO2 level the room approaches
+    assert float(f[1, 0]) == -1.0 and float(f[1, 2]) == 1000.0 / 500.0          # no inlet: flow floor, level capped
+    assert float(f[0, 3]) == 1 / 8 and float(f[0, 5]) == 0.5
+    files = []
+    for k in range(2):
+        p = os.path.join(tmp, f"PH{k:02d}.npz")
+        fake_file(p, seed=70 + k)
+        files.append(p)
+    tr = SensorPlaneData(files, torch.device("cpu"))
+    gen = torch.Generator().manual_seed(0)
+    qx, qh, hx, hh, V2, N2, target = tr.batch(2, 16, gen)
+    torch.manual_seed(0)
+    model = SensorForecastGNOT(d=32, layers=1, c_scale=50.0, physics=True).eval()
+    out, _ = model(qx, qh, hx, hh, V2, N2)
+    assert out.shape == (2, 16, 6) and torch.isfinite(out).all()
+    out2, _ = model(qx, qh, hx, hh, V2 * 2.0, N2)
+    assert not torch.allclose(out, out2)
+    plain = SensorForecastGNOT(d=32, layers=1, c_scale=50.0)
+    assert sum(p.numel() for p in model.parameters()) > sum(p.numel() for p in plain.parameters())
+    print("ok  physics token")
+
+
 def test_diagnose(tmp):
     """The diagnosis runs for a saved member and gives finite numbers for every column."""
     import diagnose_sensor as dg
@@ -335,5 +403,7 @@ if __name__ == "__main__":
         test_history_length(tmp)
         test_station_dropout(tmp)
         test_relative_loss(tmp)
+        test_checks(tmp)
+        test_physics(tmp)
         test_diagnose(tmp)
     print("ALL TESTS PASSED")
