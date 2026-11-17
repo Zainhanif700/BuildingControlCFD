@@ -133,10 +133,41 @@ def test_model(tmp, m):
     print("ok  mapper output fits into the model")
 
 
+def test_diagnose(tmp):
+    """The diagnosis runs for a saved member and gives finite numbers for every column."""
+    import diagnose_sensor as dg
+    files = []
+    for k in range(2):
+        f = os.path.join(tmp, f"D{k:02d}.npz")
+        fake_file(f, seed=10 + k)
+        files.append(f)
+    dev = torch.device("cpu")
+    torch.manual_seed(0)
+    model = SensorForecastGNOT(d=32, layers=1, c_scale=50.0)
+    ck_dir = os.path.join(dg.HERE, "checkpoints", "_test_tmp")
+    os.makedirs(ck_dir, exist_ok=True)
+    try:
+        torch.save({"state": model.state_dict(), "c_scale": 50.0, "d": 32, "layers": 1,
+                    "stations": [s.name for s in st.STATIONS], "noise": 0.0}, os.path.join(ck_dir, "member0.pth"))
+        models, ck = dg.load_members("_test_tmp", dev)
+    finally:
+        for f in os.listdir(ck_dir):
+            os.remove(os.path.join(ck_dir, f))
+        os.rmdir(ck_dir)
+    data = SensorPlaneData(files, dev)
+    rows = dg.diagnose(models, data, every=6, near=2.0)
+    assert len(rows) == 2
+    for r in rows:
+        assert all(np.isfinite(v) for v in r.values()), r
+        assert r["zero"] == 1.0
+    print("ok  diagnosis runs for a saved member")
+
+
 if __name__ == "__main__":
     with tempfile.TemporaryDirectory() as tmp:
         m = test_chain(tmp)
         test_closed_window(tmp)
         test_missing_data()
         test_model(tmp, m)
+        test_diagnose(tmp)
     print("ALL TESTS PASSED")
