@@ -18,6 +18,14 @@ from train_forecast import split, c_scale_of
 HERE = os.path.dirname(os.path.abspath(__file__))
 
 
+def loss_scale(target, c_scale, relative, floor):
+    """Scale of the loss. Normal: one number for all samples (ppm). Relative: the size of each sample's own signal,
+    so that calm scenarios with a small CO2 rise count as much as strong ones (like in the relative l2 error)."""
+    if not relative:
+        return c_scale
+    return target.pow(2).mean((1, 2), keepdim=True).sqrt().clamp_min(floor).detach()
+
+
 def drop_stations(hx, hh, p, gen):
     """With probability p hide some stations (between half and all but one) for this training step.
     The model must then not rely on one exact station. hx: (B, S, 3), hh: (B, S, steps)."""
@@ -41,7 +49,7 @@ def train_one(k, tr, te, a, dev, c_scale):
         qx, qh, hx, hh, V, N, target = tr.batch(a.batch, a.queries, gen)
         hx, hh = drop_stations(hx, hh, a.station_dropout, gen)
         mean, logvar = model(qx, qh, hx, hh, V, N)
-        loss = nll(mean, logvar, target, c_scale)
+        loss = nll(mean, logvar, target, loss_scale(target, c_scale, a.relative_loss, a.rel_floor))
         opt.zero_grad(set_to_none=True)
         loss.backward()
         torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
@@ -73,6 +81,9 @@ def main():
     ap.add_argument("--blind", action="store_true", help="test: the model does not get the station CO2")
     ap.add_argument("--virtual", default="0", choices=["0"] + list(st.VIRTUAL_SETS),
                     help="what-if test: add a set of virtual stations in the seating area (not in the real room)")
+    ap.add_argument("--relative-loss", action="store_true",
+                    help="weigh every training sample by the size of its own signal (like the relative error)")
+    ap.add_argument("--rel-floor", type=float, default=5.0, help="smallest signal size [ppm] used for that weighting")
     ap.add_argument("--wd", type=float, default=1e-4, help="weight decay of the optimizer")
     ap.add_argument("--station-dropout", type=float, default=0.0,
                     help="chance per training step that some stations are hidden (against overfitting)")

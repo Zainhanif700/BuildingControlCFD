@@ -243,6 +243,26 @@ def test_station_dropout(tmp):
     print("ok  station dropout")
 
 
+def test_relative_loss(tmp):
+    """The relative loss scale follows the size of each sample; the normal one is a single number."""
+    import train_sensor as ts
+    big = torch.full((1, 8, 6), 200.0)
+    calm = torch.full((1, 8, 6), 10.0)
+    zero = torch.zeros(1, 8, 6)
+    target = torch.cat([big, calm, zero])
+    assert ts.loss_scale(target, 50.0, False, 5.0) == 50.0
+    s = ts.loss_scale(target, 50.0, True, 5.0)
+    assert s.shape == (3, 1, 1) and torch.allclose(s.flatten(), torch.tensor([200.0, 10.0, 5.0]))
+    mean = target + 1.0
+    logvar = torch.zeros_like(target)
+    loss = nll(mean, logvar, target, s)
+    assert torch.isfinite(loss)
+    # the same absolute error counts 400 times more in the calm sample than in the big one (200 / 10 squared)
+    per = [float(nll(mean[i:i + 1], logvar[i:i + 1], target[i:i + 1], s[i:i + 1])) for i in range(2)]
+    assert per[1] > per[0]
+    print("ok  relative loss scale")
+
+
 def test_diagnose(tmp):
     """The diagnosis runs for a saved member and gives finite numbers for every column."""
     import diagnose_sensor as dg
@@ -314,5 +334,6 @@ if __name__ == "__main__":
         test_virtual(tmp)
         test_history_length(tmp)
         test_station_dropout(tmp)
+        test_relative_loss(tmp)
         test_diagnose(tmp)
     print("ALL TESTS PASSED")
