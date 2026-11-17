@@ -201,6 +201,8 @@ def main():
     ap.add_argument("--scenarios", required=True)
     ap.add_argument("--tag", required=True)
     ap.add_argument("--transitions", action="store_true")
+    ap.add_argument("--plan-only", action="store_true",
+                    help="test only the scenarios that fit the real room: the windows without a station (W5, W8) closed")
     ap.add_argument("--v-scale", type=float, default=1.0,
                     help="sensitivity test: multiply all window speeds the model gets by this factor")
     ap.add_argument("--quick", action="store_true",
@@ -222,6 +224,11 @@ def main():
     if a.split_seed:
         from train_sensor import resplit
         train_files, test_files = resplit(train_files, test_files, a.split_seed)
+    if a.plan_only:
+        before = len(test_files)
+        test_files = [f for f in test_files if all(np.load(f)["V"][w - 1] == 0 for w in st.CLOSED_WINDOWS)]
+        print(f"PLAN ONLY: {len(test_files)} of {before} test scenarios have the windows "
+              f"{st.CLOSED_WINDOWS} closed: " + " ".join(os.path.basename(f).replace(".npz", "") for f in test_files))
     sets = (("TEST scenarios", test_files),) if a.quick else (("TRAIN scenarios", train_files),
                                                             ("TEST scenarios", test_files))
     if a.v_scale != 1.0:
