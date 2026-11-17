@@ -27,7 +27,9 @@ def people_over_time(t, people):
 
 
 def station_rows(data_file, people=20, z=st.Z_STATION, noise=st.CO2_NOISE_PPM, seed=0,
-                 start=datetime(2026, 11, 16, 8, 0, tzinfo=timezone.utc)):
+                 start=datetime(2026, 11, 16, 8, 0, tzinfo=timezone.utc), excess=None):
+    """excess: optional (time steps, plane points) array with the CO2 above outside air in ppm, already for the wanted
+    number of people (e.g. a lecture made with lecture_demo.py). Then `people` is not used."""
     d = np.load(data_file)
     P, C, t = d["P"], d["C"], d["t_c"].astype(float)
     V = d["V"].astype(float)
@@ -36,6 +38,9 @@ def station_rows(data_file, people=20, z=st.Z_STATION, noise=st.CO2_NOISE_PPM, s
     on_plane = np.abs(P[:, 2] - layers[np.argmin(np.abs(layers - z))]) < 1e-5
     xy, frames = P[on_plane, :2], C[:, on_plane]
     n_people = people_over_time(t, people)
+    if excess is not None:
+        assert excess.shape == frames.shape, "excess must have the shape (time steps, plane points) of the file"
+        frames, n_people = np.asarray(excess, float), np.full(len(t), float(d["N_ref"]))
     rng = np.random.default_rng(seed)
 
     rows = []

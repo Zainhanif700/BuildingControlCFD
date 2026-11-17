@@ -371,6 +371,50 @@ def test_chain_demo(tmp):
     print("ok  the whole chain (sensor file, reader, mapper, model)")
 
 
+def test_lecture(tmp):
+    """The synthetic lecture: the CO2 for a changing number of people is built by adding shifted step responses."""
+    import lecture_demo as ld
+    rng = np.random.default_rng(0)
+    frames = np.cumsum(rng.uniform(0.5, 1.5, (61, 7)), axis=0).astype(np.float32)        # a growing step response
+    n_ref = 20.0
+    same = ld.lecture_excess(frames, n_ref, [(0, n_ref)], base=0.0)
+    assert np.allclose(same, frames, atol=1e-4)                                         # people switched on: the response
+    half = ld.lecture_excess(frames, n_ref, [(0, 10.0)], base=0.0)
+    assert np.allclose(half, 0.5 * frames, atol=1e-4)                                   # half the people: half the CO2
+    down = ld.lecture_excess(frames, n_ref, [(0, n_ref), (600, 0.0)], base=0.0)         # all people leave after 20 steps
+    assert np.allclose(down[:20], frames[:20], atol=1e-4)
+    assert np.allclose(down[20:], frames[20:] - frames[:41], atol=1e-3)
+    assert ld.people_at(0, ld.PEOPLE) == 5 and ld.people_at(700, ld.PEOPLE) == 45 and ld.people_at(1700, ld.PEOPLE) == 25
+
+    import diagnose_sensor as dg
+    path = os.path.join(tmp, "LD00.npz")
+    fake_file(path, seed=90)
+    dev = torch.device("cpu")
+    torch.manual_seed(0)
+    model = SensorForecastGNOT(d=32, layers=1, c_scale=50.0, direction_blind=True, people_blind=True)
+    ck_dir = os.path.join(dg.HERE, "checkpoints", "_test_tmp3")
+    os.makedirs(ck_dir, exist_ok=True)
+    try:
+        torch.save({"state": model.state_dict(), "c_scale": 50.0, "d": 32, "layers": 1,
+                    "stations": [s.name for s in st.STATIONS], "noise": 0.0, "direction_blind": True,
+                    "people_blind": True}, os.path.join(ck_dir, "member0.pth"))
+        models, ck = dg.load_members("_test_tmp3", dev)
+    finally:
+        for f in os.listdir(ck_dir):
+            os.remove(os.path.join(ck_dir, f))
+        os.rmdir(ck_dir)
+    r = ld.run_lecture(models, path)
+    assert len(r["ks"]) == 61 - 6 - 11 and np.isfinite(r["fc"]).all() and np.isfinite(r["truth"]).all()
+    assert r["fc"].shape == (len(r["ks"]), 6) and r["future"].shape == r["fc"].shape
+    assert abs(r["truth"][0] - (400.0 + ld.BASE_EXCESS)) < 1e-3                          # the lecture starts at 420 ppm
+    lines = ld.summary(r)
+    assert len(lines) == 2
+    png = os.path.join(tmp, "lecture.png")
+    ld.plot(r, png)
+    assert os.path.getsize(png) > 5000
+    print("ok  synthetic lecture (superposition, chain, graph)")
+
+
 def test_diagnose(tmp):
     """The diagnosis runs for a saved member and gives finite numbers for every column."""
     import diagnose_sensor as dg
@@ -454,5 +498,6 @@ if __name__ == "__main__":
         test_checks(tmp)
         test_physics(tmp)
         test_chain_demo(tmp)
+        test_lecture(tmp)
         test_diagnose(tmp)
     print("ALL TESTS PASSED")
