@@ -172,6 +172,23 @@ def test_anchor(tmp):
     print(f"ok  anchored sensor model trains (loss {first:.2f} -> {last:.2f})")
 
 
+def test_blind(tmp):
+    """The blind model gives the same output whatever the station CO2 is."""
+    f = os.path.join(tmp, "BL00.npz")
+    fake_file(f, seed=30)
+    dev = torch.device("cpu")
+    tr = SensorPlaneData([f], dev)
+    gen = torch.Generator().manual_seed(0)
+    qx, qh, hx, hh, V, N, _ = tr.batch(2, 16, gen)
+    for anchor in (False, True):
+        torch.manual_seed(0)
+        model = SensorForecastGNOT(d=32, layers=1, c_scale=50.0, anchor=anchor, blind=True).eval()
+        a, _ = model(qx, qh, hx, hh, V, N)
+        b, _ = model(qx, qh, hx, hh * 3 + 100.0, V, N)
+        assert torch.allclose(a, b)
+    print("ok  the blind model ignores the station CO2")
+
+
 def test_diagnose(tmp):
     """The diagnosis runs for a saved member and gives finite numbers for every column."""
     import diagnose_sensor as dg
@@ -209,5 +226,6 @@ if __name__ == "__main__":
         test_missing_data()
         test_model(tmp, m)
         test_anchor(tmp)
+        test_blind(tmp)
         test_diagnose(tmp)
     print("ALL TESTS PASSED")

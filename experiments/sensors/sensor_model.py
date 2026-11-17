@@ -23,9 +23,10 @@ class SensorForecastGNOT(ForecastGNOT):
     station values plus a change.
     anchor=True: the station histories are interpolated to the point (nearer stations count more), and the forecast
     is this interpolated value plus a change, like in the normal model."""
-    def __init__(self, d=128, heads=4, layers=3, c_scale=1.0, d_scale=None, anchor=False):
+    def __init__(self, d=128, heads=4, layers=3, c_scale=1.0, d_scale=None, anchor=False, blind=False):
         super().__init__(d=d, heads=heads, layers=layers, c_scale=c_scale, d_scale=d_scale, open_flags=True)
         self.anchor = bool(anchor)
+        self.blind = bool(blind)         # test only: the station CO2 is set to zero, only windows, doors and people count
         if not self.anchor:
             nf = 2 * self.ff.n_freq
             self.q_in = nn.Sequential(nn.Linear(nf, d), nn.GELU(), nn.Linear(d, d))
@@ -40,6 +41,8 @@ class SensorForecastGNOT(ForecastGNOT):
     def forward(self, q_xyz, q_hist, h_xyz, h_hist, V, N):
         """q_hist is not used. It is only in the list so that the old training and test code still works."""
         B, M, _ = q_xyz.shape
+        if self.blind:
+            h_hist = torch.zeros_like(h_hist)
         if self.anchor:
             q_hist = self.interpolate(q_xyz, h_xyz, h_hist)
             q = self.q_in(self._point_feats(q_xyz, q_hist))

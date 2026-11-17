@@ -90,7 +90,7 @@ def load_members(tag, dev):
     for p in paths:
         ck = torch.load(p, map_location=dev)
         m = SensorForecastGNOT(d=ck["d"], layers=ck["layers"], c_scale=ck["c_scale"],
-                               anchor=ck.get("anchor", False)).to(dev)
+                               anchor=ck.get("anchor", False), blind=ck.get("blind", False)).to(dev)
         m.load_state_dict(ck["state"])
         models.append(m.eval())
     return models, ck
