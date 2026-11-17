@@ -45,7 +45,9 @@ def station_rows(data_file, people=20, z=st.Z_STATION, noise=st.CO2_NOISE_PPM, s
         co2 = st.CO2_OUTDOOR + frames[:, cell] * n_people / float(d["N_ref"]) + rng.normal(0.0, noise, len(t))
         if s.kind == "window":
             is_open = V[s.number - 1] != 0
-            speed = V[s.number - 1] if V[s.number - 1] > 0 else None    # air that goes out: speed not known
+            # the air speed sensor gives the size of the speed, not the direction. An outlet window of the simulation
+            # (value -1) gets the size 1, like the model uses it. A closed window gives no speed.
+            speed = abs(V[s.number - 1]) if is_open else None
         else:
             is_open = doors[s.number - 1] > 0
             speed = None

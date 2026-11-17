@@ -340,6 +340,37 @@ def test_physics(tmp):
     print("ok  physics token")
 
 
+def test_chain_demo(tmp):
+    """The whole chain with a saved model: without noise the chain must give exactly the straight forecast."""
+    import demo_chain as dc
+    import diagnose_sensor as dg
+    path = os.path.join(tmp, "DC00.npz")
+    fake_file(path, seed=80)
+    dev = torch.device("cpu")
+    torch.manual_seed(0)
+    model = SensorForecastGNOT(d=32, layers=1, c_scale=50.0, direction_blind=True)
+    ck_dir = os.path.join(dg.HERE, "checkpoints", "_test_tmp2")
+    os.makedirs(ck_dir, exist_ok=True)
+    try:
+        torch.save({"state": model.state_dict(), "c_scale": 50.0, "d": 32, "layers": 1,
+                    "stations": [s.name for s in st.STATIONS], "noise": 0.0, "direction_blind": True},
+                   os.path.join(ck_dir, "member0.pth"))
+        models, ck = dg.load_members("_test_tmp2", dev)
+    finally:
+        for f in os.listdir(ck_dir):
+            os.remove(os.path.join(ck_dir, f))
+        os.rmdir(ck_dir)
+    res = dc.run_case(models, path, people=30.0, steps=[20, 30], noise=0.0)
+    assert len(res) == 2
+    for r in res:
+        assert r["v_ok"], r
+        assert abs(r["chain"] - r["direct"]) < 1e-3, r                 # reader + mapper keep the history exactly
+        assert all(np.isfinite(r[k]) for k in ("chain", "direct", "persistence", "seat_ppm"))
+    noisy = dc.run_case(models, path, people=30.0, steps=[20], noise=10.0)[0]
+    assert noisy["v_ok"] and np.isfinite(noisy["chain"])
+    print("ok  the whole chain (sensor file, reader, mapper, model)")
+
+
 def test_diagnose(tmp):
     """The diagnosis runs for a saved member and gives finite numbers for every column."""
     import diagnose_sensor as dg
@@ -422,5 +453,6 @@ if __name__ == "__main__":
         test_relative_loss(tmp)
         test_checks(tmp)
         test_physics(tmp)
+        test_chain_demo(tmp)
         test_diagnose(tmp)
     print("ALL TESTS PASSED")
