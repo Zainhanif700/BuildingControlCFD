@@ -141,7 +141,8 @@ def plot(r, path):
     ax.plot(tt, r["fc"][:, -1], color="#d62728", lw=1.6, label="model forecast, made 3 minutes earlier")
     for lim, col in zip(LIMITS, ("#e6a817", "#d62728")):
         ax.axhline(lim, color=col, ls=":", lw=1)
-        ax.text(0.3, lim + 6, f"{lim:g} ppm", ha="left", color=col, fontsize=9)
+        ax.annotate(f"{lim:g} ppm", xy=(1.0, lim), xycoords=("axes fraction", "data"), xytext=(5, 0),
+                    textcoords="offset points", va="center", ha="left", color=col, fontsize=9, annotation_clip=False)
         warn = r[f"warn_{lim:g}"]
         for k in r["ks"][warn]:
             ax.axvspan(STEP * k / 60.0, STEP * (k + 1) / 60.0, ymin=0.0, ymax=0.04 if lim == LIMITS[0] else 0.08,
@@ -149,11 +150,11 @@ def plot(r, path):
     ax.set_ylabel("CO$_2$ [ppm]")
     extra = f", step response smoothed over {r['smooth']} steps" if r.get("smooth", 0) > 1 else ""
     ax.set_title(f"Synthetic lecture (scenario {r['name']}): forecast and warning, margin {r['margin']:g} ppm{extra}")
-    ax.legend(loc="upper left", fontsize=9, frameon=False)
+    ax.legend(loc="upper left", fontsize=9, frameon=True, framealpha=0.95, edgecolor="none", facecolor="white")
     ax2.step(t_min, r["people"], where="post", color="#1f77b4")
     ax2.set_ylabel("people")
     ax2.set_xlabel("time [min]\ncoloured bars at the bottom of the upper graph: the model warns (yellow: 700 ppm, red: 800 ppm)")
-    fig.tight_layout()
+    fig.tight_layout(rect=(0, 0, 0.94, 1))                 # room on the right for the labels of the limits
     fig.savefig(path, dpi=150)
     plt.close(fig)
 
