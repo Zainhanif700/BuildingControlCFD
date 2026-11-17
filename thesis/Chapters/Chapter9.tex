@@ -24,9 +24,14 @@ as in my model.
 \end{table}
 
 According to the plan, six of the eight windows (W1, W2, W3, W4, W6 and W7) and both doors get a station,
-so there are eight stations. The windows W5 and W8 stay closed. \fref{fig:stations} shows where I assume the stations for now. Each
-station stands in front of its window or door and points at it. The stations send their values to a server, which stores them in a database together with the
-position of each station in the room.
+so there are eight stations, and all of them measure \cotwo{}, temperature and humidity. The windows W5 and W8
+stay closed. \fref{fig:stations} shows where I assume the stations for now. Each station stands in front of its
+window or door and points at it. The stations send their values to a server, which stores them in a database
+together with the position of each station in the room.
+
+A \cotwo{} sensor already stands in the middle of the room, right next to the projector, and it is running. It
+is an older station and belongs to another system, but its data can be read in the same way. The exact position
+and height are not known yet.
 
 \begin{figure}[h]
   \centering
@@ -52,20 +57,173 @@ from the database later.
 
 \section{Differences between the sensors and the model}
 \begin{itemize}
-  \item The model uses the \cotwo{} history at 900 points of a plane. The sensors give only a few points
-        near the windows and doors. The network can work with any set of points, so it can be trained with the
-        sensor positions as history points.
+  \item The model of \cref{ch:model} uses the \cotwo{} history at 900 points of a plane. The sensors give only
+        eight points near the windows and doors. The network can work with any set of points, so I trained a
+        second model, the \emph{sensor model}, which only gets the history at the station positions. It still
+        has to forecast the \cotwo{} for the whole room.
   \item The sensor measures the air speed at one place of a window. The model needs the amount of air that
         comes in through the whole opening. In winter the windows are only tilted, so the opening is much
-        smaller than in the simulations. The measured speed has to be converted, and it can be that tilted
-        windows give less air than my slowest scenarios.
+        smaller than in the simulations. The measured speed has to be converted.
   \item The air speed sensor does not show if air comes in or goes out through a window.
-  \item The number of people is not measured yet. At first it has to be assumed, for example from the number
-        of students in a lecture.
+  \item The number of people is not measured yet.
+  \item Temperature and humidity are measured, but the model does not use them.
 \end{itemize}
+I checked these points in \cref{sec:sensorchecks}.
 
 \section{Synthetic sensor data}
-Until the real stations deliver data, I will produce sensor data from my simulations. I take the \cotwo{} at
-the positions of the stations every 30~s and add noise like a real \cotwo{} sensor has. I add the window
-speeds, the open and closed states and the number of people in the same format as the real data. With this
-data the whole chain from the stations to the forecast can be built and tested before the real data comes.
+Until the real stations deliver data, I produce sensor data from my simulations. I take the \cotwo{} at the
+positions of the stations every 30~s and add noise of 10~ppm, as a real \cotwo{} sensor has. I add the window
+speeds, the open and closed states and the number of people in the same format as the real data, with the
+values multiplied by $10^6$ as on the server. With this data the whole chain from the stations to the forecast
+can be tested before the real data comes.
+
+To get a time series like a real lecture, I build the \cotwo{} for a changing number of people. \cotwo{} is
+carried by the air without changing it, and the flow in a scenario does not change. Then the \cotwo{} for a
+changing number of people is the simulated response to a constant number of people, shifted in time and added
+up for every change. For the lecture below I assumed 5 people at the start, 25 after 5~minutes, 45 after
+10~minutes and 25 after 25~minutes, and a starting level of 420~ppm.
+
+\section{Test setup}
+The sensor model was trained on the 52 training scenarios and tested on 16 scenarios it had never seen. Because
+this split can be lucky or unlucky, I repeated the tests on three other random splits of the 68 scenarios. I
+report the error as in \cref{ch:model}, in the definition of the paper, which adds the 400~ppm of the outdoor air.
+Because this makes all errors look small, I add two numbers that are easier to understand:
+\begin{itemize}
+  \item the error of the average \cotwo{} in the seating area in ppm, and
+  \item a warning test. The model warns if its forecast for the next 3~minutes reaches a limit minus a safety
+        margin. I count how many of the real cases, where the \cotwo{} in the seating area passes the limit
+        within 3~minutes, the model finds, and how many false alarms it gives.
+\end{itemize}
+As reference I use persistence, which says that the \cotwo{} stays as it is now. Persistence uses the true
+\cotwo{} map of now, which the sensors do not have, so it is only a reference.
+
+\section{Results with the eight stations}
+With the eight real stations the error is about 5 to 6\,\% in the definition of the paper (5.3 to 6.5\,\% on the
+three random splits). The error of the average \cotwo{} in the seating area is about 20 to 26~ppm, where the
+average level is about 520~ppm. In the stricter measure of \cref{ch:model}, which counts only the \cotwo{} above
+the outdoor level, the error for the whole room is about 32\,\%. It is much higher than for the model with the
+full map, because the stations stand at the walls, where the air is mostly fresh, and they hardly see the
+middle of the room, where the people sit.
+
+I tried to improve the sensor model in several ways: a longer history of 12 and 20~minutes, interpolating the
+station values to every point of the room, other loss functions, smaller networks, more noise and a physics
+input. These changes gave no clear gain or only about one percentage point. More training scenarios of the
+same kind did not help either. This points to the information as the main limit.
+
+\section{A sensor in the middle of the room}
+To test this, I added virtual sensors in the seating area to the simulation. \tref{tab:virtual} shows the result.
+
+\begin{table}[h]
+  \centering
+  \caption[Virtual sensors in the seating area.]{Virtual sensors in the seating area (simulation only), on the
+  16 test scenarios of the first split. The warning column gives the cases found out of 15 where the \cotwo{}
+  passes 700~ppm.}
+  \label{tab:virtual}
+  \small
+  \begin{tabular}{p{4.6cm}>{\raggedleft\arraybackslash}p{2.6cm}>{\raggedleft\arraybackslash}p{2.9cm}>{\raggedleft\arraybackslash}p{2.2cm}}
+    \toprule
+    Setup & Error, definition of the paper & Seating-area error [ppm] & Warning found\\
+    \midrule
+    Eight stations & 6.3\,\% & 26.5 & 13 of 15\\
+    Plus one sensor in the middle & 5.0\,\% & 11.4 & 14 of 15\\
+    Plus a grid of 16 sensors & 3.6\,\% & 3.5 & 14 of 15\\
+    Persistence (true map) & 0.5\,\% & 2.0 & 14 of 15\\
+    \bottomrule
+  \end{tabular}
+\end{table}
+
+One sensor in the middle lowers the error of the room average from 26.5 to 11.4~ppm. The exact place hardly
+matters: the middle, the door side, the window side and the back of the seating area gave about the same
+result. Only one place on the blackboard side gave no gain, and I do not know why. A projector hangs in the
+middle or the back of the room, so the sensor next to it should help. The virtual sensors read the exact
+simulated \cotwo{} plus noise, so a real sensor can be less clean.
+
+\section{Warning}
+\tref{tab:warning} shows the warning test on three random splits (58 real cases at 700~ppm and 33 at 800~ppm).
+Without a margin the model finds 71\,\% of the cases at 700~ppm and 70\,\% at 800~ppm. With a margin of 50~ppm it
+finds 91\,\% and 88\,\%, with more false alarms. The margin should not be chosen on the data it is tested on.
+When I chose it on two splits and counted on the third, the model found 88\,\% at 700~ppm and 79\,\% at 800~ppm.
+The best margin differs between the splits, so it has to be checked with real data.
+
+\begin{table}[h]
+  \centering
+  \caption[Warning test.]{Warning test on three random splits, simulation only.}
+  \label{tab:warning}
+  \small
+  \begin{tabular}{p{6.2cm}>{\raggedleft\arraybackslash}p{2.3cm}>{\raggedleft\arraybackslash}p{1.6cm}>{\raggedleft\arraybackslash}p{2.2cm}}
+    \toprule
+    Rule & Cases found & Missed & False alarms\\
+    \midrule
+    700~ppm, no margin & 41 of 58 & 17 & 9\\
+    700~ppm, margin 50~ppm & 53 of 58 & 5 & 32\\
+    800~ppm, no margin & 23 of 33 & 10 & 0\\
+    800~ppm, margin 50~ppm & 29 of 33 & 4 & 3\\
+    700~ppm, margin chosen on the other splits & 51 of 58 & 7 & 25\\
+    800~ppm, margin chosen on the other splits & 26 of 33 & 7 & 8\\
+    \bottomrule
+  \end{tabular}
+\end{table}
+
+In the real room, W5 and W8 stay closed. Many of my hard test scenarios open these windows. On the test
+scenarios in which they are closed, the error is about 5\,\% in the definition of the paper, and with a margin of 50~ppm
+the warning finds 92\,\% of the cases at 700~ppm and 87\,\% at 800~ppm. These scenarios are mostly the simpler
+ones with only W1, W3 and W6 open, so this result is easier.
+
+\fref{fig:lecture24} shows the synthetic lecture described above for scenario N24. The warning for 700~ppm
+starts 3.5~minutes before the \cotwo{} passes this level, and the model found all 24 time steps with a real case,
+with one false alarm. The warning for 800~ppm comes although the \cotwo{} stays below it (the peak is
+769~ppm). This is the effect of the safety margin: the model warns from a forecast of 750~ppm, and the real peak
+is close to it. The forecast is too low while the students arrive and too high after some leave, because the
+model does not know the number of people. \fref{fig:lecture23} shows a quieter lecture in scenario N23, where the
+\cotwo{} stays below 700~ppm and the model gives no warning.
+
+\begin{figure}[h]
+  \centering
+  \includegraphics[width=\textwidth]{lecture_N24.png}
+  \caption[Synthetic lecture, scenario N24.]{Synthetic lecture in scenario N24 (simulation). Black: true average \cotwo{}
+  in the seating area. Red: forecast made 3~minutes earlier. Grey: the forecast that the \cotwo{} stays as it is now.
+  The bars at the bottom show when the model warns (yellow: 700~ppm, red: 800~ppm). The number of people (5, 25, 45,
+  then 25) is my assumption. The step response of the simulation is smoothed.}
+  \label{fig:lecture24}
+\end{figure}
+
+\begin{figure}[h]
+  \centering
+  \includegraphics[width=\textwidth]{lecture_N23.png}
+  \caption[Synthetic lecture, scenario N23.]{Synthetic lecture in scenario N23. The \cotwo{} stays below
+  700~ppm, so there is no warning and no false alarm.}
+  \label{fig:lecture23}
+\end{figure}
+
+\section{Checks of the sensor limits}
+\label{sec:sensorchecks}
+\begin{itemize}
+  \item \emph{People.} The number of people is not measured. A sensor model that is not told the number of people
+        was not worse. The model can work without it.
+  \item \emph{Direction of the air.} A speed sensor gives only the size of the speed. A model that only gets the
+        size, so that an outlet window looks like an inlet window, gave the same error as before.
+  \item \emph{Size of the speed.} I multiplied the window speeds by 0.5 to 1.5 in the test. The error changed by
+        at most two percentage points in the stricter measure. So an unknown window opening size does not break the
+        forecast. It also means that the model hardly uses the window speed.
+  \item \emph{The whole chain.} I tested the path that real data takes: a sensor file in the format of the
+        server, the reader, the mapper, the model and the forecast. The result is almost the same as when the
+        model gets the history directly (the error differs by less than one percentage point in the stricter
+        measure), and the mapper converted the window speeds correctly in all test cases. The test found one
+        mistake that I fixed: outlet windows were treated as closed.
+\end{itemize}
+
+\section{Limits}
+\begin{itemize}
+  \item All results are from simulation. There is no real sensor data yet, and the number of people and the times
+        in the lecture are my assumptions.
+  \item My \cotwo{} data has a known limit after 150~s (\cref{ch:dataset}): the \cotwo{} is computed on the mean
+        flow, and it changes abruptly when the calculation switches to it. This shows up as small steps in the
+        lecture curve. The models learned on this data.
+  \item The test sets are small, with 16 scenarios per split, and neighbouring time steps are not independent. I
+        chose some settings on the first split, so I use the three random splits as the fairer numbers.
+  \item The seating area in the simulation is still a placeholder box.
+  \item The warning margin has to be checked with real data.
+  \item In the real room the windows are often only tilted in winter, and my simulations hardly cover so little
+        ventilation. The old data of the \cotwo{} sensor in the middle of the room show levels above 1000~ppm
+        much more often than my simulated scenarios.
+\end{itemize}
