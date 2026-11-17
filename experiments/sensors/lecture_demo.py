@@ -150,7 +150,7 @@ def main():
     ap.add_argument("--scenarios", required=True)
     ap.add_argument("--tag", required=True)
     ap.add_argument("--scenario", default=None, help="name of the scenario, e.g. N24 (default: the first test scenario "
-                    "that fits the plan and reaches 700 to 900 ppm)")
+                    "that fits the plan and whose seating-area average reaches 700 to 900 ppm)")
     ap.add_argument("--margin", type=float, default=50.0)
     ap.add_argument("--out", default="lecture.png")
     ap.add_argument("--device", default="cpu")
@@ -163,10 +163,12 @@ def main():
     files = [f for f in train_files + test_files if os.path.basename(f).replace(".npz", "") == a.scenario] if a.scenario \
         else [f for f in test_files if all(np.load(f)["V"][w - 1] == 0 for w in st.CLOSED_WINDOWS)]
     chosen = None
+    (x0, x1), (y0, y1), _ = common.SEAT_BOX
     for f in files:
         d = load_plane(f, z=st.Z_STATION)
-        peak = lecture_excess(d["frames"], d["N_ref"], PEOPLE).max() + st.CO2_OUTDOOR
-        print(f"  {os.path.basename(f)}: peak of the lecture about {peak:.0f} ppm (single point maximum)")
+        seat = (d["xy"][:, 0] >= x0) & (d["xy"][:, 0] <= x1) & (d["xy"][:, 1] >= y0) & (d["xy"][:, 1] <= y1)
+        peak = lecture_excess(d["frames"], d["N_ref"], PEOPLE)[:, seat].mean(1).max() + st.CO2_OUTDOOR
+        print(f"  {os.path.basename(f)}: peak of the lecture about {peak:.0f} ppm (average in the seating area)")
         if chosen is None and (a.scenario or 700.0 <= peak <= 900.0):
             chosen = f
     chosen = chosen or files[0]
