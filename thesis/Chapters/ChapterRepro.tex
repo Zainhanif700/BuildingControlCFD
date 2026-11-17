@@ -36,7 +36,10 @@ the forecast, as in the paper.
 
 The single networks are in the same range as in the paper (12.5--13.0\,\% against 11.8--13.0\,\%),
 and the ensemble is clearly better than every single network, as in the paper. My ensemble error is
-0.56 percentage points higher than the published one. One difference is the loss: the training
+0.56 percentage points higher than the published one. The values in \tref{tab:repro} use the definition of the
+paper, which includes the 400~ppm of the outdoor air. When only the \cotwo{} above the outdoor level counts
+(\cref{ch:model}), the same five networks have an error of 29.8\,\% on the test set and 13.8\,\% on the
+training set. One difference is the loss: the training
 script in the repository trains networks that predict only the mean \cotwo{} with a relative
 $\ell_2$ loss, while the paper's networks also predict a variance and are trained with a Gaussian
 negative log-likelihood. Different random seeds and hardware may also contribute.
