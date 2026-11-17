@@ -220,6 +220,29 @@ def test_history_length(tmp):
     print("ok  longer station history")
 
 
+def test_station_dropout(tmp):
+    """Station dropout: fewer stations in some steps, never fewer than 3, same values for the kept ones."""
+    import train_sensor as ts
+    hx = torch.rand(2, 8, 3)
+    hh = torch.rand(2, 8, 12)
+    gen = torch.Generator().manual_seed(0)
+    assert ts.drop_stations(hx, hh, 0.0, gen)[0].shape[1] == 8                  # p = 0: nothing changes
+    sizes = set()
+    for _ in range(200):
+        x2, h2 = ts.drop_stations(hx, hh, 1.0, gen)
+        sizes.add(x2.shape[1])
+        assert 4 <= x2.shape[1] <= 7 and h2.shape[1] == x2.shape[1]
+        for j in range(x2.shape[1]):                                             # every kept station is a real one
+            assert any(torch.equal(x2[0, j], hx[0, i]) and torch.equal(h2[0, j], hh[0, i]) for i in range(8))
+    assert len(sizes) > 1
+    model = SensorForecastGNOT(d=32, layers=1, c_scale=50.0)                    # the model accepts any number of stations
+    qx = torch.rand(2, 5, 3)
+    for n in (4, 8):
+        out, _ = model(qx, torch.zeros(2, 5, 12), hx[:, :n], hh[:, :n], torch.zeros(2, 10), torch.full((2, 1), 30.0))
+        assert out.shape == (2, 5, 6)
+    print("ok  station dropout")
+
+
 def test_diagnose(tmp):
     """The diagnosis runs for a saved member and gives finite numbers for every column."""
     import diagnose_sensor as dg
@@ -290,5 +313,6 @@ if __name__ == "__main__":
         test_blind(tmp)
         test_virtual(tmp)
         test_history_length(tmp)
+        test_station_dropout(tmp)
         test_diagnose(tmp)
     print("ALL TESTS PASSED")

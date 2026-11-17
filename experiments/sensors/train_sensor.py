@@ -18,16 +18,28 @@ from train_forecast import split, c_scale_of
 HERE = os.path.dirname(os.path.abspath(__file__))
 
 
+def drop_stations(hx, hh, p, gen):
+    """With probability p hide some stations (between half and all but one) for this training step.
+    The model must then not rely on one exact station. hx: (B, S, 3), hh: (B, S, steps)."""
+    S = hx.shape[1]
+    if p <= 0 or S < 4 or float(torch.rand(1, generator=gen)) >= p:
+        return hx, hh
+    n_keep = int(torch.randint(max(3, S // 2), S, (1,), generator=gen))
+    keep = torch.sort(torch.randperm(S, generator=gen)[:n_keep]).values.to(hx.device)
+    return hx[:, keep], hh[:, keep]
+
+
 def train_one(k, tr, te, a, dev, c_scale):
     torch.manual_seed(1000 + k)
     gen = torch.Generator().manual_seed(2000 + k)
     model = SensorForecastGNOT(d=a.d, layers=a.layers, c_scale=c_scale, anchor=a.anchor, blind=a.blind,
                                hist_len=a.hist).to(dev)
-    opt = torch.optim.AdamW(model.parameters(), lr=a.lr, weight_decay=1e-4)
+    opt = torch.optim.AdamW(model.parameters(), lr=a.lr, weight_decay=a.wd)
     sched = torch.optim.lr_scheduler.OneCycleLR(opt, max_lr=a.lr, total_steps=a.iters, pct_start=0.05)
     start, losses = time.time(), []
     for it in range(1, a.iters + 1):
         qx, qh, hx, hh, V, N, target = tr.batch(a.batch, a.queries, gen)
+        hx, hh = drop_stations(hx, hh, a.station_dropout, gen)
         mean, logvar = model(qx, qh, hx, hh, V, N)
         loss = nll(mean, logvar, target, c_scale)
         opt.zero_grad(set_to_none=True)
@@ -61,6 +73,9 @@ def main():
     ap.add_argument("--blind", action="store_true", help="test: the model does not get the station CO2")
     ap.add_argument("--virtual", default="0", choices=["0"] + list(st.VIRTUAL_SETS),
                     help="what-if test: add a set of virtual stations in the seating area (not in the real room)")
+    ap.add_argument("--wd", type=float, default=1e-4, help="weight decay of the optimizer")
+    ap.add_argument("--station-dropout", type=float, default=0.0,
+                    help="chance per training step that some stations are hidden (against overfitting)")
     ap.add_argument("--hist", type=int, default=12, help="number of 30 s steps of station history the model gets")
     ap.add_argument("--t0-min", type=int, default=0,
                     help="first time step used (so that runs with different histories use the same samples)")
