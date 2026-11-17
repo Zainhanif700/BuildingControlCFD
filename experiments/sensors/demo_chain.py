@@ -29,18 +29,20 @@ START = datetime(2026, 11, 16, 8, 0, tzinfo=timezone.utc)
 
 def forecast(models, xyz, hx, hh, V, people, hist_len):
     """Ensemble mean forecast (points, 6) for the whole plane."""
-    Vt = torch.as_tensor(V, dtype=torch.float32).unsqueeze(0)
-    Nt = torch.tensor([[float(people)]])
+    dev = next(models[0].parameters()).device                    # the models may be on the GPU
+    xyz, hx, hh = xyz.to(dev), hx.to(dev), hh.to(dev)
+    Vt = torch.as_tensor(V, dtype=torch.float32).unsqueeze(0).to(dev)
+    Nt = torch.tensor([[float(people)]], device=dev)
     outs = []
     with torch.no_grad():
         for m in models:
             parts = []
             for i in range(0, xyz.shape[0], 4096):
                 q = xyz[i:i + 4096].unsqueeze(0)
-                mu, _ = m(q, torch.zeros(1, q.shape[1], hist_len), hx, hh, Vt, Nt)
+                mu, _ = m(q, torch.zeros(1, q.shape[1], hist_len, device=dev), hx, hh, Vt, Nt)
                 parts.append(mu[0])
             outs.append(torch.cat(parts))
-    return torch.stack(outs).mean(0)
+    return torch.stack(outs).mean(0).cpu()
 
 
 def run_case(models, path, people, steps, hist_len=mapper.N_HIST, start=START, noise=st.CO2_NOISE_PPM):
