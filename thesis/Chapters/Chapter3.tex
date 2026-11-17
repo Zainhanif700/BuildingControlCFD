@@ -136,9 +136,9 @@ enough. I am now running a third setup:
 There are 40 new scenarios, 10 for each of the four combinations of the two doors. 32 of them are for
 training and 8 for testing. Together with the 28 scenarios of the second setup this gives 68 scenarios. The
 OpenFOAM settings are the same as before, and the airflow of the first 150~s is saved every second
-(\cref{ch:dataset}). The model will also get the information which windows and doors are open.
+(\cref{ch:dataset}). The model also gets the information which windows and doors are open.
 
 According to the plan, six windows (W1, W2, W3, W4, W6 and W7) and both doors get a sensor, and the windows
 W5 and W8 stay closed. Six of the 40 new scenarios have exactly these two windows closed, and all 28 scenarios
-of the second setup fit to this plan as well (with door~2 closed). When the simulations are finished I will train the model on all 68 scenarios and compare it
-with the results of the second setup.
+of the second setup fit to this plan as well (with door~2 closed). The results of the model trained on all 68
+scenarios are in \cref{ch:results}.

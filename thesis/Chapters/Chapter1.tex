@@ -65,9 +65,9 @@ whole room, so another height can be used later without new simulations.
 
 I simulated the room in three steps. In the first setup the windows were opened in three groups and both
 doors were open (39 scenarios). In the second setup only the windows W1, W3 and W6 can be opened and door~1 is
-open (28 scenarios). Most results in this thesis are from this setup. In the third setup all 8 windows and
-both doors can be open or closed. These 40 scenarios are running at the moment. \fref{fig:room} in
-\cref{ch:room} shows where the windows and doors are.
+open (28 scenarios). In the third setup all 8 windows and both doors can be open or closed (40 scenarios).
+The final model is trained on the 28 scenarios of the second setup and the 40 of the third setup together.
+\fref{fig:room} in \cref{ch:room} shows where the windows and doors are.
 
 \section{What I did}
 \begin{itemize}
@@ -77,7 +77,9 @@ both doors can be open or closed. These 40 scenarios are running at the moment. 
         found out how often the airflow has to be saved for this.
   \item I built the dataset a second time with the airflow saved every second and compared the models trained on the old and
         on the new data.
-  \item I started the simulations with all windows and doors.
+  \item I simulated all windows and doors and trained the model on all 68 scenarios.
+  \item I tested what the real sensor stations can do with a model that only sees their eight positions, and
+        I built and tested the chain from the sensor data to the forecast with synthetic data.
   \item I tested faster simulations, a GPU solver and training without simulation data. These did not become
         part of the final method.
 \end{itemize}

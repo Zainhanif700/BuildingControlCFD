@@ -20,6 +20,9 @@ from another window scenario, as in the paper, and about 10 times smaller when a
 also tried to run the simulations on the GPU and to train the network without simulation data. Both did not
 work well enough and are described briefly.
 
-At the moment I am running 40 more scenarios in which all 8 windows and both doors can be open or closed.
-Sensors for \cotwo{} and air speed are being installed at the windows and doors of the room, and the next step
-is to use the model with their data.
+I also simulated 40 more scenarios in which all 8 windows and both doors can be open or closed, and trained the
+model on all 68 scenarios. On 16 scenarios it had never seen, its error is 0.16\,\% in the definition of the
+paper, against 0.44\,\% for the guess. Sensors for \cotwo{} and air speed are being installed at the windows and
+doors of the room. They stand at the walls, so I tested a second model that only sees the eight stations. In
+the simulation it can warn before the \cotwo{} passes 700 or 800~ppm, and one more sensor in the middle of the
+room improves it clearly. Real sensor data is not available yet.
