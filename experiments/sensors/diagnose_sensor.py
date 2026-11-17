@@ -36,7 +36,7 @@ def diagnose(models, data, every=4, near=2.0, seed=1234):
     rng = np.random.default_rng(seed)
     rows = []
     for k in range(len(data.cases)):
-        acc = {key: [] for key in ("model", "persistence", "uniform", "zero", "near", "far",
+        acc = {key: [] for key in ("model", "persistence", "uniform", "zero", "near", "far", "paper", "pers_paper",
                                    "rmse_ppm", "pers_rmse_ppm", "excess_ppm")}
         for t0 in data.t0s[k][::every]:
             if data.H is not None:                       # transition data: people now and before
@@ -53,6 +53,9 @@ def diagnose(models, data, every=4, near=2.0, seed=1234):
             acc["persistence"].append(l2(hist[:, -1:].expand_as(fut), fut))
             acc["uniform"].append(l2(hist[data.hist_idx, -1].mean().expand_as(fut), fut))
             acc["zero"].append(1.0)
+            # the paper's measure: the outside air (400 ppm) is added to both fields
+            acc["paper"].append(l2(mean + st.CO2_OUTDOOR, fut + st.CO2_OUTDOOR))
+            acc["pers_paper"].append(l2(hist[:, -1:].expand_as(fut) + st.CO2_OUTDOOR, fut + st.CO2_OUTDOOR))
             # the same in ppm (the data are CO2 above outside air in ppm): root mean square error and size of the signal
             acc["rmse_ppm"].append(float(torch.sqrt(((mean - fut) ** 2).mean())))
             acc["pers_rmse_ppm"].append(float(torch.sqrt(((hist[:, -1:].expand_as(fut) - fut) ** 2).mean())))
@@ -66,8 +69,8 @@ def diagnose(models, data, every=4, near=2.0, seed=1234):
 
 
 def print_table(title, names, rows):
-    keys = ("model", "persistence", "uniform", "zero", "near", "far")
-    print(f"\n{title}  (relative l2 error in %, mean over the samples of each scenario)")
+    keys = ("model", "persistence", "uniform", "zero", "near", "far", "paper", "pers_paper")
+    print(f"\n{title}  (relative l2 error in %, mean over the samples of each scenario; paper = with 400 ppm added)")
     print("  scenario   " + "".join(f"{k:>13s}" for k in keys))
     for name, r in zip(names, rows):
         print(f"  {name:10s} " + "".join(f"{100 * r[k]:13.1f}" for k in keys))
