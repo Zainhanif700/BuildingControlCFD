@@ -1,0 +1,99 @@
+\chapter{Details of the sensor tests}
+\label{app:sensortests}
+
+In the tests of \cref{ch:sensors} I also used the stricter definition of the error, which counts only the \cotwo{}
+above the outdoor level (\cref{ch:model}). It shows the differences between settings better. The numbers in the
+definition of the paper are about five times smaller. If not stated otherwise, all tests use the eight real
+stations, 5,000 training steps and 3 networks, and the error of the first test split, where the reference is
+44.1\,\%.
+
+Some settings need a short explanation:
+\begin{itemize}
+  \item \emph{Relative loss}: in training every sample is weighted by the size of its own signal, so that
+        scenarios with a small \cotwo{} rise count as much as strong ones. This is how the relative error is
+        calculated.
+  \item \emph{Tuned}: relative loss and a smaller network (width 64 and 2 blocks instead of width 128 and 3 blocks).
+  \item \emph{Anchoring}: the station values are interpolated to every point of the room, and the model forecasts
+        the change from there.
+  \item \emph{Station dropout}: in half of the training steps some stations are hidden.
+  \item \emph{Physics input}: the model also gets the fresh-air flow through the open windows, the \cotwo{} level
+        that the room would approach for this flow and this number of people, the time constant of the room, and
+        the number of open windows and doors.
+\end{itemize}
+
+\section{What I tried}
+\begin{table}[h]
+  \centering
+  \caption[Changes to the sensor model.]{Changes to the sensor model and the error above the outdoor level.}
+  \label{tab:tried}
+  \small
+  \begin{tabular}{>{\raggedright}p{5.3cm}>{\raggedright}p{4.3cm}r}
+    \toprule
+    Change & Result & Change of the error\\
+    \midrule
+    Door 2 as the eighth station & 7 stations 44.2\,\%, 8 stations 44.5\,\% & none\\
+    Anchoring & 44.4\,\% & none\\
+    Longer station history (6, 12 and 20~min) & 40.9, 38.6 and 43.1\,\% & no trend\\
+    Shorter training & 44.1\,\% instead of 44.2 to 44.5\,\% & none\\
+    Relative loss & 38.8\,\% & $-5$ points\\
+    Relative loss and smaller network & 35.1\,\% & $-9$ points\\
+    More noise, station dropout, stronger weight decay & 39.7, 40.0 and 42.5\,\% & $-2$ to $-4$ points\\
+    Physics input & about 1 point better on all four splits & $-1$ point\\
+    One virtual sensor in the middle & 28.8\,\% & $-15$ points\\
+    Four virtual sensors & 27.7\,\% & $-16$ points\\
+    A grid of 16 virtual sensors & 21.3\,\% & $-23$ points\\
+    \bottomrule
+  \end{tabular}
+\end{table}
+
+The place of one virtual sensor in the seating area matters little: the middle (28.8\,\%), the door side
+(29.8\,\%), the window side (30.2\,\%) and the back (30.4\,\%) are about the same. One place on the blackboard
+side gave no gain (43.2\,\%). Training with 13, 26, 39 and 52 scenarios gave 44.6, 47.4, 46.6 and 44.1\,\%, so
+more scenarios of the same kind did not help.
+
+\section{Stability on four test splits}
+\begin{table}[h]
+  \centering
+  \caption[Four test splits.]{Error above the outdoor level on four test splits. The first split is the fixed one,
+  the others are random.}
+  \label{tab:splits}
+  \small
+  \begin{tabular}{lrrr}
+    \toprule
+    Test split & Default & Tuned & Tuned with physics input\\
+    \midrule
+    First split & 44.1\,\% & 35.1\,\% & 34.8\,\%\\
+    Random split 1 & 32.3\,\% & 32.5\,\% & 30.7\,\%\\
+    Random split 2 & 30.4\,\% & 31.8\,\% & 31.7\,\%\\
+    Random split 3 & 32.3\,\% & 31.3\,\% & 30.2\,\%\\
+    Mean of the four & 34.8\,\% & 32.7\,\% & 31.8\,\%\\
+    \bottomrule
+  \end{tabular}
+\end{table}
+
+On the random splits all settings reach about 30 to 32\,\%. So the first split was a hard one, and the gain of the
+tuning mostly does not repeat. When the tuned model is trained for 20,000 steps with 5 networks, the error is
+40.0\,\% instead of 35.1\,\%, because the model learns the training scenarios better the longer it trains. The
+model with the physics input is lower than the tuned model on all four splits, but only by about one point.
+
+\section{Other checks}
+\begin{itemize}
+  \item \emph{People.} Without the number of people the error is 33.6\,\% instead of 35.1\,\% (tuned model, first
+        split).
+  \item \emph{Direction of the air.} With only the size of the window speeds the error is 42.2\,\% instead of
+        44.1\,\% on the first split, and 30.8, 31.1 and 32.0\,\% instead of 32.3, 30.4 and 32.3\,\% on the random
+        splits.
+  \item \emph{Size of the speeds.} Window speeds multiplied by 0.5, 0.75 and 1.5 give 46.5, 45.4 and 42.8\,\%
+        instead of 44.5\,\% on the first split, and change the result by at most 0.3 points on the random splits.
+  \item \emph{Window setting seen in training.} If the test scenarios are the training scenarios at later times,
+        the error is 23.5\,\%.
+  \item \emph{Scenarios that fit the plan.} With W5 and W8 closed (8 to 11 test scenarios per split) the error is
+        about 22\,\% (median 18\,\%).
+  \item \emph{Whole chain.} Through the sensor file, the reader and the mapper the error is 26.4\,\% instead of
+        25.8\,\% with the history straight from the simulation, on the test scenarios of the first split that fit
+        the plan.
+\end{itemize}
+
+For comparison, my reproduction of the paper has 29.8\,\% on the test set in the same definition
+(\cref{ch:repro}), and the full-map model has 0.46\,\% (\cref{ch:results}). The problems are different, so these
+numbers are only for orientation.

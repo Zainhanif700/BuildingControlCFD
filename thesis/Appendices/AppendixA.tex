@@ -12,7 +12,7 @@
   Exhaled air per person & 6~L/min at 40,000~ppm \cotwo{}\\
   Outdoor \cotwo{} & 400~ppm\\
   Inlet turbulence & intensity 5\,\%, length scale 0.1~m\\
-  Seating area & $3.0\le x\le12.5$~m, $2.0\le y\le7.0$~m, $1.0\le z\le1.2$~m\\
+  Seating area (placeholder box) & $3.0\le x\le12.5$~m, $2.0\le y\le7.0$~m, $1.0\le z\le1.2$~m\\
   \bottomrule
 \end{tabular}
 
@@ -20,5 +20,7 @@
 The code is in my repository \url{https://github.com/Zainhanif700/BuildingControlCFD}. The main scripts are in
 \begin{itemize}
   \item \texttt{experiments/gnot\_openfoam\_rans}: simulation, dataset and forecast model;
-  \item \texttt{experiments/co2\_sampling}: save-interval study and corrected dataset.
+  \item \texttt{experiments/co2\_sampling}: save-interval study and corrected dataset;
+  \item \texttt{experiments/sensors}: the model for the sensor stations, the reader, the mapper, the synthetic
+        sensor data and the tests (with a short \texttt{README.md}).
 \end{itemize}
