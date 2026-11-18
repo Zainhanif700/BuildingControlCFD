@@ -58,8 +58,8 @@ with columns and for sensors at any position.
 
 \section{The method of Bian et al.}
 \citet{bian2025} simulated a classroom at UC San Diego with ceiling vents in ANSYS Fluent, also with the
-k-$\omega$ SST model. They ran 300 simulations of 30~minutes with different vent settings. Each one starts
-from the steady state of another setting. On this data they trained a GNOT model that uses the \cotwo{} of the
+k-$\omega$ SST model. They ran 10 steady-state simulations and 300 transient simulations of 30~minutes with different vent settings.
+Each transient one starts from one of the steady states. On this data they trained a GNOT model that uses the \cotwo{} of the
 last 6~minutes to predict the next 3~minutes. They trained five networks and used the mean of them, which is
 called an ensemble. Their test error is 10.9\,\%. In the end they used the model to choose vent settings that
 keep the \cotwo{} low with little energy.

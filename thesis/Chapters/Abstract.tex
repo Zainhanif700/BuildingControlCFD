@@ -1,28 +1,21 @@
-In a full classroom the \cotwo{} goes up quickly, and the usual way to bring it down is to open the windows.
+In a classroom sometimes the \cotwo{} goes up quickly, and the common way to bring it down is to open the windows.
 In winter this costs heating energy, and nobody knows how long the windows really have to stay open. A model
-that predicts the \cotwo{} of the next few minutes can help here. In this thesis I apply the method of
+that can predict the \cotwo{} of the next few minutes can help us here. In this thesis I apply the method of
 \citet{bian2025} to classroom 1-130 of our university, which has windows instead of ceiling vents. First I ran
 their published code and data and got an error of 11.46\,\%, close to the 10.90\,\% of the paper. Then I
 simulated the airflow in our room with OpenFOAM and trained a neural operator (GNOT) on this data. The model
 looks at the \cotwo{} of the last 6~minutes and predicts the next 3~minutes.
 
-The classroom has 8 windows and 2 doors. In the setup of this thesis three of the windows can be opened, and I
+The classroom has 8 windows and 2 doors. In the first setup of this thesis three of the windows can be opened, and I
 simulated 28 window scenarios, where some windows are closed and some are open with different air speeds. A
 full OpenFOAM run of 30~minutes would take at least two days for each scenario. So I only simulate the airflow
 for 10~minutes in OpenFOAM and compute the \cotwo{} for the 30~minutes with my own \cotwo{} solver on the GPU.
-When I checked this solver against OpenFOAM, I found that saving the airflow only every 10~s made the \cotwo{}
-up to 45\,\% different at high window speeds. With a save every second the difference is about 2\,\%, so I
+When I checked this solver against OpenFOAM, I found that if we save the airflow only every 10~s, the \cotwo{}
+was up to 45\,\% different from the original OpenFOAM \cotwo{} at high window speeds. With a save every second the difference is about 2\,\%, so I
 built the dataset again with this correction.
 
-To judge the model I compare it with the simplest possible guess, that the \cotwo{} in 3~minutes is the same
-as now. The error of the model is 4.5 times smaller than this guess when a run starts with the \cotwo{} left
-from another window scenario, as in the paper, and about 10 times smaller when a run starts with fresh air. I
-also tried to run the simulations on the GPU and to train the network without simulation data. Both did not
-work well enough and are described briefly.
-
-I also simulated 40 more scenarios in which all 8 windows and both doors can be open or closed, and trained the
-model on all 68 scenarios. On 16 scenarios it had never seen, its error is 0.16\,\% in the definition of the
-paper, against 0.44\,\% for the guess. Sensors for \cotwo{} and air speed are being installed at the windows and
-doors of the room. They stand at the walls, so I tested a second model that only sees the eight stations. In
-the simulation it can warn before the \cotwo{} passes 700 or 800~ppm, and one more sensor in the middle of the
-room improves it clearly. Real sensor data is not available yet.
+I then simulated 40 more scenarios in which all 8 windows and both doors can be open or closed, and trained the
+model on all 68 scenarios. On 16 scenarios it had never seen, its error is 0.16\,\%, against 0.44\,\% for
+the simple guess that the \cotwo{} stays as it is now. The stations with \cotwo{} and air speed sensors are being installed only at the windows and
+doors of the room. So I created a second model that sees only these eight stations, together with one \cotwo{}
+sensor in the middle of the room. In the simulation it can warn before the \cotwo{} passes 700 or 800~ppm.
