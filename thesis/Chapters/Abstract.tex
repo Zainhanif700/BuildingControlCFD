@@ -8,7 +8,7 @@ looks at the \cotwo{} of the last 6~minutes and predicts the next 3~minutes.
 
 The classroom has 8 windows and 2 doors. In the setup of this thesis three of the windows can be opened, and I
 simulated 28 window scenarios, where some windows are closed and some are open with different air speeds. A
-full OpenFOAM run of 30~minutes would take about two days for each scenario. So I only simulate the airflow
+full OpenFOAM run of 30~minutes would take at least two days for each scenario. So I only simulate the airflow
 for 10~minutes in OpenFOAM and compute the \cotwo{} for the 30~minutes with my own \cotwo{} solver on the GPU.
 When I checked this solver against OpenFOAM, I found that saving the airflow only every 10~s made the \cotwo{}
 up to 45\,\% different at high window speeds. With a save every second the difference is about 2\,\%, so I

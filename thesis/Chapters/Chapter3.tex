@@ -47,8 +47,7 @@ only used for testing and the model never sees them in training.
 \end{table}
 The test scenarios are N14, N15, N19, N20, N23, N24, N27 and N28.
 
-In the third setup all 8 windows and both doors can be open or closed. I am running these simulations at the
-moment (\sref{sec:allopen}).
+In the third setup all 8 windows and both doors can be open or closed (\sref{sec:allopen}).
 
 \section{Simulation setup}
 \tref{tab:sim} shows the OpenFOAM settings. At an open window the air comes in with the same speed over the
@@ -125,7 +124,7 @@ The wall functions of OpenFOAM work for small and for large values, so I use the
 \section{All windows and doors}
 \label{sec:allopen}
 In the real room all 8 windows and both doors can be opened, so the second setup with three windows is not
-enough. I am now running a third setup:
+enough. So I simulated a third setup:
 \begin{itemize}
   \item each window is closed, or air comes in through it, or air goes out through it;
   \item air comes in with a speed between 0.2 and 2.0~m/s;

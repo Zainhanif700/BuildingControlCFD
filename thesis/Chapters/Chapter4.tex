@@ -4,7 +4,7 @@
 \section{Why the \cotwo{} is computed separately}
 The forecast model needs the \cotwo{} for 30~minutes per scenario, as in \citet{bian2025}: the \cotwo{} is
 still rising after 10~minutes when the ventilation is weak, and 30~minutes give 44 training samples of
-9~minutes each (6~minutes of history and 3~minutes of forecast). A 30-minute OpenFOAM run would take about
+9~minutes each (6~minutes of history and 3~minutes of forecast). A 30-minute OpenFOAM run would take at least
 two days per scenario on one core. I therefore split the work into two parts:
 \begin{enumerate}
   \item OpenFOAM computes the airflow for 600~s and saves the velocity and the turbulent viscosity.
