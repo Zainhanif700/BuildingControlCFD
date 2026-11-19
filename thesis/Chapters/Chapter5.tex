@@ -40,8 +40,9 @@ sure it is.
 
 \section{Training data}
 One training sample is 9~minutes long. It has 6~minutes of history and the 3~minutes that the model should
-predict. A run of 30~minutes gives 44 such samples, because a new sample starts every 30~s. I use two kinds
-of runs:
+predict. A run of 30~minutes has 61 \cotwo{} maps, one every 30~s. A sample needs 12 maps (6~minutes of history) and 6 maps
+(3~minutes to predict), which are 18 maps, and a new sample starts at every map. So a run gives $61 - 18 + 1 = 44$ such
+samples. I use two kinds of runs:
 \begin{itemize}
   \item In a \emph{direct run} the room starts with fresh air and the \cotwo{} of the people builds up.
   \item In a \emph{transition run} the room starts with the \cotwo{} that was left from another window

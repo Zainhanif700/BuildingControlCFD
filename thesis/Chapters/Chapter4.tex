@@ -3,9 +3,11 @@
 
 \section{Why the \cotwo{} is computed separately}
 The forecast model needs the \cotwo{} for 30~minutes per scenario, as in \citet{bian2025}: the \cotwo{} is
-still rising after 10~minutes when the ventilation is weak, and 30~minutes give 44 training samples of
-9~minutes each (6~minutes of history and 3~minutes of forecast). A 30-minute OpenFOAM run would take at least
-two days per scenario on one core. I therefore split the work into two parts:
+still rising after 10~minutes when the ventilation is weak, and 30~minutes give 44 training samples,
+because a new sample of 9~minutes (6~minutes of history and 3~minutes of forecast) starts every 30~s. A run of
+30~minutes has 61 \cotwo{} maps, one every 30~s, a sample needs 12 maps (6~minutes of history) + 6 maps (3~minutes of forecast) = 18 maps, and so $61 - 18 + 1 = 44$.
+A 30-minute OpenFOAM run would take at least
+two days per scenario on one core of the computers I work with. I therefore split the work into two parts:
 \begin{enumerate}
   \item OpenFOAM computes the airflow for 600~s and saves the velocity and the turbulent viscosity.
   \item My own solver computes the \cotwo{} for the full 30~minutes on the GPU from this airflow. The
@@ -176,9 +178,10 @@ metric at most 0.1\,\%), compared with up to 45\,\% before.
 
 \tref{tab:v3v2} shows how much the data changed. The differences are in the first minutes, when the fresh air
 spreads into the room. After about 10~minutes both datasets become the same, because they use the same mean
-flow, and at 30~minutes they are identical. Since the difference after 20~minutes is at most 0.15\,\%, more
-than ten times smaller than the accuracy of the solver, the last 10~minutes of 20 of the 28 scenarios were taken from
-the first dataset to save computing time.
+flow, and at 30~minutes they are identical. After 20~minutes the corrected and the first dataset differ by at most 0.15\,\%, much less than the accuracy
+of my solver. So for 20 of the 28 scenarios I recomputed only the first 20~minutes with the corrected flow and took
+the last 10~minutes from the first dataset. This saved GPU time. The other 8 scenarios were recomputed for the full
+30~minutes.
 
 \begin{table}[h]
   \centering
