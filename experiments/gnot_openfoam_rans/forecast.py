@@ -149,7 +149,16 @@ class PlaneData:
         fut = f[t0 + 1:t0 + 1 + T_OUT].T
         return hist, fut
 
-    def batch(self, B, Q, gen, n_lo=10.0, n_hi=80.0):
+    def sample_padded(self, k, t0, N, NA):
+        """Transition runs: history with the window change INSIDE it (t0 = 0 .. H_IN - 2). The maps before the change
+        are the map at the change, repeated (the old CO2 is assumed constant before the change)."""
+        f = self.frames[k] * (N / self.N_ref[k]) + self.H[k] * (NA / self.N_ref[k])
+        hist = torch.stack([f[max(i, 0)] for i in range(t0 - H_IN + 1, t0 + 1)], 0).T
+        fut = f[t0 + 1:t0 + 1 + T_OUT].T
+        return hist, fut
+
+    def batch(self, B, Q, gen, n_lo=10.0, n_hi=80.0, pad_prob=0.0):
+        """pad_prob > 0 (transition data only): this share of the samples has the window change inside the history."""
         qh, qx, hh, hx, V, Ns, tg = [], [], [], [], [], [], []
         Np = self.xyz.shape[0]
         for _ in range(B):
@@ -157,7 +166,10 @@ class PlaneData:
             t0 = self.t0s[k][int(torch.randint(len(self.t0s[k]), (1,), generator=gen))]
             N = float(n_lo + (n_hi - n_lo) * torch.rand(1, generator=gen))
             NA = float(n_lo + (n_hi - n_lo) * torch.rand(1, generator=gen)) if self.H is not None else 0.0
-            hist, fut = self.sample(k, t0, N, NA)
+            if pad_prob > 0 and self.H is not None and float(torch.rand(1, generator=gen)) < pad_prob:
+                hist, fut = self.sample_padded(k, int(torch.randint(H_IN - 1, (1,), generator=gen)), N, NA)
+            else:
+                hist, fut = self.sample(k, t0, N, NA)
             qi = torch.randint(Np, (Q,), generator=gen).to(self.dev)
             qh.append(hist[qi]); qx.append(self.xyz[qi]); tg.append(fut[qi])
             hh.append(hist[self.hist_idx]); hx.append(self.xyz[self.hist_idx])

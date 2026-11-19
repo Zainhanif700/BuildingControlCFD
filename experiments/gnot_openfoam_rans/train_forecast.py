@@ -62,7 +62,7 @@ def train_member(k, tr, te, args, dev, c_scale, d_scale):
     print(f"member {k}: {n_par / 1e3:.0f}k parameters, c_scale {c_scale:.4g}, d_scale {d_scale:.4g}", flush=True)
     t0, run = time.time(), []
     for it in range(1, args.iters + 1):
-        qx, qh, hx, hh, V, N, tg = tr.batch(args.batch, args.queries, gen)
+        qx, qh, hx, hh, V, N, tg = tr.batch(args.batch, args.queries, gen, pad_prob=args.pad_prob)
         mean, logvar = model(qx, qh, hx, hh, V, N)
         loss = nll(mean, logvar, tg, d_scale)
         opt.zero_grad(set_to_none=True)
@@ -83,7 +83,7 @@ def train_member(k, tr, te, args, dev, c_scale, d_scale):
             print(msg, flush=True)
     path = os.path.join(args.out, f"member{k}.pth")
     torch.save({"state": model.state_dict(), "c_scale": c_scale, "d_scale": d_scale, "d": args.d, "layers": args.layers,
-                "open_flags": args.open_flags,
+                "open_flags": args.open_flags, "pad_prob": args.pad_prob,
                 "data_dir": args.data_dir, "hist_idx": tr.hist_idx.cpu()}, path)
     print(f"  saved {path}", flush=True)
     model.eval()
@@ -112,6 +112,9 @@ def main():
                     help="RANS data: 400 -> also report the paper's metric (absolute ppm); laminar data: 0")
     ap.add_argument("--open-flags", action="store_true",
                     help="tell the model which windows and doors are open (needed for outlet windows and changing doors)")
+    ap.add_argument("--pad-prob", type=float, default=0.0,
+                    help="transition data: share of training samples with the window change INSIDE the 6-min history "
+                         "(0 = as before, all histories lie after the change)")
     ap.add_argument("--device",default="cuda" if torch.cuda.is_available() else "cpu")
     args = ap.parse_args()
     args.out = os.path.join(HERE, "checkpoints", args.tag)
