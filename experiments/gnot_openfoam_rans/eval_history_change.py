@@ -75,12 +75,19 @@ def main():
     ap.add_argument("--draws", type=int, default=3, help="random people numbers (before, now) per case and t0")
     ap.add_argument("--t0-max", type=int, default=16)
     ap.add_argument("--offset", type=float, default=400.0, help="outdoor level added for the paper's metric")
+    ap.add_argument("--which", choices=["test", "train"], default="test",
+                    help="evaluate on the test scenarios (default) or on training scenarios (shows memorising)")
+    ap.add_argument("--max-cases", type=int, default=None, help="use only the first n scenarios (saves time on train)")
     ap.add_argument("--device", default="cuda" if torch.cuda.is_available() else "cpu")
     args = ap.parse_args()
     dev = torch.device(args.device)
 
-    _, tep = split(args.data_dir, args.scenarios, False)
-    te = PlaneData(tep, dev, seed=0, z=1.6, transitions=True)
+    trp, tep = split(args.data_dir, args.scenarios, False)
+    paths = tep if args.which == "test" else trp
+    if args.max_cases:
+        paths = paths[:args.max_cases]
+    print(f"scenarios: {args.which} ({len(paths)})", flush=True)
+    te = PlaneData(paths, dev, seed=0, z=1.6, transitions=True)
     models, hist_idx = load_models(args.ckpt, dev)
     assert torch.equal(hist_idx.cpu(), te.hist_idx.cpu()), "history points differ from the training"
     print(f"{len(models)} networks, {len(te.cases)} test scenarios, {te.xyz.shape[0]} plane points, device {dev}", flush=True)
