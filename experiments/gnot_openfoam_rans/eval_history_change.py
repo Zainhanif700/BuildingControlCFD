@@ -34,7 +34,7 @@ def load_models(ckpt_dir, dev):
     for name in sorted(f for f in os.listdir(ckpt_dir) if f.endswith(".pth")):
         c = torch.load(os.path.join(ckpt_dir, name), map_location=dev)
         m = ForecastGNOT(d=c["d"], layers=c["layers"], c_scale=c["c_scale"], d_scale=c["d_scale"],
-                         open_flags=c.get("open_flags", False)).to(dev)
+                         open_flags=c.get("open_flags", False), use_tau=c.get("use_tau", False)).to(dev)
         m.load_state_dict(c["state"])
         m.eval()
         models.append(m)
@@ -52,15 +52,16 @@ def sample_padded(data, k, t0, N, NA):
 
 
 @torch.no_grad()
-def predict(models, data, k, hist, N, chunk=4096):
+def predict(models, data, k, hist, N, t0, chunk=4096):
     hh, hx = hist[data.hist_idx].unsqueeze(0), data.xyz[data.hist_idx].unsqueeze(0)
     V = data.V[k].unsqueeze(0)
     Nt = torch.tensor([[N]], device=data.dev)
     outs = []
     for m in models:
+        kw = {"tau": torch.tensor([[F.tau_of(t0, True)]], device=data.dev)} if m.use_tau else {}
         out = []
         for i in range(0, hist.shape[0], chunk):
-            mean, _ = m(data.xyz[i:i + chunk].unsqueeze(0), hist[i:i + chunk].unsqueeze(0), hx, hh, V, Nt)
+            mean, _ = m(data.xyz[i:i + chunk].unsqueeze(0), hist[i:i + chunk].unsqueeze(0), hx, hh, V, Nt, **kw)
             out.append(mean[0])
         outs.append(torch.cat(out))
     return torch.stack(outs).mean(0)
@@ -93,7 +94,7 @@ def main():
                 hist, fut = sample_padded(te, k, t0, n_now, n_before)
                 if torch.linalg.norm(fut) == 0:
                     continue
-                pred = predict(models, te, k, hist, n_now)
+                pred = predict(models, te, k, hist, n_now, t0)
                 base = hist[:, -1:].expand_as(fut)
                 r = rows.setdefault(t0, {"m": [], "p": [], "mo": [], "po": []})
                 r["m"].append(l2_rel(pred, fut))

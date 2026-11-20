@@ -55,15 +55,20 @@ def d_scale_of(data, n_typ=45.0):
 def train_member(k, tr, te, args, dev, c_scale, d_scale):
     torch.manual_seed(1000 + k)
     gen = torch.Generator().manual_seed(2000 + k)
-    model = ForecastGNOT(d=args.d, layers=args.layers, c_scale=c_scale, d_scale=d_scale, open_flags=args.open_flags).to(dev)
+    model = ForecastGNOT(d=args.d, layers=args.layers, c_scale=c_scale, d_scale=d_scale, open_flags=args.open_flags,
+                         use_tau=args.tau).to(dev)
     opt = torch.optim.AdamW(model.parameters(), lr=args.lr, weight_decay=1e-4)
     sched = torch.optim.lr_scheduler.OneCycleLR(opt, max_lr=args.lr, total_steps=args.iters, pct_start=0.05)
     n_par = sum(p.numel() for p in model.parameters())
     print(f"member {k}: {n_par / 1e3:.0f}k parameters, c_scale {c_scale:.4g}, d_scale {d_scale:.4g}", flush=True)
     t0, run = time.time(), []
     for it in range(1, args.iters + 1):
-        qx, qh, hx, hh, V, N, tg = tr.batch(args.batch, args.queries, gen, pad_prob=args.pad_prob)
-        mean, logvar = model(qx, qh, hx, hh, V, N)
+        if args.tau:
+            qx, qh, hx, hh, V, N, tg, tau = tr.batch(args.batch, args.queries, gen, pad_prob=args.pad_prob, with_tau=True)
+            mean, logvar = model(qx, qh, hx, hh, V, N, tau)
+        else:
+            qx, qh, hx, hh, V, N, tg = tr.batch(args.batch, args.queries, gen, pad_prob=args.pad_prob)
+            mean, logvar = model(qx, qh, hx, hh, V, N)
         loss = nll(mean, logvar, tg, d_scale)
         opt.zero_grad(set_to_none=True)
         loss.backward()
@@ -83,7 +88,7 @@ def train_member(k, tr, te, args, dev, c_scale, d_scale):
             print(msg, flush=True)
     path = os.path.join(args.out, f"member{k}.pth")
     torch.save({"state": model.state_dict(), "c_scale": c_scale, "d_scale": d_scale, "d": args.d, "layers": args.layers,
-                "open_flags": args.open_flags, "pad_prob": args.pad_prob,
+                "open_flags": args.open_flags, "pad_prob": args.pad_prob, "use_tau": args.tau,
                 "data_dir": args.data_dir, "hist_idx": tr.hist_idx.cpu()}, path)
     print(f"  saved {path}", flush=True)
     model.eval()
@@ -115,6 +120,8 @@ def main():
     ap.add_argument("--pad-prob", type=float, default=0.0,
                     help="transition data: share of training samples with the window change INSIDE the 6-min history "
                          "(0 = as before, all histories lie after the change)")
+    ap.add_argument("--tau", action="store_true",
+                    help="give the model the time since the last window change as an input (use with --pad-prob; transition data)")
     ap.add_argument("--device",default="cuda" if torch.cuda.is_available() else "cpu")
     args = ap.parse_args()
     args.out = os.path.join(HERE, "checkpoints", args.tag)

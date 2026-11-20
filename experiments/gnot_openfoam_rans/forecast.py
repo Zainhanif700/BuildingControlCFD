@@ -14,6 +14,13 @@ from point_sampler import ROOM_X, ROOM_Y, ROOM_Z, V_MAX
 H_IN, T_OUT, DT = 12, 6, 30.0
 N_MAX_FC = 80.0
 N_HIST_TOKENS = 900
+TAU_CAP = 12      # time since the last window change in maps (30 s each); from 6 min on the history lies after the change
+
+
+def tau_of(t0, transitions):
+    """Input 'time since the last window change', scaled to 0..1. Transition runs start with the change at map 0, so
+    the time is t0 maps; direct runs have no recent change (1)."""
+    return min(float(t0), float(TAU_CAP)) / TAU_CAP if transitions else 1.0
 
 
 def doors_of(d):
@@ -54,16 +61,17 @@ def load_transition(path, z=1.6):
 
 
 class ForecastGNOT(nn.Module):
-    def __init__(self, d=128, heads=4, layers=3, c_scale=1.0, d_scale=None, open_flags=False):
+    def __init__(self, d=128, heads=4, layers=3, c_scale=1.0, d_scale=None, open_flags=False, use_tau=False):
         super().__init__()
         self.open_flags = bool(open_flags)
+        self.use_tau = bool(use_tau)
         self.c_scale = float(c_scale)
         self.d_scale = float(d_scale if d_scale is not None else c_scale)
         self.ff = FourierFeatures(room_length=ROOM_X[1] - ROOM_X[0], sigma=2.5, n_octaves=7)
         nf = 2 * self.ff.n_freq
         self.q_in = nn.Sequential(nn.Linear(nf + H_IN, d), nn.GELU(), nn.Linear(d, d))
         self.h_in = nn.Sequential(nn.Linear(nf + H_IN, d), nn.GELU(), nn.Linear(d, d))
-        self.c_in = nn.Sequential(nn.Linear(3 + 1 + int(self.open_flags), d), nn.GELU(), nn.Linear(d, d))
+        self.c_in = nn.Sequential(nn.Linear(3 + 1 + int(self.open_flags) + int(self.use_tau), d), nn.GELU(), nn.Linear(d, d))
         self.type_emb = nn.Embedding(4, d)
         self.blocks = nn.ModuleList([nn.ModuleDict({
             "att": nn.MultiheadAttention(d, heads, batch_first=True), "n1": nn.LayerNorm(d),
@@ -83,9 +91,10 @@ class ForecastGNOT(nn.Module):
         last = hist[..., -1:]
         return torch.cat([f, last / self.c_scale, (hist[..., :-1] - last) / self.d_scale], -1)
 
-    def forward(self, q_xyz, q_hist, h_xyz, h_hist, V, N):
+    def forward(self, q_xyz, q_hist, h_xyz, h_hist, V, N, tau=None):
         """Mean and log-variance of the next 6 frames at the query points.
-        V: 8 window values (> 0 inlet speed, 0 closed, < 0 outlet window), followed by the 2 door states."""
+        V: 8 window values (> 0 inlet speed, 0 closed, < 0 outlet window), followed by the 2 door states.
+        tau (only with use_tau): time since the last window change, scaled to 0..1, shape (B, 1)."""
         s = self.d_scale
         q = self.q_in(self._point_feats(q_xyz, q_hist))
         hk = self.h_in(self._point_feats(h_xyz, h_hist)) + self.type_emb.weight[3]
@@ -98,7 +107,11 @@ class ForecastGNOT(nn.Module):
             val = torch.stack([speed, opened], -1)
         else:
             val = torch.cat([Vw / V_MAX, torch.zeros(B, 2, device=V.device), N / N_MAX_FC], 1).unsqueeze(-1)
-        ck = self.c_in(torch.cat([self.tok_pos.unsqueeze(0).expand(B, -1, -1), val], -1))
+        cin = torch.cat([self.tok_pos.unsqueeze(0).expand(B, -1, -1), val], -1)
+        if self.use_tau:
+            assert tau is not None, "this model needs the time since the last window change (tau)"
+            cin = torch.cat([cin, tau.reshape(B, 1, 1).expand(-1, cin.shape[1], -1).to(cin.dtype)], -1)
+        ck = self.c_in(cin)
         types = torch.tensor([0] * 8 + [1] * 2 + [2], device=V.device)
         ck = ck + self.type_emb(types).unsqueeze(0)
         ctx = torch.cat([ck, hk], 1)
@@ -157,9 +170,10 @@ class PlaneData:
         fut = f[t0 + 1:t0 + 1 + T_OUT].T
         return hist, fut
 
-    def batch(self, B, Q, gen, n_lo=10.0, n_hi=80.0, pad_prob=0.0):
-        """pad_prob > 0 (transition data only): this share of the samples has the window change inside the history."""
-        qh, qx, hh, hx, V, Ns, tg = [], [], [], [], [], [], []
+    def batch(self, B, Q, gen, n_lo=10.0, n_hi=80.0, pad_prob=0.0, with_tau=False):
+        """pad_prob > 0 (transition data only): this share of the samples has the window change inside the history.
+        with_tau: also return the time since the last window change (B, 1) as an eighth value."""
+        qh, qx, hh, hx, V, Ns, tg, taus = [], [], [], [], [], [], [], []
         Np = self.xyz.shape[0]
         for _ in range(B):
             k = int(torch.randint(len(self.cases), (1,), generator=gen))
@@ -167,15 +181,20 @@ class PlaneData:
             N = float(n_lo + (n_hi - n_lo) * torch.rand(1, generator=gen))
             NA = float(n_lo + (n_hi - n_lo) * torch.rand(1, generator=gen)) if self.H is not None else 0.0
             if pad_prob > 0 and self.H is not None and float(torch.rand(1, generator=gen)) < pad_prob:
-                hist, fut = self.sample_padded(k, int(torch.randint(H_IN - 1, (1,), generator=gen)), N, NA)
+                t0 = int(torch.randint(H_IN - 1, (1,), generator=gen))
+                hist, fut = self.sample_padded(k, t0, N, NA)
             else:
                 hist, fut = self.sample(k, t0, N, NA)
+            taus.append(tau_of(t0, self.H is not None))
             qi = torch.randint(Np, (Q,), generator=gen).to(self.dev)
             qh.append(hist[qi]); qx.append(self.xyz[qi]); tg.append(fut[qi])
             hh.append(hist[self.hist_idx]); hx.append(self.xyz[self.hist_idx])
             V.append(self.V[k]); Ns.append(N)
         st = lambda a: torch.stack(a)
-        return st(qx), st(qh), st(hx), st(hh), st(V), torch.tensor(Ns, device=self.dev).unsqueeze(1), st(tg)
+        out = (st(qx), st(qh), st(hx), st(hh), st(V), torch.tensor(Ns, device=self.dev).unsqueeze(1), st(tg))
+        if with_tau:
+            out = out + (torch.tensor(taus, device=self.dev, dtype=torch.float32).unsqueeze(1),)
+        return out
 
 
 @torch.no_grad()
@@ -185,9 +204,10 @@ def predict_full(model, data, k, t0, N, NA=0.0, chunk=4096):
     hh, hx = hist[data.hist_idx].unsqueeze(0), data.xyz[data.hist_idx].unsqueeze(0)
     V = data.V[k].unsqueeze(0)
     Nt = torch.tensor([[N]], device=data.dev)
+    kw = {"tau": torch.tensor([[tau_of(t0, data.H is not None)]], device=data.dev)} if getattr(model, "use_tau", False) else {}
     out = []
     for i in range(0, hist.shape[0], chunk):
-        m, _ = model(data.xyz[i:i + chunk].unsqueeze(0), hist[i:i + chunk].unsqueeze(0), hx, hh, V, Nt)
+        m, _ = model(data.xyz[i:i + chunk].unsqueeze(0), hist[i:i + chunk].unsqueeze(0), hx, hh, V, Nt, **kw)
         out.append(m[0])
     return torch.cat(out), fut, hist
 
