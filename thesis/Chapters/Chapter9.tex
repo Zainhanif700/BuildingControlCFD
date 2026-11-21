@@ -159,8 +159,9 @@ To test this, I added virtual sensors in the seating area to the simulation. \tr
 
 One sensor in the middle lowers the error of the average \cotwo{} in the seating area from 26.5 to 11.4~ppm. The
 place hardly matters. A sensor in the middle, on the door side, on the window side or at the back of the seating
-area gave about the same result. Only one place on the blackboard side gave no gain, and I have not found the
-reason yet. The existing sensor stands next to the projector. The virtual sensors read the exact simulated
+area gave about the same result. Only one place on the blackboard side gave no gain. The \cotwo{} there follows the average of the
+seating area poorly: over all 68 scenarios the squared correlation with the seating average is 0.35, against 0.76
+to 0.87 at the other four places. The existing sensor stands next to the projector. The virtual sensors read the exact simulated
 \cotwo{} plus noise, so a real sensor can be less clean.
 
 \section{Warning}
@@ -189,36 +190,95 @@ The best margin differs between the splits, so it has to be checked with real da
   \end{tabular}
 \end{table}
 
+The counts above are small, so I also counted every 30-second step of the test scenarios on the three random
+splits: 242 steps with a real case at 700~ppm and 1,870 without it, and 118 and 1,994 at 800~ppm. \tref{tab:rate}
+shows the share of the real cases that the model finds and the share of the other steps with a warning. Without a
+margin the model finds about 70\,\% of the cases and gives few false alarms. With a margin it finds about 87 to
+92\,\%, and the false alarms rise by about 2 to 3 percentage points. So for 20 more real cases found out of 100,
+about 2 to 3 more steps out of 100 have a false alarm.
+
+I also tried a rule that uses the disagreement between the five networks (forecast plus 1.5 times the spread). At
+700~ppm and 87\,\% found it has 2.6\,\% false alarms instead of 3.4\,\%. Everywhere else it was not better than
+the margin. The margins are chosen on the same samples that are counted, so these numbers are better than what to
+expect with new data.
+
+\begin{table}[h]
+  \centering
+  \caption[Found and false alarms.]{Warning with a margin, counted over every 30-second step of the test scenarios.}
+  \label{tab:rate}
+  \small
+  \begin{tabular}{llrr}
+    \toprule
+    Limit & Margin & Found & False alarms\\
+    \midrule
+    700~ppm & 0~ppm & 67.4\,\% & 1.7\,\%\\
+    700~ppm & 30~ppm & 86.8\,\% & 3.4\,\%\\
+    700~ppm & 40~ppm & 90.5\,\% & 4.5\,\%\\
+    800~ppm & 0~ppm & 70.3\,\% & 0.2\,\%\\
+    800~ppm & 70~ppm & 87.3\,\% & 2.2\,\%\\
+    800~ppm & 80~ppm & 91.5\,\% & 2.9\,\%\\
+    \bottomrule
+  \end{tabular}
+\end{table}
+
 In the real room, W5 and W8 stay closed. Many of my hard test scenarios open these windows. On the test
 scenarios in which they are closed, the error is about 5\,\% in the definition of the paper, and with a margin of 50~ppm
-the warning finds 92\,\% of the cases at 700~ppm and 87\,\% at 800~ppm. These scenarios are mostly the simpler
-ones with only W1, W3 and W6 open, so this result is easier.
+the warning finds 92\,\% of the cases at 700~ppm and 87\,\% at 800~ppm.
 
-\fref{fig:lecture24} shows the synthetic lecture described above for scenario N24. The warning for 700~ppm
+\fref{fig:lectures} shows the synthetic lecture described above for three test scenarios. N28 has the smallest
+forecast error, N23 has a typical error and N24 has the largest error. In N28 and N23 the \cotwo{} stays below
+700~ppm, and the model gives no warning and no false alarm. In N24 the warning for 700~ppm
 starts 3.5~minutes before the \cotwo{} passes this level, and the model found all 24 time steps with a real case,
 with one false alarm. The warning for 800~ppm comes although the \cotwo{} stays below it (the peak is
 769~ppm). This is the effect of the safety margin: the model warns from a forecast of 750~ppm, and the real peak
-is close to it. The forecast is too low while the students arrive and too high after some leave, because the
-model does not know the number of people. \fref{fig:lecture23} shows a quieter lecture in scenario N23, where the
-\cotwo{} stays below 700~ppm and the model gives no warning.
+is close to it. In N24 the forecast is too low while the students arrive and too high after some leave, because
+the model does not know the number of people.
 
-\begin{figure}[h]
+\begin{figure}[p]
   \centering
-  \includegraphics[width=\textwidth]{lecture_N24.png}
-  \caption[Synthetic lecture, scenario N24.]{Synthetic lecture in scenario N24 (simulation). Black: true average \cotwo{}
-  in the seating area. Red: forecast made 3~minutes earlier. Grey: the forecast that the \cotwo{} stays as it is now.
-  The bars at the bottom show when the model warns (yellow: 700~ppm, red: 800~ppm). The number of people (5, 25, 45,
-  then 25) is my assumption. The step response of the simulation is smoothed.}
-  \label{fig:lecture24}
+  {\small\textbf{Best: scenario N28}}\\[2pt]
+  \IfFileExists{Figures/lecture_N28.png}{\includegraphics[width=0.72\textwidth]{lecture_N28.png}}{\figplaceholder{synthetic lecture, scenario N28}}\\[8pt]
+  {\small\textbf{Average: scenario N23}}\\[2pt]
+  \includegraphics[width=0.72\textwidth]{lecture_N23.png}\\[8pt]
+  {\small\textbf{Worst: scenario N24}}\\[2pt]
+  \includegraphics[width=0.72\textwidth]{lecture_N24.png}
+  \caption[Synthetic lecture in three scenarios.]{Synthetic lecture (simulation) in three test scenarios: the best, an
+  average and the worst one by the error of the forecast. Black: true average \cotwo{} in the seating area. Red: forecast
+  made 3~minutes earlier. Grey: the forecast that the \cotwo{} stays as it is now. The bars at the bottom of each graph
+  show when the model warns (yellow: 700~ppm, red: 800~ppm). The number of people (5, 25, 45, then 25) is my
+  assumption. The step response of the simulation is smoothed.}
+  \label{fig:lectures}
 \end{figure}
 
-\begin{figure}[h]
+\tref{tab:lectures} shows the lecture for all nine test scenarios that fit the plan. In eight of them the \cotwo{}
+stays below 700~ppm and the model gives no warning. Only N24 reaches 700~ppm, and there the warning comes
+3.5~minutes before. The error of the forecast is between 7 and 39~ppm. It is larger than the error of the simple
+forecast in all scenarios, but the simple forecast uses the true average of the seating area, which the sensors do
+not have.
+
+\begin{table}[h]
   \centering
-  \includegraphics[width=\textwidth]{lecture_N23.png}
-  \caption[Synthetic lecture, scenario N23.]{Synthetic lecture in scenario N23. The \cotwo{} stays below
-  700~ppm, so there is no warning and no false alarm.}
-  \label{fig:lecture23}
-\end{figure}
+  \caption[Lecture in all test scenarios that fit the plan.]{The synthetic lecture in the nine test scenarios that fit
+  the plan. Model and Simple are the errors of the forecast of the average \cotwo{} in the seating area, averaged
+  over the next 3~minutes. The simple forecast uses the true average now. False alarms are steps of 30~s.}
+  \label{tab:lectures}
+  \small
+  \begin{tabular}{lrrr>{\raggedright\arraybackslash}p{4.6cm}}
+    \toprule
+    Scenario & Peak [ppm] & Model [ppm] & Simple [ppm] & Warnings\\
+    \midrule
+    N14 & 459 & 11.4 & 3.2 & none\\
+    N15 & 547 & 38.1 & 9.7 & none\\
+    N19 & 486 & 14.4 & 5.4 & none\\
+    N20 & 474 & 21.9 & 4.4 & none\\
+    N23 & 625 & 17.5 & 16.4 & none\\
+    N24 & 769 & 38.6 & 26.8 & 700~ppm: 3.5~min before, 1 false alarm; 800~ppm: 16 false alarms\\
+    N27 & 500 & 9.1 & 6.6 & none\\
+    N28 & 482 & 6.8 & 5.0 & none\\
+    A24 & 531 & 29.8 & 8.9 & none\\
+    \bottomrule
+  \end{tabular}
+\end{table}
 
 \section{Checks of the sensor limits}
 \label{sec:sensorchecks}
@@ -246,7 +306,6 @@ model does not know the number of people. \fref{fig:lecture23} shows a quieter l
         lecture curve. The models learned on this data.
   \item The test sets are small, with 16 scenarios per split, and neighbouring time steps are not independent. I
         chose some settings on the first split, so I use the three random splits as the fairer numbers.
-  \item The seating area in the simulation is still a placeholder box.
   \item The warning margin has to be checked with real data.
   \item In the real room the windows are often only tilted in winter, and my simulations hardly cover so little
         ventilation. The old data of the \cotwo{} sensor in the middle of the room show levels above 1000~ppm
