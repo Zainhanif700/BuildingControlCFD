@@ -113,6 +113,13 @@ def run_lecture(models, path, timeline=PEOPLE, hist_len=mapper.N_HIST, margin=50
     return out
 
 
+def error_line(r):
+    """Mean absolute error of the forecast of the seating average over the lecture, and of 'stays as it is now'."""
+    return (f"forecast error of the seating average over the lecture (mean over the next 3 min): "
+            f"{np.abs(r['fc'] - r['future']).mean():.1f} ppm, simple forecast "
+            f"{np.abs(r['now'][:, None] - r['future']).mean():.1f} ppm")
+
+
 def summary(r):
     """Lead time of the first warning before the CO2 first passes each limit, and the false alarms."""
     lines = []
@@ -170,6 +177,9 @@ def main():
     ap.add_argument("--smooth", type=int, default=0, help="smooth the step response over this many steps of 30 s "
                     "(the data have a jump at 150 s, where my CO2 calculation switches to the mean flow); 0 = off")
     ap.add_argument("--out", default="lecture.png")
+    ap.add_argument("--all-plan", action="store_true",
+                    help="run all test scenarios that fit the plan (W5 and W8 closed): summary of each, graphs in --out-dir")
+    ap.add_argument("--out-dir", default="lecture_all")
     ap.add_argument("--device", default="cpu")
     a = ap.parse_args()
     models, ck = load_members(a.tag, torch.device(a.device))
@@ -179,6 +189,17 @@ def main():
     train_files, test_files = split(a.data_dir, a.scenarios, with_s00=False)
     files = [f for f in train_files + test_files if os.path.basename(f).replace(".npz", "") == a.scenario] if a.scenario \
         else [f for f in test_files if all(np.load(f)["V"][w - 1] == 0 for w in st.CLOSED_WINDOWS)]
+    if a.all_plan:
+        os.makedirs(a.out_dir, exist_ok=True)
+        for f in files:
+            r = run_lecture(models, f, margin=a.margin, hist_len=ck.get("hist", 12), smooth=a.smooth)
+            print(f"\n== {r['name']}")
+            print("  " + error_line(r))
+            for line in summary(r):
+                print("  " + line)
+            plot(r, os.path.join(a.out_dir, r["name"] + ".png"))
+        print(f"\ngraphs saved in {a.out_dir}")
+        return
     chosen = None
     (x0, x1), (y0, y1), _ = common.SEAT_BOX
     for f in files:
