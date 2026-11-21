@@ -179,6 +179,9 @@ def main():
     ap.add_argument("--out", default="lecture.png")
     ap.add_argument("--people-scale", type=float, default=1.0,
                     help="multiply all people numbers of the lecture (5, 25, 45, 25) by this factor, e.g. 1.6 for a full lecture hall")
+    ap.add_argument("--allow-people", action="store_true",
+                    help="allow a model that is NOT people-blind: it gets the true number of people of the lecture "
+                         "(a test of what a known number of people would give; the real room does not measure it)")
     ap.add_argument("--all-plan", action="store_true",
                     help="run all test scenarios that fit the plan (W5 and W8 closed): summary of each, graphs in --out-dir")
     ap.add_argument("--out-dir", default="lecture_all")
@@ -186,8 +189,11 @@ def main():
     a = ap.parse_args()
     models, ck = load_members(a.tag, torch.device(a.device))
     assert ck["stations"] == [s.name for s in st.STATIONS], "the model was trained with other stations"
-    assert ck.get("direction_blind", False) and ck.get("people_blind", False), \
-        "train the model with --direction-blind --people-blind"
+    assert ck.get("direction_blind", False), "train the model with --direction-blind"
+    assert a.allow_people or ck.get("people_blind", False), \
+        "train the model with --people-blind (or use --allow-people for the test with a known number of people)"
+    if a.allow_people and not ck.get("people_blind", False):
+        print("TEST WITH A KNOWN NUMBER OF PEOPLE: the model gets the true number of people of the lecture timeline")
     timeline = [(t, n * a.people_scale) for t, n in PEOPLE]
     if a.people_scale != 1.0:
         print(f"people of the lecture: {timeline}")
