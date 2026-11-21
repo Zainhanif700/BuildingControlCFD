@@ -1,5 +1,13 @@
 # Running the OpenFOAM simulations on a server
 
+> **Which script to use.** The current data (68 settings, `scenarios_v4.txt`) is made with
+> `experiments/co2_sampling/run_full_case.sh <name> <cores>`: a save of the flow every second for 0-150 s,
+> then every 10 s up to 600 s. For one setting:
+> `cd experiments/co2_sampling && bash run_full_case.sh N01 4`.
+> `run_batch.sh` below is the older method and saves the flow only every 10 s. With that, my CO2 differed
+> from OpenFOAM's CO2 by up to 45 % in fast scenarios, so do not use it for new data. The setup, Docker and
+> SLURM notes below are still valid for the software, but call `run_full_case.sh` instead of `run_batch.sh`.
+
 These scripts run the classroom airflow simulations (OpenFOAM, k-omega SST, 8 cm mesh) for every window
 setting in a scenario file. This step only needs CPU cores; the CO2 data is computed afterwards on a GPU.
 
@@ -10,7 +18,9 @@ name, train/test, the inflow speed at windows W1-W8 in m/s (0 = closed) and, if 
 (1 = open, 0 = closed).
 
 - `scenarios.txt`: first setup, all 8 windows can open, both doors open (40 settings)
-- `scenarios_v2.txt`: current setup, only W1, W3 and W6 can open, door 1 open, door 2 closed (28 settings)
+- `scenarios_v2.txt`: second setup, only W1, W3 and W6 can open, door 1 open, door 2 closed (28 settings)
+- `scenarios_v4.txt`: final setup, the 28 settings above plus 40 settings (A01-A40) where all 8 windows and both
+  doors can be open or closed (68 settings in total)
 
 A new setup only needs a new scenario file in the same format.
 
