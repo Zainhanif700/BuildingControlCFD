@@ -32,8 +32,8 @@ used with a large-eddy simulation (LES), where the big eddies are calculated and
 modelled \citep{smagorinsky1963}. I tested it in \cref{ch:notused}.
 
 \section{\cotwo{} transport}
-The \cotwo{} is carried by the air, it mixes with the air around it, and the people add new \cotwo{}. This
-is described by
+The \cotwo{} is transported by the air flow and mixed with the surrounding air by diffusion and turbulence,
+and the people act as a \cotwo{} source. This is described by
 \begin{equation}
   \frac{\partial c}{\partial t} + \nabla\cdot(\mathbf{u}\,c) = \nabla\cdot\big((D + \nu_t/\mathrm{Sc}_t)\,\nabla c\big) + S,
   \label{eq:co2}
@@ -68,3 +68,16 @@ keep the \cotwo{} low with little energy.
 A network can also be trained without simulation data. Then it is trained to fulfil the physical equations
 at many points of the room \citep{raissi2019}, and this was also done for neural operators
 \citep{li2021pino}. I tried this for our room (\cref{ch:notused}).
+
+\section{Related work}
+GNOT is one of several neural operators. Two well-known earlier ones are the DeepONet \citep{lu2021deeponet}
+and the Fourier neural operator \citep{li2021fno}.
+
+Machine learning is also used to forecast the air quality in schools, and a review of neural network models for
+this is given by \citet{dong2023}.
+
+Reconstructing a whole field from a few sensors is studied in fluid mechanics. \citet{fukami2021} use a Voronoi
+tessellation of the sensor positions as the input of a convolutional network. The Senseiver \citep{santos2023}
+uses attention to map any number of sparse sensor readings to a latent representation, from which it decodes the
+field at chosen points. My sensor model is similar in spirit, because GNOT also uses attention and accepts any set
+of points. I did not compare it with these methods.

@@ -105,7 +105,7 @@ window speeds, already when my solver used the real OpenFOAM flow without any av
 114\,\% in N14 and 131\,\% in N28 after 600~s). The scenarios with these differences all have W1, W3 and W6 open
 at speeds between about 0.9 and 2~m/s and a strongly fluctuating flow.
 
-The reason was the save interval. OpenFOAM saved the flow every 10~s, and my solver interpolates linearly
+This is caused by the save interval of the flow. OpenFOAM saved the flow every 10~s, and my solver interpolates linearly
 between the saves. At 2~m/s the air moves about 20~m in 10~s, more than the length of the room, so the saves
 miss most of what the air does. To test this, I simulated N28 for 150~s with a save every second and computed
 the \cotwo{} from every 1st, 2nd, 5th and 10th save (\tref{tab:saves}).
