@@ -26,14 +26,14 @@ sure it is.
     \toprule
     Item & Value\\
     \midrule
-    Input & \cotwo{} of the last 6~min on the 1.6~m plane (12 maps), 8 window speeds, which windows and doors are open, number of people\\
+    Input & \cotwo{} of the last 6~min on the 1.6~m plane (12 maps), 8 window speeds, which windows and doors are open, number of people, time since the last window change\\
     Output & \cotwo{} change for the next 3~min (6 maps) with variance\\
     Network & cross-attention blocks (GNOT type), 3 blocks, width 128, 4 heads, about 480,000 parameters\\
     Loss & Gaussian negative log-likelihood, as in the paper\\
-    Optimiser & AdamW, learning rate $5\times10^{-4}$ with one-cycle schedule, 20,000 steps,
+    Optimiser & AdamW, learning rate $5\times10^{-4}$ with one-cycle schedule, 40,000 steps,
                8 samples $\times$ 1,024 points per step\\
     Ensemble & 5 networks with different random seeds, the forecast is their mean\\
-    Hardware, time & NVIDIA RTX A2000 (12~GB), about 1.5~h for the 5 networks\\
+    Hardware, time & NVIDIA RTX A2000 (12~GB), about 38~min per network, about 3~h for the 5 networks\\
     \bottomrule
   \end{tabular}
 \end{table}
@@ -50,8 +50,10 @@ samples. I use two kinds of runs:
         after the change is chosen randomly between 10 and 80.
 \end{itemize}
 The transition runs have one limit. The airflow of the new scenario starts from still air and not from the
-moving air of the scenario before. Also the windows never change during the 6~minutes of history, so the
-model has not seen this case in training.
+moving air of the scenario before. In the room a window can also change inside the 6~minutes of history. To
+train for this, 90\,\% of the training samples of the transition runs have the change inside the history: the
+maps before the change are the map at the change, repeated, and the model gets the time since the change as an
+input (\sref{sec:winchange}).
 
 \section{Error measures}
 \subsection*{The relative error}
