@@ -101,9 +101,34 @@ As reference I use persistence, which says that the \cotwo{} stays as it is now.
 With the eight real stations the error is about 5 to 6\,\% in the definition of the paper (5.3 to 6.5\,\% on the
 three random splits). The error of the average \cotwo{} in the seating area is about 20 to 26~ppm, where the
 average level is about 520~ppm. In the stricter measure of \cref{ch:model}, which counts only the \cotwo{} above
-the outdoor level, the error for the whole room is about 32\,\%. It is much higher than for the model with the
-full map, because the stations stand at the walls, where the air is mostly fresh, and they hardly see the
-middle of the room, where the people sit.
+the outdoor level, the error over the plane at 1.6~m is about 32\,\% on the three random splits (44\,\% on the first
+split). For the model of the paper, which I reproduced, the same measure gives 29.8\,\% (\cref{ch:repro}). The sensor
+model is much worse than the model with the full map (0.46\,\%), because the stations stand at the walls, where the
+air is mostly fresh, and they hardly see the middle of the room, where the people sit.
+
+\tref{tab:compare} puts the numbers next to each other. Both definitions are shown, because the 400~ppm of outdoor
+air makes the errors in the definition of the paper much smaller. In the strict definition the paper does not give
+a value. For my reproduction of the paper I calculated 29.8\,\%, and my sensor model has about 32\,\%, so the two
+values are close. The difference is not large, although the sensor model sees only eight stations and the
+reproduced model sees 7,492 points of the room. The two problems are different, so I use this only for orientation
+and not as a direct comparison.
+
+\begin{table}[h]
+  \centering
+  \caption[Comparison with the paper.]{Errors for the next 3~minutes on the test data.}
+  \label{tab:compare}
+  \small
+  \begin{tabular}{lrr}
+    \toprule
+    Model & Definition of the paper & Strict (above the outdoor level)\\
+    \midrule
+    Paper (Bian et al.) & 10.9\,\% & not given\\
+    My reproduction of the paper & 11.46\,\% & 29.8\,\%\\
+    Sensor model, eight stations & about 5 to 6\,\% & about 32\,\%\\
+    Main model with the whole map & 0.16\,\% & 0.46\,\%\\
+    \bottomrule
+  \end{tabular}
+\end{table}
 
 I tried to improve the sensor model in several ways: a longer history of 12 and 20~minutes, interpolating the
 station values to every point of the room, other loss functions, smaller networks, more noise and a physics
