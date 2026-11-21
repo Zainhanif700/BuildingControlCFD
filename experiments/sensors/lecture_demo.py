@@ -177,6 +177,8 @@ def main():
     ap.add_argument("--smooth", type=int, default=0, help="smooth the step response over this many steps of 30 s "
                     "(the data have a jump at 150 s, where my CO2 calculation switches to the mean flow); 0 = off")
     ap.add_argument("--out", default="lecture.png")
+    ap.add_argument("--people-scale", type=float, default=1.0,
+                    help="multiply all people numbers of the lecture (5, 25, 45, 25) by this factor, e.g. 1.6 for a full lecture hall")
     ap.add_argument("--all-plan", action="store_true",
                     help="run all test scenarios that fit the plan (W5 and W8 closed): summary of each, graphs in --out-dir")
     ap.add_argument("--out-dir", default="lecture_all")
@@ -186,13 +188,16 @@ def main():
     assert ck["stations"] == [s.name for s in st.STATIONS], "the model was trained with other stations"
     assert ck.get("direction_blind", False) and ck.get("people_blind", False), \
         "train the model with --direction-blind --people-blind"
+    timeline = [(t, n * a.people_scale) for t, n in PEOPLE]
+    if a.people_scale != 1.0:
+        print(f"people of the lecture: {timeline}")
     train_files, test_files = split(a.data_dir, a.scenarios, with_s00=False)
     files = [f for f in train_files + test_files if os.path.basename(f).replace(".npz", "") == a.scenario] if a.scenario \
         else [f for f in test_files if all(np.load(f)["V"][w - 1] == 0 for w in st.CLOSED_WINDOWS)]
     if a.all_plan:
         os.makedirs(a.out_dir, exist_ok=True)
         for f in files:
-            r = run_lecture(models, f, margin=a.margin, hist_len=ck.get("hist", 12), smooth=a.smooth)
+            r = run_lecture(models, f, timeline=timeline, margin=a.margin, hist_len=ck.get("hist", 12), smooth=a.smooth)
             print(f"\n== {r['name']}")
             print("  " + error_line(r))
             for line in summary(r):
@@ -205,13 +210,13 @@ def main():
     for f in files:
         d = load_plane(f, z=st.Z_STATION)
         seat = (d["xy"][:, 0] >= x0) & (d["xy"][:, 0] <= x1) & (d["xy"][:, 1] >= y0) & (d["xy"][:, 1] <= y1)
-        peak = lecture_excess(d["frames"], d["N_ref"], PEOPLE)[:, seat].mean(1).max() + st.CO2_OUTDOOR
+        peak = lecture_excess(d["frames"], d["N_ref"], timeline)[:, seat].mean(1).max() + st.CO2_OUTDOOR
         print(f"  {os.path.basename(f)}: peak of the lecture about {peak:.0f} ppm (average in the seating area)")
         if chosen is None and (a.scenario or 700.0 <= peak <= 900.0):
             chosen = f
     chosen = chosen or files[0]
-    r = run_lecture(models, chosen, margin=a.margin, hist_len=ck.get("hist", 12), smooth=a.smooth)
-    print(f"\nlecture with the scenario {r['name']}; people: {PEOPLE}")
+    r = run_lecture(models, chosen, timeline=timeline, margin=a.margin, hist_len=ck.get("hist", 12), smooth=a.smooth)
+    print(f"\nlecture with the scenario {r['name']}; people: {timeline}")
     for line in summary(r):
         print("  " + line)
     plot(r, a.out)
