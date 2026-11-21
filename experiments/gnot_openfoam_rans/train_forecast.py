@@ -56,7 +56,7 @@ def train_member(k, tr, te, args, dev, c_scale, d_scale):
     torch.manual_seed(1000 + k)
     gen = torch.Generator().manual_seed(2000 + k)
     model = ForecastGNOT(d=args.d, layers=args.layers, c_scale=c_scale, d_scale=d_scale, open_flags=args.open_flags,
-                         use_tau=args.tau).to(dev)
+                         use_tau=args.tau, film=args.film, physics=args.physics).to(dev)
     opt = torch.optim.AdamW(model.parameters(), lr=args.lr, weight_decay=1e-4)
     sched = torch.optim.lr_scheduler.OneCycleLR(opt, max_lr=args.lr, total_steps=args.iters, pct_start=0.05)
     n_par = sum(p.numel() for p in model.parameters())
@@ -89,6 +89,7 @@ def train_member(k, tr, te, args, dev, c_scale, d_scale):
     path = os.path.join(args.out, f"member{k}.pth")
     torch.save({"state": model.state_dict(), "c_scale": c_scale, "d_scale": d_scale, "d": args.d, "layers": args.layers,
                 "open_flags": args.open_flags, "pad_prob": args.pad_prob, "use_tau": args.tau,
+                "film": args.film, "physics": args.physics,
                 "data_dir": args.data_dir, "hist_idx": tr.hist_idx.cpu()}, path)
     print(f"  saved {path}", flush=True)
     model.eval()
@@ -122,6 +123,11 @@ def main():
                          "(0 = as before, all histories lie after the change)")
     ap.add_argument("--tau", action="store_true",
                     help="give the model the time since the last window change as an input (use with --pad-prob; transition data)")
+    ap.add_argument("--film", action="store_true",
+                    help="window setting, people, tau (and physics) modulate every block of the network (FiLM)")
+    ap.add_argument("--physics", action="store_true",
+                    help="physics input: fresh-air flow, CO2 level and time constant of a well-mixed room, and at every "
+                         "point the distance of the CO2 to that level")
     ap.add_argument("--device",default="cuda" if torch.cuda.is_available() else "cpu")
     args = ap.parse_args()
     args.out = os.path.join(HERE, "checkpoints", args.tag)

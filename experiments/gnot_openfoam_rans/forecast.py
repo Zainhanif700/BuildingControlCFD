@@ -17,6 +17,27 @@ N_HIST_TOKENS = 900
 TAU_CAP = 12      # time since the last window change in maps (30 s each); from 6 min on the history lies after the change
 
 
+N_PHYS = 6                    # number of physics features (physics_of)
+WIN_AREA = 0.61 * 3.15        # m^2, a window of the model (full height of the room)
+ROOM_VOLUME = 448.0           # m^3
+PPM_FLOW_PER_PERSON = 3.96    # ppm m^3/s of CO2 per person (6 L/min at 40,000 ppm)
+
+
+def physics_of(V, N):
+    """What a well-mixed room would do for this window setting (B,1 tensors): fresh-air flow Q through the open inlet
+    windows, the CO2 above outdoor level the room would approach (C_eq = people * 3.96 / Q) and its time constant
+    (room volume / Q). Returns the features (B, N_PHYS) and C_eq (B, 1)."""
+    Vw = V[:, :8]
+    Q = (Vw.clamp(min=0.0) * WIN_AREA).sum(1, keepdim=True)
+    Qc = Q.clamp(min=0.05)
+    ceq = (N * PPM_FLOW_PER_PERSON / Qc).clamp(max=2000.0)
+    troom = (ROOM_VOLUME / Qc).clamp(max=3600.0)
+    n_win = (Vw > 0).float().sum(1, keepdim=True) / 8.0
+    n_door = V[:, 8:10].sum(1, keepdim=True) / 2.0
+    feats = torch.cat([Q / 10.0, torch.log(Qc) / 3.0, ceq / 1000.0, troom / 3600.0, n_win, n_door], 1)
+    return feats, ceq
+
+
 def tau_of(t0, transitions):
     """Input 'time since the last window change', scaled to 0..1. Transition runs start with the change at map 0, so
     the time is t0 maps; direct runs have no recent change (1)."""
@@ -61,17 +82,30 @@ def load_transition(path, z=1.6):
 
 
 class ForecastGNOT(nn.Module):
-    def __init__(self, d=128, heads=4, layers=3, c_scale=1.0, d_scale=None, open_flags=False, use_tau=False):
+    def __init__(self, d=128, heads=4, layers=3, c_scale=1.0, d_scale=None, open_flags=False, use_tau=False,
+                 film=False, physics=False):
+        """film: the window setting, the people (and tau, physics) modulate every block (scale and shift, FiLM).
+        physics: the model also gets physics_of(V, N) and, at every point, the distance of the CO2 to C_eq."""
         super().__init__()
         self.open_flags = bool(open_flags)
         self.use_tau = bool(use_tau)
+        self.film = bool(film)
+        self.physics = bool(physics)
+        self.n_layers, self.width = layers, d
         self.c_scale = float(c_scale)
         self.d_scale = float(d_scale if d_scale is not None else c_scale)
         self.ff = FourierFeatures(room_length=ROOM_X[1] - ROOM_X[0], sigma=2.5, n_octaves=7)
         nf = 2 * self.ff.n_freq
-        self.q_in = nn.Sequential(nn.Linear(nf + H_IN, d), nn.GELU(), nn.Linear(d, d))
-        self.h_in = nn.Sequential(nn.Linear(nf + H_IN, d), nn.GELU(), nn.Linear(d, d))
-        self.c_in = nn.Sequential(nn.Linear(3 + 1 + int(self.open_flags) + int(self.use_tau), d), nn.GELU(), nn.Linear(d, d))
+        npt = 1 if self.physics else 0
+        self.q_in = nn.Sequential(nn.Linear(nf + H_IN + npt, d), nn.GELU(), nn.Linear(d, d))
+        self.h_in = nn.Sequential(nn.Linear(nf + H_IN + npt, d), nn.GELU(), nn.Linear(d, d))
+        self.c_in = nn.Sequential(nn.Linear(3 + 1 + int(self.open_flags) + int(self.use_tau)
+                                            + (N_PHYS if self.physics else 0), d), nn.GELU(), nn.Linear(d, d))
+        if self.film:
+            g_dim = 8 + 8 + 2 + 1 + int(self.use_tau) + (N_PHYS if self.physics else 0)
+            self.film_net = nn.Sequential(nn.Linear(g_dim, d), nn.GELU(), nn.Linear(d, 2 * d * layers))
+            nn.init.zeros_(self.film_net[-1].weight)          # starts as the plain model
+            nn.init.zeros_(self.film_net[-1].bias)
         self.type_emb = nn.Embedding(4, d)
         self.blocks = nn.ModuleList([nn.ModuleDict({
             "att": nn.MultiheadAttention(d, heads, batch_first=True), "n1": nn.LayerNorm(d),
@@ -84,21 +118,25 @@ class ForecastGNOT(nn.Module):
         pos = torch.tensor(list(WINDOW_CENTERS) + list(DOOR_CENTERS) + [ROOM_CENTER], dtype=torch.float32)
         self.register_buffer("tok_pos", (pos - lo) / ext)
 
-    def _point_feats(self, xyz, hist):
-        """Point features: position encoding, current CO2 level and recent trend."""
+    def _point_feats(self, xyz, hist, ceq=None):
+        """Point features: position encoding, current CO2 level and recent trend (with physics: distance to C_eq)."""
         B, M, _ = xyz.shape
         f = self.ff(xyz.reshape(-1, 3)).reshape(B, M, -1)
         last = hist[..., -1:]
-        return torch.cat([f, last / self.c_scale, (hist[..., :-1] - last) / self.d_scale], -1)
+        parts = [f, last / self.c_scale, (hist[..., :-1] - last) / self.d_scale]
+        if self.physics:
+            parts.append((ceq.reshape(B, 1, 1) - last) / self.c_scale)
+        return torch.cat(parts, -1)
 
     def forward(self, q_xyz, q_hist, h_xyz, h_hist, V, N, tau=None):
         """Mean and log-variance of the next 6 frames at the query points.
         V: 8 window values (> 0 inlet speed, 0 closed, < 0 outlet window), followed by the 2 door states.
         tau (only with use_tau): time since the last window change, scaled to 0..1, shape (B, 1)."""
         s = self.d_scale
-        q = self.q_in(self._point_feats(q_xyz, q_hist))
-        hk = self.h_in(self._point_feats(h_xyz, h_hist)) + self.type_emb.weight[3]
         B = V.shape[0]
+        pf, ceq = physics_of(V, N) if self.physics else (None, None)
+        q = self.q_in(self._point_feats(q_xyz, q_hist, ceq))
+        hk = self.h_in(self._point_feats(h_xyz, h_hist, ceq)) + self.type_emb.weight[3]
         Vw = V[:, :8]
         if self.open_flags:
             Dr = V[:, 8:10]
@@ -111,14 +149,25 @@ class ForecastGNOT(nn.Module):
         if self.use_tau:
             assert tau is not None, "this model needs the time since the last window change (tau)"
             cin = torch.cat([cin, tau.reshape(B, 1, 1).expand(-1, cin.shape[1], -1).to(cin.dtype)], -1)
+        if self.physics:
+            cin = torch.cat([cin, pf.unsqueeze(1).expand(-1, cin.shape[1], -1).to(cin.dtype)], -1)
         ck = self.c_in(cin)
+        if self.film:
+            g = [Vw / V_MAX, (Vw != 0).float(), V[:, 8:10], N / N_MAX_FC]
+            if self.use_tau:
+                g.append(tau.reshape(B, 1).to(Vw.dtype))
+            if self.physics:
+                g.append(pf)
+            gb = self.film_net(torch.cat(g, 1)).reshape(B, self.n_layers, 2, self.width)
         types = torch.tensor([0] * 8 + [1] * 2 + [2], device=V.device)
         ck = ck + self.type_emb(types).unsqueeze(0)
         ctx = torch.cat([ck, hk], 1)
-        for b in self.blocks:
+        for i, b in enumerate(self.blocks):
             a, _ = b["att"](q, ctx, ctx)
             q = b["n1"](q + a)
             q = b["n2"](q + b["ff"](q))
+            if self.film:
+                q = q * (1.0 + gb[:, i, 0].unsqueeze(1)) + gb[:, i, 1].unsqueeze(1)
         out = self.head(q)
         mean = q_hist[..., -1:] + s * out[..., :T_OUT]
         logvar = out[..., T_OUT:].clamp(-12.0, 6.0)

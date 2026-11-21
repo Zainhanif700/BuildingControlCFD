@@ -34,7 +34,8 @@ def load_models(ckpt_dir, dev):
     for name in sorted(f for f in os.listdir(ckpt_dir) if f.endswith(".pth")):
         c = torch.load(os.path.join(ckpt_dir, name), map_location=dev)
         m = ForecastGNOT(d=c["d"], layers=c["layers"], c_scale=c["c_scale"], d_scale=c["d_scale"],
-                         open_flags=c.get("open_flags", False), use_tau=c.get("use_tau", False)).to(dev)
+                         open_flags=c.get("open_flags", False), use_tau=c.get("use_tau", False),
+                         film=c.get("film", False), physics=c.get("physics", False)).to(dev)
         m.load_state_dict(c["state"])
         m.eval()
         models.append(m)
