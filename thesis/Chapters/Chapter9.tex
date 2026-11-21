@@ -130,11 +130,10 @@ and not as a direct comparison.
   \end{tabular}
 \end{table}
 
-I tried to improve the sensor model in several ways: a longer history of 12 and 20~minutes, interpolating the
-station values to every point of the room, other loss functions, smaller networks, more noise and a physics
-input. These changes gave no clear gain or only about one percentage point. More training scenarios of the
-same kind did not help either. This points to the information as the main limit. The numbers of these tests are
-in Appendix~\ref{app:sensortests}.
+I also tried to improve the sensor model. I used a longer history (12 and 20~minutes), spread the station values
+over the whole room, changed the loss, used smaller networks, added more noise and gave the model physical
+numbers such as the fresh-air flow. This gave no clear gain, at best about one percentage point. Training with
+more scenarios did not help either. The numbers of these tests are in Appendix~\ref{app:sensortests}.
 
 \section{A sensor in the middle of the room}
 To test this, I added virtual sensors in the seating area to the simulation. \tref{tab:virtual} shows the result.
