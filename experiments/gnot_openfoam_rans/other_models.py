@@ -41,7 +41,7 @@ C_IN = H_IN + 2 + 1 + N_CONST         # maps, position, mask, constants
 class Grid:
     """The plane points as an image (rows = y, columns = x). Needs points on a regular grid."""
     def __init__(self, xy, dev):
-        xs, ys = np.unique(np.round(xy[:, 0], 5)), np.unique(np.round(xy[:, 1], 5))
+        xs, ys = np.unique(np.round(xy[:, 0], 3)), np.unique(np.round(xy[:, 1], 3))   # float32 noise below 1 mm is ignored
         dx = float(min(np.diff(xs).min(), np.diff(ys).min()))
         ix, iy = np.rint((xy[:, 0] - xs[0]) / dx), np.rint((xy[:, 1] - ys[0]) / dx)
         err = max(np.abs(xs[0] + ix * dx - xy[:, 0]).max(), np.abs(ys[0] + iy * dx - xy[:, 1]).max())
