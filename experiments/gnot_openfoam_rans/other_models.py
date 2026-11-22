@@ -42,10 +42,12 @@ class Grid:
     """The plane points as an image (rows = y, columns = x). Needs points on a regular grid."""
     def __init__(self, xy, dev):
         xs, ys = np.unique(np.round(xy[:, 0], 3)), np.unique(np.round(xy[:, 1], 3))   # float32 noise below 1 mm is ignored
-        dx = float(min(np.diff(xs).min(), np.diff(ys).min()))
+        gaps = np.concatenate([np.diff(xs), np.diff(ys)])
+        dx = float(np.median(gaps))            # the usual gap (the smallest one can be too small by rounding and the error adds up)
         ix, iy = np.rint((xy[:, 0] - xs[0]) / dx), np.rint((xy[:, 1] - ys[0]) / dx)
         err = max(np.abs(xs[0] + ix * dx - xy[:, 0]).max(), np.abs(ys[0] + iy * dx - xy[:, 1]).max())
-        assert err < 1e-3, f"the plane points are not on a regular grid (max deviation {err:.4f} m): FNO needs one"
+        assert err < 2e-3, (f"the plane points are not on a regular grid (max deviation {err:.4f} m, median gap {dx:.5f}, "
+                            f"gaps from {gaps.min():.5f} to {gaps.max():.5f}): FNO needs one")
         self.nx, self.ny, self.dx = int(ix.max()) + 1, int(iy.max()) + 1, dx
         lin = (iy * self.nx + ix).astype(np.int64)
         assert len(np.unique(lin)) == len(lin), "two plane points in the same grid cell"
