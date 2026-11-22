@@ -140,8 +140,8 @@ computer. The 52 training scenarios give 2,288 samples and the 16 test scenarios
 On the transition runs the test error is 0.14\,\% in the definition of the paper, and persistence has 0.44\,\%.
 When only the \cotwo{} above the outdoor level counts, the values are 0.40\,\% and 1.77\,\%. \tref{tab:final} shows
 both measures for the transition runs and the direct runs. In all four cases the model is clearly better than
-persistence. For the transition runs its error is about a quarter of the error of persistence. For the direct
-runs it is about a tenth.
+persistence. For the transition runs its error is about a third of the error of persistence in the definition
+of the paper, and about a quarter above the outdoor level. For the direct runs it is about a tenth in both.
 
 \begin{table}[h]
   \centering
@@ -167,7 +167,8 @@ outdoor level, it is 0.71\,\% with 10 people (persistence 4.05\,\%) and 0.35\,\%
 
 \tref{tab:final_cases} shows the error of each test scenario. The model is better than persistence in all 16
 scenarios, in both kinds of runs. The weakest case is N24, where only W3 is open with 0.55~m/s and door~1 is open
-(3.48\,\% against 5.31\,\% for persistence in the transition runs). In the scenarios A03, A11, A28 and A35 the
+(3.48\,\% against 5.31\,\% for persistence in the transition runs, counting only the \cotwo{} above the outdoor
+level). This is the weakest case of this test set. In the scenarios A03, A11, A28 and A35 the
 \cotwo{} hardly changes in 3~minutes, so persistence is already very good (0.14 to 0.35\,\%), and the model is
 still better (0.04 to 0.14\,\%).
 
@@ -216,13 +217,17 @@ All errors in this chapter are measured against my simulated data. After 150~s t
 In the room a window can be opened at any time, so the 6~minutes of history can contain the old and the new
 state. In the training runs this does not happen, because a transition run starts at the change. For a test I
 built such samples from the transition runs of the 16 test scenarios: the maps before the change are the map at
-the change, repeated. This is an assumption, I did not simulate the old state. A model trained without a
-special treatment has an error of 41.4\,\% for these samples. For the final model, 90\,\% of the training
-samples are built in this way, and the model gets the time since the last window change as an additional input.
-With this the error is 21.3\,\% (counting only the \cotwo{} above the outdoor level), and persistence has
-40.1\,\%. The normal test did not get worse (0.40\,\% against 0.46\,\% before).
+the change, repeated. This is an assumption, I did not simulate the old state. For the final model, 90\,\% of
+the training samples are built in this way, and the model gets the time since the last window change as an
+additional input. For the samples with the change inside the history, the error is now 4.03\,\% in the
+definition of the paper, and persistence has 7.09\,\%. Counting only the \cotwo{} above the outdoor level, the
+error is 21.3\,\% and persistence has 40.1\,\%. A model trained without this treatment was no better than
+persistence for these samples: 7.12\,\% in the definition of the paper and 41.4\,\% above the outdoor level.
+The normal test did not get worse: 0.14\,\% in the definition of the paper
+(0.16\,\% before) and 0.40\,\% above the outdoor level (0.46\,\% before).
 
-The first minutes after a change are still weak. At the moment of the change the error is 48\,\%, and
-persistence has 100\,\%. With the change 5~minutes back the error is 2.8\,\%, against 9.5\,\% for persistence.
-The time since the change is an input of the model with the full \cotwo{} map only. The sensor model and the
-room chain of \cref{ch:sensors} do not have it.
+The first minutes after a change are still weak. At the moment of the change the error is 8.5\,\% in the
+definition of the paper, and persistence has 16.8\,\%. Above the outdoor level it is 48\,\% against 100\,\%.
+With the change 5~minutes back the error is 0.67\,\% against 1.89\,\% for persistence in the definition of the
+paper, and 2.8\,\% against 9.5\,\% above the outdoor level. The time since the change is an input of the model with the full \cotwo{} map only. The sensor
+model and the room chain of \cref{ch:sensors} do not have it.

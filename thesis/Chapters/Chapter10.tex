@@ -12,11 +12,13 @@ ventilated through windows. I used only open-source software for the simulations
   \item My \cotwo{} solver is within about 2\,\% of the \cotwo{} of OpenFOAM when the airflow is saved every
         second. With a save every 10~s the difference was up to 45\,\% in scenarios with fast air. I built
         the dataset again with this correction.
-  \item The error of the model is 4.4 times smaller than persistence for the transition runs and about 10
-        times smaller for the direct runs. The model trained on the corrected data is a little better on the
+  \item The error of the model is about 3 times smaller than persistence for the transition runs in the
+        definition of the paper (4.4 times above the outdoor level) and about 10 times smaller for the direct
+        runs (in both definitions). The model trained on the corrected data is a little better on the
         corrected test data.
   \item The final model, trained on 52 of the 68 scenarios with all windows and doors, has an error of 0.14\,\%
-        on 16 scenarios it had never seen, in the definition of the paper. Persistence has 0.44\,\%.
+        on 16 scenarios it had never seen, in the definition of the paper (0.40\,\% above the outdoor level).
+        Persistence has 0.44\,\% (1.77\,\%).
   \item With only the eight sensor stations of the room, which stand at the walls, a second model has an error of
         about 5 to 6\,\% in the same definition in the simulation, and its warning finds about 80 to 90\,\% of the
         cases where the \cotwo{} passes 700 or 800~ppm within 3~minutes. A sensor in the middle of the room
