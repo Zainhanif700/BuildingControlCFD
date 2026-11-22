@@ -43,9 +43,15 @@ class Grid:
     def __init__(self, xy, dev):
         xs, ys = np.unique(np.round(xy[:, 0], 3)), np.unique(np.round(xy[:, 1], 3))   # float32 noise below 1 mm is ignored
         gaps = np.concatenate([np.diff(xs), np.diff(ys)])
-        dx = float(np.median(gaps))            # the usual gap (the smallest one can be too small by rounding and the error adds up)
-        ix, iy = np.rint((xy[:, 0] - xs[0]) / dx), np.rint((xy[:, 1] - ys[0]) / dx)
-        err = max(np.abs(xs[0] + ix * dx - xy[:, 0]).max(), np.abs(ys[0] + iy * dx - xy[:, 1]).max())
+        med = float(np.median(gaps))
+        # the true spacing can be a little different from the rounded gaps (here about 8.03 cm) and the error adds up
+        # over 190 cells, so it is taken from the whole span: span / number of cells
+        steps = lambda v: int(np.rint(np.diff(v) / med).clip(min=1).sum())      # cells between the first and last position
+        dxx = (xs[-1] - xs[0]) / steps(xs)
+        dyy = (ys[-1] - ys[0]) / steps(ys)
+        dx = float(0.5 * (dxx + dyy))
+        ix, iy = np.rint((xy[:, 0] - xs[0]) / dxx), np.rint((xy[:, 1] - ys[0]) / dyy)
+        err = max(np.abs(xs[0] + ix * dxx - xy[:, 0]).max(), np.abs(ys[0] + iy * dyy - xy[:, 1]).max())
         assert err < 2e-3, (f"the plane points are not on a regular grid (max deviation {err:.4f} m, median gap {dx:.5f}, "
                             f"gaps from {gaps.min():.5f} to {gaps.max():.5f}): FNO needs one")
         self.nx, self.ny, self.dx = int(ix.max()) + 1, int(iy.max()) + 1, dx
