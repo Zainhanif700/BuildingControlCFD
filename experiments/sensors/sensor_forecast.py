@@ -1,43 +1,58 @@
 """
 Forecast at ANY point of the room from SENSOR DATA ONLY, version 2026-11-23.
-The chain is the one real sensors will use:   sensor file (server format)  ->  reader  ->  mapper  ->  sensor model  ->
-forecast of the CO2 in the whole room  ->  the point you choose.
-The model sees only the sensor file: the CO2 of the 8 stations of the last 6 minutes, the window speeds and the door states.
-For now the sensor file is made from a simulation (synthetic.py, with noise). Later the same step reads the real export.
-The simulation is only used (1) to make the sensor file and (2) to draw the true CO2 at the point for comparison.
+How the model works (as the real system will do it), at every step of 30 s:
+    INPUT : the sensor values of the last 6 minutes (CO2 of the 8 stations, window speeds, door states)
+    OUTPUT: the CO2 of the whole room 3 minutes ahead, and from it the CO2 at the point you choose
+Chain: sensor file (server format) -> reader -> mapper -> sensor model -> forecast of the whole room -> your point.
+The model sees only the sensor file. For now the file is made from a simulation (synthetic.py, with noise); later the
+same step reads the real export. The simulation is also used to draw the true CO2 for comparison.
+The figure has the layout of demo_overview.py: three room maps (simulation, forecast from the sensors, difference),
+the average CO2 in the seating area, and the CO2 at your point over the whole run with the sensor inputs.
 
-Make the sensor file and the forecast in one go (the file is made only if it does not exist yet):
-    python3 sensor_forecast.py --tag st_chain --sim ../gnot_openfoam_rans/data_v4/A03.npz --xy 7.8 4.6 --out point_A03.png
-or find the simulation by its closed windows (exactly these windows closed, all others open):
-    python3 sensor_forecast.py --tag st_chain --closed 4,5 --data-dir ../gnot_openfoam_rans/data_v4 --xy 7.8 4.6
-The model has to be a direction-blind one trained on direct data (a speed sensor gives no direction), e.g. st_chain.
+    python3 sensor_forecast.py --tag st_lecture --sim ../gnot_openfoam_rans/data_v4/N24.npz --xy 7.8 4.6
+or find the simulation by its closed windows:
+    python3 sensor_forecast.py --tag st_lecture --closed 4,5 --data-dir ../gnot_openfoam_rans/data_v4 --xy 7.8 4.6
+The model has to be a direction-blind one trained on direct data (a speed sensor gives no direction), e.g. st_lecture.
 """
 import argparse
 import os
 
 import numpy as np
 import torch
-import matplotlib
-matplotlib.use("Agg")
-import matplotlib.pyplot as plt
 
 import stations as st
 import synthetic
 import readers
 import mapper
 from diagnose_sensor import load_members, l2        # also puts the folder with common.py and forecast.py on the path
-import common  # noqa: F401
+import common
 from forecast import load_plane, T_OUT, DT
 from demo_chain import forecast as chain_forecast, START
 import demo_overview as D
+from plot_forecast import WINDOWS, DOORS, ROOM_X, ROOM_Y
 
 OFF = st.CO2_OUTDOOR
 
 
+def label_room(ax, V):
+    """Names of the windows (top wall), the doors (bottom wall) and the sensors in a room plan."""
+    for k, (x0, x1, _, _) in enumerate(WINDOWS):
+        ax.text((x0 + x1) / 2, ROOM_Y[1] + (0.95 if k in (2, 5) else 0.35), f"W{k + 1}", ha="center", va="bottom",
+                fontsize=8, color="#0b7fb5" if abs(V[k]) > 0 else "0.45", weight="bold" if abs(V[k]) > 0 else None)
+    for k, (x0, x1, _, _) in enumerate(DOORS):
+        ax.text((x0 + x1) / 2, ROOM_Y[0] - 0.45, f"D{k + 1}", ha="center", va="top", fontsize=8, color="darkorange",
+                weight="bold")
+    for s in st.STATIONS:
+        ax.annotate(s.name.replace("S-", ""), (s.x, s.y),
+                    xytext=(0, (-24 if s.number in (3, 6) else -13) if s.kind == "window" else 13),
+                    textcoords="offset points", ha="center", fontsize=7)
+    ax.set_ylim(ROOM_Y[0] - 1.6, ROOM_Y[1] + 1.4)
+
+
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--tag", default="st_chain", help="sensor model in checkpoints/ (direction-blind, trained on direct data)")
-    ap.add_argument("--sim", default=None, help="direct data file of one simulation, e.g. .../data_v4/A03.npz")
+    ap.add_argument("--tag", default="st_lecture", help="sensor model in checkpoints/ (direction-blind, trained on direct data)")
+    ap.add_argument("--sim", default=None, help="direct data file of one simulation, e.g. .../data_v4/N24.npz")
     ap.add_argument("--closed", default=None, help="instead of --sim: the windows that are closed, e.g. 4,5 (needs --data-dir)")
     ap.add_argument("--data-dir", default=None, help="folder with the direct data files, e.g. .../data_v4")
     ap.add_argument("--csv", default=None, help="sensor file (server format); made from the simulation if it does not exist")
@@ -71,70 +86,65 @@ def main():
     xy = d["xy"]
     xyz = torch.tensor(np.c_[xy, np.full(len(xy), d["z"], np.float32)])
     truth = torch.tensor(d["frames"]) * (a.people / d["N_ref"])
-    V_sim = np.asarray(d["V"], float)
+    V_sim = [float(v) for v in d["V"]] + [float(v) for v in d["doors"]]
     if any(V_sim[w - 1] != 0 for w in st.CLOSED_WINDOWS):
         print(f"NOTE: the windows {st.CLOSED_WINDOWS} have no station; in this simulation one of them is open, "
               f"so the model cannot see it", flush=True)
     ip = int(np.argmin((xy[:, 0] - a.xy[0]) ** 2 + (xy[:, 1] - a.xy[1]) ** 2))
     px, py = float(xy[ip, 0]), float(xy[ip, 1])
     print(f"point shown (nearest grid point): x = {px:.2f} m, y = {py:.2f} m", flush=True)
+    (x0, x1), (y0, y1), _ = common.SEAT_BOX
+    sm = torch.tensor((xy[:, 0] >= x0) & (xy[:, 0] <= x1) & (xy[:, 1] >= y0) & (xy[:, 1] <= y1))
 
     ks = list(range(hist_len - 1, truth.shape[0] - T_OUT))
     k_map = min(max(int(round(a.map_min * 60 / DT)) - T_OUT, ks[0]), ks[-1])
-    t_fc, fc_pt, errs, maps = [], [], [], {}
+    tt, fc_pt, em, bm, es, bs, s_fc, s_pers, s_em, s_ep = [], [], [], [], [], [], [], [], [], []
+    truth_map = fc_map = None
     for k in ks:
-        m = mapper.model_inputs(records, START.timestamp() + DT * k, a.people)
+        m = mapper.model_inputs(records, START.timestamp() + DT * k, a.people)          # INPUT: the last 6 min of the sensors
         V_map = np.concatenate([m["V"], m["doors"]])
         chain = chain_forecast(models, xyz, torch.tensor(m["xyz"]).unsqueeze(0), torch.tensor(m["hist"]).unsqueeze(0),
-                               V_map, a.people, hist_len)
+                               V_map, a.people, hist_len)                               # OUTPUT: whole room, next 3 min
         fut = truth[k + 1:k + 1 + T_OUT].T
-        t_fc.append((k + T_OUT) * DT / 60.0)
+        base = truth[k].unsqueeze(1).expand_as(fut)                                      # "stays as it is now" (true map)
+        tt.append((k + T_OUT) * DT / 60.0)
         fc_pt.append(float(chain[ip, -1]) + OFF)
-        errs.append(l2(chain, fut))
+        em.append(l2(chain + OFF, fut + OFF))
+        bm.append(l2(base + OFF, fut + OFF))
+        es.append(l2(chain, fut))
+        bs.append(l2(base, fut))
+        s_fc.append(float(chain[sm, -1].mean()) + OFF)
+        s_pers.append(float(base[sm, -1].mean()) + OFF)
+        s_em.append(float((chain[sm].mean(0) - fut[sm].mean(0)).abs().mean()))
+        s_ep.append(float((base[sm].mean(0) - fut[sm].mean(0)).abs().mean()))
         if k == k_map:
-            maps = {"fc": chain[:, -1].numpy() + OFF, "true": fut[:, -1].numpy() + OFF, "t": (k + T_OUT) * DT / 60.0}
+            truth_map, fc_map = fut[:, -1].numpy() + OFF, chain[:, -1].numpy() + OFF
     t_all = np.arange(truth.shape[0]) * DT / 60.0
     true_pt = truth[:, ip].numpy() + OFF
-    err_pt = np.abs(np.array(fc_pt) - np.interp(t_fc, t_all, true_pt))
-    print(f"scenario {name}, sensor model {a.tag}: mean error of the forecast at this point {err_pt.mean():.1f} ppm "
-          f"(largest {err_pt.max():.1f} ppm); mean error of the whole-room map (strict) {100 * np.mean(errs):.1f} %", flush=True)
+    err_pt = np.abs(np.array(fc_pt) - np.interp(tt, t_all, true_pt))
+    print(f"scenario {name}, sensor model {a.tag}: mean error at the point {err_pt.mean():.1f} ppm (largest "
+          f"{err_pt.max():.1f} ppm); seating-area average {np.mean(s_em):.1f} ppm; whole-room map (paper definition / strict) "
+          f"{100 * np.mean(em):.2f} % / {100 * np.mean(es):.1f} %", flush=True)
 
-    fig = plt.figure(figsize=(15, 9.5), constrained_layout=True)
-    gs = fig.add_gridspec(2, 2, height_ratios=[1, 1.1])
-    Vd = [abs(float(v)) for v in V_sim]                     # an outlet window (-1) is open too
-    marks = np.array([[s.x, s.y] for s in st.STATIONS])
-    vmin, vmax = float(maps["true"].min()), float(maps["true"].max())
-    for j, (val, ttl) in enumerate(((maps["fc"], f"Forecast from the sensors only (the stars), t = {maps['t']:g} min"),
-                                    (maps["true"], f"Simulation (reference), t = {maps['t']:g} min"))):
-        ax = fig.add_subplot(gs[0, j])
-        img, ext = D.to_image(xy, val)
-        im = ax.imshow(img, origin="lower", extent=ext, cmap="viridis", vmin=vmin, vmax=vmax)
-        fig.colorbar(im, ax=ax, label="CO$_2$ [ppm]", fraction=0.04, pad=0.02)
-        D.draw_room(ax, Vd)
-        ax.plot(marks[:, 0], marks[:, 1], "k*", ms=9, mfc="yellow", mew=0.8)
-        ax.plot(px, py, "x", color="red", ms=12, mew=3)
-        ax.set_title(ttl, fontsize=10)
-        ax.set_xlabel("x: room length [m]")
-        ax.set_ylabel("y: room width [m]")
-    ax = fig.add_subplot(gs[1, :])
-    ax.axvspan(0, hist_len * DT / 60, color="0.9", label="first 6 min: history only, no forecast yet")
+    inputs = []
     for s in st.STATIONS:
         rs = sorted((r for r in records if r["station"] == s.id), key=lambda r: r["time"])
-        ax.plot([(r["time"] - START.timestamp()) / 60.0 for r in rs], [r["co2"] for r in rs], "-", lw=0.8, alpha=0.6)
-    ax.plot([], [], "-", lw=0.8, color="0.4", label="input: the 8 sensors (CO$_2$ with noise)")
-    ax.plot(t_all, true_pt, "-", color="black", lw=2.5, label=f"simulation at the red cross (x = {px:.1f} m, y = {py:.1f} m)")
-    ax.plot(t_fc, fc_pt, "o", color="#d62728", ms=4, label="forecast at the red cross, made 3 min earlier, from the sensors only")
-    ax.set_xlabel("time [min]")
-    ax.set_ylabel("CO$_2$ [ppm] (outdoor air: 400 ppm)")
-    ax.set_title("Input: the sensor values. Output: the forecast at the chosen point, 3 minutes ahead", fontsize=10)
-    ax.legend(fontsize=8.5, loc="best")
-    ax.grid(alpha=0.3)
-    fig.suptitle(f"Sensor chain, scenario {name}, {a.people:g} people, model {a.tag}: window speeds "
-                 f"{[round(float(v), 2) for v in V_sim]} m/s (-1 = outlet window), doors {[int(v) for v in d['doors']]} (1 = open)\n"
-                 f"mean error at the chosen point {err_pt.mean():.1f} ppm; the sensor values come from the simulation "
-                 f"(no real measurements yet)", fontsize=11)
-    fig.savefig(a.out, dpi=130)
-    plt.close(fig)
+        inputs.append(([(r["time"] - START.timestamp()) / 60.0 for r in rs], [r["co2"] for r in rs], s.name))
+    err = {"paper_model": np.mean(em), "paper_pers": np.mean(bm), "strict_model": np.mean(es), "strict_pers": np.mean(bs)}
+    seat = {"full": truth[:, sm].mean(1).numpy() + OFF, "fc": np.array(s_fc), "pers": np.array(s_pers),
+            "box": ((x0, x1), (y0, y1)), "ppm_model": float(np.mean(s_em)), "ppm_pers": float(np.mean(s_ep))}
+    marks = np.array([[s.x, s.y] for s in st.STATIONS])
+    openw = [f"W{i + 1} {abs(v):.2g} m/s" for i, v in enumerate(V_sim[:8]) if v != 0]
+    suptitle = (f"Sensor chain: simulated sensor data of {name} ({a.people:g} people), model {a.tag}\n"
+                f"INPUT: the last 6 min of the 8 sensors (stars)  ->  OUTPUT: the CO$_2$ of the room 3 min ahead\n"
+                f"open windows: {', '.join(openw) if openw else 'none'}; doors: D1 {'open' if V_sim[8] else 'closed'}, "
+                f"D2 {'open' if V_sim[9] else 'closed'}\n"
+                f"mean error at the red cross {err_pt.mean():.1f} ppm, of the average in the seating area "
+                f"{np.mean(s_em):.1f} ppm (the sensor values come from a simulation, no real measurements yet)")
+    D.make_figure(xy, V_sim, name, a.people, a.people, (k_map + T_OUT) * DT / 60.0, truth_map, fc_map, t_all,
+                  true_pt.reshape(-1, 1), np.array(tt), np.array(fc_pt).reshape(-1, 1), err, a.out,
+                  title_prefix="Sensor chain", marks=marks, seat=seat, show_points=(0,), points=[(px, py)],
+                  inputs=inputs, point_name="forecast point", suptitle=suptitle, room_labeler=label_room)
     print(f"figure saved: {a.out}")
 
 

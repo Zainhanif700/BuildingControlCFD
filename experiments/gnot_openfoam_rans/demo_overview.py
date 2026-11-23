@@ -54,8 +54,13 @@ def ens(models, data, t0, n_now, n_before):
 
 
 def make_figure(xy, V, name, n_now, n_before, t_map, truth_map, fc_map, tfull, full_pts, tt, pp, err, out,
-                title_prefix="Final model", marks=None, seat=None, show_points=None, points=POINTS):
-    """xy: plane points, V: 8 window speeds + 2 doors, t_map [min], truth_map / fc_map: CO2 at t_map (ppm, absolute),
+                title_prefix="Final model", marks=None, seat=None, show_points=None, points=POINTS,
+                inputs=None, point_name=None, suptitle=None, room_labeler=None):
+    """inputs: optional list of (times [min], CO2 [ppm], name) of the sensors that are the INPUT of the sensor chain; then the
+    point panel shows the inputs (thin lines), the true value (black) and the forecast (red dots) and says so.
+    point_name: name of the forecast point in the legend and in the room plan. suptitle: replaces the default title.
+    room_labeler: optional function (ax, V) that writes the names of windows, doors and sensors into a room plan.
+    xy: plane points, V: 8 window speeds + 2 doors, t_map [min], truth_map / fc_map: CO2 at t_map (ppm, absolute),
     tfull / full_pts: simulated CO2 at the 4 points over time, tt / pp: forecasts made 3 min earlier,
     err: dict with the mean errors (paper / strict, model / persistence).
     marks: optional (n, 2) positions that are drawn as yellow stars (the sensors of the sensor model).
@@ -65,8 +70,12 @@ def make_figure(xy, V, name, n_now, n_before, t_map, truth_map, fc_map, tfull, f
     gs = fig.add_gridspec(2, 6, height_ratios=[1, 1.45 if seat is not None else 1])
     vmin, vmax = float(np.nanmin(truth_map)), float(np.nanmax(truth_map))
     dm = max(float(np.abs(fc_map - truth_map).max()), 1e-6)
-    panels = [(truth_map, f"Simulation (OpenFOAM flow + CO$_2$ solver), t = {t_map:g} min", "viridis", (vmin, vmax), "CO$_2$ [ppm]"),
-              (fc_map, f"Forecast of the model (made 3 min earlier), t = {t_map:g} min", "viridis", (vmin, vmax), "CO$_2$ [ppm]"),
+    t_sim = f"Reference: simulation (the truth), t = {t_map:g} min" if inputs is not None else \
+        f"Simulation (OpenFOAM flow + CO$_2$ solver), t = {t_map:g} min"
+    t_fc = f"OUTPUT: forecast from the sensors only (stars),\nmade 3 min earlier, t = {t_map:g} min" if inputs is not None else \
+        f"Forecast of the model (made 3 min earlier), t = {t_map:g} min"
+    panels = [(truth_map, t_sim, "viridis", (vmin, vmax), "CO$_2$ [ppm]"),
+              (fc_map, t_fc, "viridis", (vmin, vmax), "CO$_2$ [ppm]"),
               (fc_map - truth_map, f"Forecast $-$ simulation, t = {t_map:g} min", "RdBu_r", (-dm, dm),
                "difference [ppm] (red: too high, blue: too low)")]
     for j, (val, ttl, cm, lim, cl) in enumerate(panels):
@@ -77,6 +86,10 @@ def make_figure(xy, V, name, n_now, n_before, t_map, truth_map, fc_map, tfull, f
         draw_room(ax, [abs(float(v)) for v in V])
         if marks is not None:
             ax.plot(marks[:, 0], marks[:, 1], "k*", ms=9, mfc="yellow", mew=0.8)
+        if inputs is not None and points:
+            ax.plot(*points[show_points[0] if show_points else 0], "x", color="red", ms=12, mew=3)
+        if room_labeler is not None:
+            room_labeler(ax, V)
         ax.set_title(ttl, fontsize=10)
         ax.set_xlabel("x: room length [m]")
         ax.set_ylabel("y: room width [m]")
@@ -106,25 +119,48 @@ def make_figure(xy, V, name, n_now, n_before, t_map, truth_map, fc_map, tfull, f
         ax = fig.add_subplot(gs[1, 0:4])
     pl = fig.add_subplot(gs[1, 4:6])
     ax.axvspan(0, H_IN * DT / 60, color="0.9", label="first 6 min: history only, no forecast yet")
+    if inputs is not None:
+        cols = plt.cm.tab10(np.arange(len(inputs)))
+        for (ti, yi, nm), col in zip(inputs, cols):
+            ax.plot(ti, yi, "-", lw=0.9, alpha=0.65, color=col, label=f"INPUT: sensor {nm}")
     for j, (px, py) in enumerate(points):
         if show_points is not None and j not in show_points:
+            continue
+        if inputs is not None:
+            nm = point_name or "forecast point"
+            ax.plot(tfull, full_pts[:, j], "-", lw=2.5, color="black", label=f"true value at the {nm} (simulation)")
+            ax.plot(tt, pp[:, j], "o", ms=4, color="#d62728",
+                    label=f"OUTPUT: forecast at the {nm}, made 3 min earlier from the previous 6 min of the sensors")
+            pl.plot(px, py, "x", color="red", ms=13, mew=3)
+            pl.annotate(nm, (px, py), xytext=(8, 6), textcoords="offset points", fontsize=9, weight="bold", color="red")
             continue
         line, = ax.plot(tfull, full_pts[:, j], "-", lw=2, label=f"point {j + 1} (x = {px:g} m, y = {py:g} m): simulation")
         ax.plot(tt, pp[:, j], "o", ms=4, color=line.get_color())
         pl.plot(px, py, "o", ms=9, color=line.get_color(), markeredgecolor="black")
         pl.annotate(str(j + 1), (px, py), xytext=(6, 4), textcoords="offset points", fontsize=10, weight="bold")
-    ax.plot([], [], "o", color="0.3", ms=4, label="dots: forecast made 3 min earlier")
+    if inputs is None:
+        ax.plot([], [], "o", color="0.3", ms=4, label="dots: forecast made 3 min earlier")
     ax.set_xlabel("time after the window change [min]")
     ax.set_ylabel("CO$_2$ [ppm] (outdoor air: 400 ppm)")
     many = show_points is None or len(show_points) > 1
-    ax.set_title(("CO$_2$ at four points" if many else "CO$_2$ at one point") +
-                 " over the whole run: simulation (line) and 3-minute forecast (dots)", fontsize=10)
-    ax.legend(fontsize=8.5, loc="best")
+    if inputs is not None:
+        ax.set_title("INPUT: the sensors (thin lines; the model gets the last 6 min of them at every step).  "
+                     "OUTPUT: the CO$_2$ at the chosen point 3 min ahead (red dots)", fontsize=10)
+        ax.legend(fontsize=8, loc="upper center", bbox_to_anchor=(0.5, -0.2), ncol=2, frameon=False)
+    else:
+        ax.set_title(("CO$_2$ at four points" if many else "CO$_2$ at one point") +
+                     " over the whole run: simulation (line) and 3-minute forecast (dots)", fontsize=10)
+        ax.legend(fontsize=8.5, loc="best")
     ax.grid(alpha=0.3)
     draw_room(pl, [abs(float(v)) for v in V])
     if marks is not None:
         pl.plot(marks[:, 0], marks[:, 1], "k*", ms=9, mfc="yellow", mew=0.8)
+    if room_labeler is not None:
+        room_labeler(pl, V)
     handles = room_legend()
+    if inputs is not None:
+        from matplotlib.lines import Line2D
+        handles.append(Line2D([], [], marker="x", ls="", color="red", ms=10, mew=3, label="forecast point"))
     if seat is not None:
         from matplotlib.patches import Rectangle
         from matplotlib.lines import Line2D
@@ -141,11 +177,14 @@ def make_figure(xy, V, name, n_now, n_before, t_map, truth_map, fc_map, tfull, f
     pl.legend(handles=handles, fontsize=8, loc="upper center", bbox_to_anchor=(0.5, -0.25), ncol=3, frameon=False)
 
     wins = [round(float(v), 2) for v in V[:8]]
-    fig.suptitle(
-        f"{title_prefix}, test scenario {name}: forecast of the CO$_2$ in the whole room, {n_now:g} people (before the window change: "
-        f"{n_before:g})\nwindow speeds {wins} m/s, doors {[int(v) for v in V[8:]]} (1 = open). Mean error over all samples "
-        f"(paper definition / strict): model {100 * err['paper_model']:.2f} % / {100 * err['strict_model']:.2f} %, "
-        f"persistence {100 * err['paper_pers']:.2f} % / {100 * err['strict_pers']:.2f} %", fontsize=11)
+    if suptitle is not None:
+        fig.suptitle(suptitle, fontsize=11)
+    else:
+        fig.suptitle(
+            f"{title_prefix}, test scenario {name}: forecast of the CO$_2$ in the whole room, {n_now:g} people (before the window change: "
+            f"{n_before:g})\nwindow speeds {wins} m/s, doors {[int(v) for v in V[8:]]} (1 = open). Mean error over all samples "
+            f"(paper definition / strict): model {100 * err['paper_model']:.2f} % / {100 * err['strict_model']:.2f} %, "
+            f"persistence {100 * err['paper_pers']:.2f} % / {100 * err['strict_pers']:.2f} %", fontsize=11)
     fig.savefig(out, dpi=130)
     plt.close(fig)
 
