@@ -89,7 +89,7 @@ def main():
             cb = fig.colorbar(s, ax=ax[:2], shrink=0.85, pad=0.02)
             cb.set_label("CO2 above the outdoor level [ppm]")
             d = ax[2].scatter(xy[:, 0], xy[:, 1], c=fc - sim, s=3, cmap="coolwarm", vmin=-dmax, vmax=dmax)
-            ax[2].set_title("Forecast minus simulation")
+            ax[2].set_title(f"Forecast minus simulation (largest difference {float(np.abs(fc - sim).max()):.2f} ppm)")
             cb2 = fig.colorbar(d, ax=ax[2], shrink=0.85, pad=0.02)
             cb2.set_label("difference [ppm] (red: forecast too high, blue: too low)")
             for a in ax:
@@ -98,7 +98,7 @@ def main():
                 a.set_ylabel("y [m]")
             fig.suptitle(
                 f"Scenario {name}: CO2 on the plane at 1.6 m height, 3 minutes ahead (history ends {t0 * F.DT / 60:.1f} min "
-                f"after the window change)\nwindow speeds {[float(v) for v in Vv[:8]]} m/s, doors {[int(v) for v in Vv[8:]]}"
+                f"after the window change)\nwindow speeds {[round(float(v), 2) for v in Vv[:8]]} m/s, doors {[int(v) for v in Vv[8:]]}"
                 f" (1 = open); error of this forecast {100 * rows[t0][0]:.2f} % (persistence {100 * rows[t0][1]:.2f} %); "
                 f"white spots = columns", fontsize=11)
             fig.savefig(args.plot, dpi=130)
