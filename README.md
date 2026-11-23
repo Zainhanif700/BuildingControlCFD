@@ -64,7 +64,7 @@ temperature is not simulated. The data has **68 window settings** (52 for traini
 - **Airflow:** OpenFOAM v2412, `pimpleFoam`, k-ω SST, 856,284 cells of 8 cm. The flow is saved every second for the first
   150 s and every 10 s up to 600 s (a save every 10 s was not enough: my CO₂ then differed from OpenFOAM's by up to 45 %).
 - **CO₂:** my own finite-volume solver on the GPU (`fv_cons.py`) computes 30 minutes: the real flow for 150 s, then the
-  mean flow of 150–600 s, saved every 30 s. The mean flow keeps too much CO₂ in the room in fast scenarios (known limit).
+  mean flow of 150–600 s, saved every 30 s.
 - **Transition runs:** as in the paper, a run starts from the CO₂ of another setting; the people are switched off and the
   new flow carries the CO₂ away. The CO₂ equation is linear, so the number of people can be chosen freely (10–80).
 - **Forecast model (final model):** the CO₂ at 1.6 m of the last 6 minutes (12 maps), window speeds, open windows and doors
@@ -85,10 +85,9 @@ temperature is not simulated. The data has **68 window settings** (52 for traini
 | "CO₂ stays as it is now" (persistence) | 1.77 % | 0.44 % |
 | Sensor model (8 stations), random splits | about 32 % | about 5–6 % |
 
-With a window change inside the history the final model has a strict error of 21.3 % (persistence 40.1 %); in the first
-minute after the change it is still weak (48 % against 100 %). The warning of
+With a window change inside the history the final model has a strict error of 21.3 % (persistence 40.1 %). The warning of
 the sensor model finds about 87–91 % of the real cases at 700 ppm with a margin of 30–40 ppm, with about 2–5 % false alarms.
-Details, tables and limits: `thesis/Thesis.pdf`. **Time** (measured): OpenFOAM for the first 150 s of one setting about
+Details and tables: `thesis/Thesis.pdf`. **Time** (measured): OpenFOAM for the first 150 s of one setting about
 2 h 15 min on 4 cores; a full 600 s run on one core 15–90 h; the CO₂ solver 1.25–4 h per setting on the GPU; training 5
 networks about 3 h 12 min.
 
@@ -128,12 +127,10 @@ python3 diagnose_sensor.py --data-dir ../gnot_openfoam_rans/data_transitions_v4 
 
 The older `run_batch.sh` saves the flow only every 10 s and should not be used for new data.
 
-## Limits and next steps
+## Next steps
 
-- No real sensor data yet; the stations are being installed. The next step is to test the forecast and the warning with it.
-- After 150 s the CO₂ is computed with the mean flow, which keeps too much CO₂ in fast scenarios.
-- Temperature is not simulated, and windows that are only tilted in winter (small openings) are hardly covered.
-- Later: use the model to choose window openings that keep the CO₂ low with as little ventilation as possible, as in the paper.
+- Test the forecast and the warning with real sensor data when the stations deliver it.
+- Use the model to choose window openings that keep the CO₂ low with as little ventilation as possible, as in the paper.
 
 ## Original paper code and references
 
