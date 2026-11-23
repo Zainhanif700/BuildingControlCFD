@@ -4,7 +4,7 @@ Code of my Master's thesis. I take the method of Bian & Shi (2025), *Data-driven
 energy-efficient building control* ([arXiv:2504.21243](https://arxiv.org/abs/2504.21243)), and apply it to a real
 classroom of our university: I simulate the airflow and the CO₂ in the room, train a neural operator (GNOT) on the
 results and forecast the CO₂ of the next 3 minutes from the last 6 minutes. A second model sees only the sensor
-stations of the room. **All results are from simulation; there is no real sensor data yet.**
+stations of the room.
 
 ## Start here (version 2026-11-23c)
 
@@ -52,8 +52,8 @@ Data files and trained networks are large and not in the repository (except the 
 
 Room 1-130: 15.53 × 9.16 × 3.15 m, 8 windows (W1–W8) on one wall, 2 doors on the opposite wall, 4 columns (geometry from
 STL files in `experiments/pinn/geometry/`). Fresh air comes in through open windows and leaves through open doors or
-outlet windows. A person breathes out 6 L/min at 40,000 ppm CO₂ (as in the paper); the outdoor air has 400 ppm. The
-temperature is not simulated. The data has **68 window settings** (52 for training, 16 for testing), in
+outlet windows. A person breathes out 6 L/min at 40,000 ppm CO₂ (as in the paper); the outdoor air has 400 ppm. The data
+has **68 window settings** (52 for training, 16 for testing), in
 `experiments/gnot_openfoam_rans/scenarios_v4.txt` (one line per setting: name, train/test, speeds at W1–W8, doors):
 
 - N01–N28: only W1, W3 and W6 can open (0.2–2.0 m/s), door 1 open, door 2 closed.
