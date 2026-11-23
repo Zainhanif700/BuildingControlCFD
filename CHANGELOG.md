@@ -3,6 +3,11 @@
 Versions are named by their date, `vYYYY-MM-DD`. The newest entry is on top. A script that was changed has an
 "Updated" line with the date in its first lines. Older changes: `git log`.
 
+## v2026-11-23b
+- `README.md` restructured and shortened (from 261 to 143 lines): "Start here" with the three levels first, then
+  what is where, the room and the data, the method, the results, how to run, limits. The instructions for reproducing the
+  paper moved to `learning/README.md`. No code changed.
+
 ## v2026-11-23
 - Added the demo: `run_demo.sh` and `demo_forecast.py` (the final model forecasts one test setting; OpenFOAM runs one
   setting for 20 s). Tested on our lab PC.
