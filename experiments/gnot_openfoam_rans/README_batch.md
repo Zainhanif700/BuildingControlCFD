@@ -1,5 +1,9 @@
 # Running the OpenFOAM simulations on a server
 
+*Updated 2026-11-23. If a run stops without a message, start it again with `TRACE=1` in front, for example
+`TRACE=1 bash run_full_case.sh N01 4`. The log then shows every command with the time and the line, and its first
+line shows the bash version and the system. The newest changes are listed with their dates in `CHANGELOG.md`.*
+
 > **Which script to use.** The current data (68 settings, `scenarios_v4.txt`) is made with
 > `experiments/co2_sampling/run_full_case.sh <name> <cores>`: a save of the flow every second for 0-150 s,
 > then every 10 s up to 600 s. For one setting:

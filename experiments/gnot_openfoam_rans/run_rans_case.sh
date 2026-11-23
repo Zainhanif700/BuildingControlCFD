@@ -1,12 +1,19 @@
 #!/usr/bin/env bash
 # Mesh and run one OpenFOAM case, on one core or with FOAM_NP=n on n cores (OpenFOAM is found by foam_env.sh).
 # Usage: bash run_rans_case.sh cases/<name>_dx0.1
+# Updated 2026-11-23: the first line of the log now shows the bash version and the system; a failure while loading
+#   OpenFOAM (foam_env.sh) is reported; TRACE=1 writes every command with time and line number into the log.
 set -eu
 CASE="${1:?usage: bash run_rans_case.sh <case dir>}"
+echo "run_rans_case.sh (2026-11-23), bash $BASH_VERSION, $(uname -sm), $(date '+%F %T')"
+if [ "${TRACE:-0}" = 1 ]; then
+    export PS4='+ $(date +%T) ${BASH_SOURCE##*/}:${LINENO}: '
+    set -x
+fi
+trap 'echo "FAILED at: $BASH_COMMAND -- see the newest log.* file in $CASE"; ls -t log.* 2>/dev/null | head -1' ERR
 source "$(cd "$(dirname "$0")" && pwd)/foam_env.sh"
 cd "$CASE"
 say() { echo "[$(date '+%T')] $*"; }
-trap 'echo "FAILED at: $BASH_COMMAND -- see the newest log.* file in $CASE"; ls -t log.* 2>/dev/null | head -1' ERR
 rm -rf 0 processor* constant/polyMesh
 for d in [0-9]*; do [[ "$d" =~ ^[0-9.]+(e[-+]?[0-9]+)?$ ]] && rm -rf "$d"; done      # old time folders
 say "mesh: blockMesh";                 blockMesh > log.blockMesh 2>&1

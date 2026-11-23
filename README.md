@@ -10,6 +10,38 @@ sensor stations of the room. All results are from simulation; there is no real s
 The repository started as a fork of the authors' code. Their original code is still here (see
 [Original paper code](#original-paper-code) at the end); my own work is in `experiments/`.
 
+## Start here (version 2026-11-23)
+
+**Which version do I have?** Versions are named by their date (`v2026-11-23`). Every change is listed with its date
+in [`CHANGELOG.md`](CHANGELOG.md), and a script that I changed has an "Updated" line with the date in its first
+lines. If your copy is older than the top entry of the changelog, download it again.
+
+**What do you want to run?** Three levels, from small to big. Everything else in this file is the detail.
+
+| Level | What you do | You need | Time |
+|---|---|---|---|
+| 1. Demo | The final model forecasts the CO₂ of one test setting (nothing is trained), and OpenFOAM runs one setting for 20 s | Python packages; OpenFOAM v2412 for the OpenFOAM part | OpenFOAM part about 10 min on 4 cores (measured on our lab PC); the forecast is short (not timed) |
+| 2. Model only | Train the final model again from the CO₂ data of the 68 settings and test it (no OpenFOAM, no CO₂ solver) | a GPU; the data `data_transitions_v4` (about 1 GB, I send it) | training about 3 h 20 min on our GPU (5 networks; estimated from file times), the test a few minutes |
+| 3. Full re-run | All 68 OpenFOAM simulations, then the CO₂ on the GPU, then the training | many CPU cores and a GPU | several days of OpenFOAM and more days for the CO₂ (rough estimates, not measured on your machines) |
+
+**Level 1.** The model and one test setting (N14) are in the folder `demo/`. Once: `bash experiments/gnot_openfoam_rans/setup_env.sh`
+(it should print `python OK`, and `OpenFOAM OK` if OpenFOAM is found). Then, in `experiments/gnot_openfoam_rans/`:
+
+```bash
+bash run_demo.sh forecast    # forecast with the final model, prints the error against "the CO2 stays as it is now", saves demo_forecast.png
+bash run_demo.sh openfoam    # OpenFOAM, setting N01, 20 s of flow, on 4 cores (NP=8 for more cores)
+bash run_demo.sh             # both
+```
+
+The two parts are independent: the 20 s OpenFOAM run does not feed the model. If a run stops without a message, put
+`TRACE=1` in front of the command; the log then shows every command with the time and the line.
+
+**Level 2.** Put the data folder `data_transitions_v4` into `experiments/gnot_openfoam_rans/`, then run the two commands of
+steps 3 and 4 under "How to run" below (training, then `eval_history_change.py`). The model that is trained is the same as the one in
+`demo/final_model`.
+
+**Level 3.** Steps 1 to 3 under "How to run" below, for all settings of `scenarios_v4.txt`.
+
 ## The room
 
 The classroom (room 1-130) is 15.53 × 9.16 × 3.15 m with 8 windows (W1–W8) on one wall, 2 doors on the

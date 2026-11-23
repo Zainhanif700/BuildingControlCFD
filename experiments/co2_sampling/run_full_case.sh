@@ -3,6 +3,9 @@
 # then continued to 600 s with a save every 10 s (for the mean flow). Resumable: a finished part is not run again.
 # Usage: SAMPLING_CASES=<cases folder> CFD_PY=<python> bash run_full_case.sh <name> [cores, default 4]
 #        SAMPLING_SCEN=<scenario file> (default scenarios_v4.txt); <cases>/<name>ws1.skip: setting runs elsewhere
+# Updated 2026-11-23: TRACE=1 bash run_full_case.sh <name> writes every command with time and line number into the
+#   log (<cases>/<name>ws1_dx0.08.log); the log also starts with the bash version and the system; if the OpenFOAM
+#   run stops, the script says so and shows the end of the log.
 set -euo pipefail
 NAME="${1:?usage: bash run_full_case.sh <name> [cores]}"; NP="${2:-4}"
 HERE="$(cd "$(dirname "$0")" && pwd)"
@@ -25,7 +28,8 @@ if [ ! -f "$CASE/done150" ]; then
     mkdir -p "$CASES"
     (cd "$RANS" && "$PY" make_rans_case.py --V="$V" --doors "$DOORS" --dx 0.08 --name "${NAME}ws1" \
         --t-end 150 --write-interval 1 --out "$CASES" > /dev/null)
-    FOAM_NP="$NP" bash "$RANS/run_rans_case.sh" "$CASE" > "$CASE.log" 2>&1
+    FOAM_NP="$NP" bash "$RANS/run_rans_case.sh" "$CASE" > "$CASE.log" 2>&1 \
+        || { echo "run_rans_case.sh stopped -- end of $CASE.log:"; tail -n 15 "$CASE.log"; exit 1; }
     grep -q "^End" "$CASE/log.pimpleFoam" || { echo "OpenFOAM 0-150 s did not reach the end -- see $CASE.log"; exit 1; }
     touch "$CASE/done150"
     echo "[$(date '+%F %T')] $NAME: 0-150 s done ($(du -sh "$CASE" | cut -f1))"
