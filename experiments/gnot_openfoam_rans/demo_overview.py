@@ -1,8 +1,8 @@
 """
 Overview figure, version 2026-11-23: the whole forecast of the final model for ONE test scenario in ONE image.
 Top: top view of the room at 1.6 m height (windows, doors, columns drawn): simulation, forecast, difference.
-Bottom: the average CO2 in the seating area over the whole run, the CO2 at four points (lines: simulation,
-dots: forecast made 3 minutes earlier) and the positions in the room. Nothing is trained here.
+Bottom: the average CO2 in the seating area over the whole run, the CO2 at one point (default: the middle of the
+seating area; line: simulation, dots: forecast made 3 minutes earlier) and its position in the room. Nothing is trained here.
 Usage: python3 demo_overview.py --ckpt demo/final_model --file demo/N14.npz --out demo_overview_N14.png
 """
 import argparse
@@ -27,7 +27,7 @@ def ens(models, data, t0, n_now, n_before):
 
 
 def make_figure(xy, V, name, n_now, n_before, t_map, truth_map, fc_map, tfull, full_pts, tt, pp, err, out,
-                title_prefix="Final model", marks=None, seat=None):
+                title_prefix="Final model", marks=None, seat=None, show_points=None):
     """xy: plane points, V: 8 window speeds + 2 doors, t_map [min], truth_map / fc_map: CO2 at t_map (ppm, absolute),
     tfull / full_pts: simulated CO2 at the 4 points over time, tt / pp: forecasts made 3 min earlier,
     err: dict with the mean errors (paper / strict, model / persistence).
@@ -80,6 +80,8 @@ def make_figure(xy, V, name, n_now, n_before, t_map, truth_map, fc_map, tfull, f
     pl = fig.add_subplot(gs[1, 4:6])
     ax.axvspan(0, H_IN * DT / 60, color="0.9", label="first 6 min: history only, no forecast yet")
     for j, (px, py) in enumerate(POINTS):
+        if show_points is not None and j not in show_points:
+            continue
         line, = ax.plot(tfull, full_pts[:, j], "-", lw=2, label=f"point {j + 1} (x = {px:g} m, y = {py:g} m): simulation")
         ax.plot(tt, pp[:, j], "o", ms=4, color=line.get_color())
         pl.plot(px, py, "o", ms=9, color=line.get_color(), markeredgecolor="black")
@@ -87,7 +89,9 @@ def make_figure(xy, V, name, n_now, n_before, t_map, truth_map, fc_map, tfull, f
     ax.plot([], [], "o", color="0.3", ms=4, label="dots: forecast made 3 min earlier")
     ax.set_xlabel("time after the window change [min]")
     ax.set_ylabel("CO$_2$ [ppm] (outdoor air: 400 ppm)")
-    ax.set_title("CO$_2$ at four points over the whole run: simulation (lines) and 3-minute forecast (dots)", fontsize=10)
+    many = show_points is None or len(show_points) > 1
+    ax.set_title(("CO$_2$ at four points" if many else "CO$_2$ at one point") +
+                 " over the whole run: simulation (line) and 3-minute forecast (dots)", fontsize=10)
     ax.legend(fontsize=8.5, loc="best")
     ax.grid(alpha=0.3)
     draw_room(pl, V)
@@ -104,7 +108,7 @@ def make_figure(xy, V, name, n_now, n_before, t_map, truth_map, fc_map, tfull, f
         from matplotlib.lines import Line2D
         handles.append(Line2D([], [], marker="*", ls="", markerfacecolor="yellow", markeredgecolor="black", ms=10,
                               label="sensor"))
-    pl.set_title("positions of the four points (top view, 1.6 m)", fontsize=10)
+    pl.set_title(("positions of the four points" if many else "position of the point") + " (top view, 1.6 m)", fontsize=10)
     pl.set_xlabel("x [m]")
     pl.set_ylabel("y [m]")
     pl.legend(handles=handles, fontsize=8, loc="upper center", bbox_to_anchor=(0.5, -0.25), ncol=3, frameon=False)
@@ -171,6 +175,8 @@ def main():
     ap.add_argument("--file", required=True, help="transition file of one scenario, e.g. demo/N14.npz")
     ap.add_argument("--people", type=float, nargs=2, default=(40.0, 40.0), metavar=("NOW", "BEFORE"))
     ap.add_argument("--map-t0-min", type=float, default=6.0, help="the maps show the forecast for t0 + 3 min (default t0 = 6 min)")
+    ap.add_argument("--point", type=int, default=2, choices=(0, 1, 2, 3, 4),
+                    help="which of the four points to show in the lower panel (default 2, the middle of the seating area); 0 = all four")
     ap.add_argument("--out", default="demo_overview.png")
     ap.add_argument("--device", default="cuda" if torch.cuda.is_available() else "cpu")
     args = ap.parse_args()
@@ -183,7 +189,8 @@ def main():
     name = os.path.splitext(os.path.basename(args.file))[0]
     r = collect(models, data, n_now, n_before, args.map_t0_min)
     make_figure(r["xy"], r["V"], name, n_now, n_before, r["t_map"], r["truth_map"], r["fc_map"], r["tfull"],
-                r["full_pts"], r["tt"], r["pp"], r["err"], args.out, seat=r["seat"])
+                r["full_pts"], r["tt"], r["pp"], r["err"], args.out, seat=r["seat"],
+                show_points=None if args.point == 0 else (args.point - 1,))
     print_errors(name, r)
     print(f"figure saved: {args.out}")
 

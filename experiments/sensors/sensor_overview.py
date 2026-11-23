@@ -25,6 +25,8 @@ def main():
     ap.add_argument("--file", required=True, help="transition file of one scenario, e.g. .../data_transitions_v4/N14.npz")
     ap.add_argument("--people", type=float, nargs=2, default=(40.0, 40.0), metavar=("NOW", "BEFORE"))
     ap.add_argument("--map-t0-min", type=float, default=6.0, help="the maps show the forecast for t0 + 3 min")
+    ap.add_argument("--point", type=int, default=2, choices=(0, 1, 2, 3, 4),
+                    help="which of the four points to show in the lower panel (default 2, the middle of the seating area); 0 = all four")
     ap.add_argument("--out", default="sensor_overview.png")
     ap.add_argument("--device", default="cuda" if torch.cuda.is_available() else "cpu")
     args = ap.parse_args()
@@ -41,7 +43,8 @@ def main():
     marks = data.xyz[data.hist_idx, :2].cpu().numpy()      # the plane points where the sensor values come from
     D.make_figure(r["xy"], r["V"], name, n_now, n_before, r["t_map"], r["truth_map"], r["fc_map"], r["tfull"],
                   r["full_pts"], r["tt"], r["pp"], r["err"], args.out,
-                  title_prefix=f"Sensor model ({args.tag}, sees only the {len(marks)} stars)", marks=marks, seat=r["seat"])
+                  title_prefix=f"Sensor model ({args.tag}, sees only the {len(marks)} stars)", marks=marks, seat=r["seat"],
+                  show_points=None if args.point == 0 else (args.point - 1,))
     D.print_errors(name, r)
     print(f"figure saved: {args.out}")
 
