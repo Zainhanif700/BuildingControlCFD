@@ -15,8 +15,8 @@ was up to 45\,\% different from the original OpenFOAM \cotwo{} at high window sp
 built the dataset again with this correction.
 
 I then simulated 40 more scenarios in which all 8 windows and both doors can be open or closed, and trained the
-model on all 68 scenarios. On 16 scenarios it had never seen, its error is 0.14\,\% in the definition of the paper
-(0.40\,\% when only the \cotwo{} above the outdoor level counts), against 0.44\,\% (1.77\,\%) for
-the simple guess that the \cotwo{} stays as it is now. The stations with \cotwo{} and air speed sensors are being installed only at the windows and
+model on all 68 scenarios. On 16 scenarios it had never seen, its error is 0.14\,\%, while the simple guess that the \cotwo{} stays as it is now has
+0.44\,\%. This is the definition of the paper, which includes the 400~ppm of the outdoor air. Without these
+400~ppm the errors are 0.40\,\% and 1.77\,\%. The stations with \cotwo{} and air speed sensors are being installed only at the windows and
 doors of the room. So I created a second model that sees only these eight stations, together with one \cotwo{}
 sensor in the middle of the room. In the simulation it can warn before the \cotwo{} passes 700 or 800~ppm.

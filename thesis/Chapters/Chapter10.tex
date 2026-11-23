@@ -17,8 +17,8 @@ ventilated through windows. I used only open-source software for the simulations
         runs (in both definitions). The model trained on the corrected data is a little better on the
         corrected test data.
   \item The final model, trained on 52 of the 68 scenarios with all windows and doors, has an error of 0.14\,\%
-        on 16 scenarios it had never seen, in the definition of the paper (0.40\,\% above the outdoor level).
-        Persistence has 0.44\,\% (1.77\,\%).
+        on 16 scenarios it had never seen, and persistence has 0.44\,\% (the definition of the paper, with the
+        400~ppm of the outdoor air). Without these 400~ppm the values are 0.40\,\% and 1.77\,\%.
   \item With only the eight sensor stations of the room, which stand at the walls, a second model has an error of
         about 5 to 6\,\% in the same definition in the simulation, and its warning finds about 80 to 90\,\% of the
         cases where the \cotwo{} passes 700 or 800~ppm within 3~minutes. A sensor in the middle of the room
