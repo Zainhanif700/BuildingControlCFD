@@ -77,20 +77,31 @@ def main():
             pred, fut = keep[t0]
             xy = data.xyz[:, :2].cpu().numpy()
             sim, fc = fut[:, -1].cpu().numpy(), pred[:, -1].cpu().numpy()
-            fig, ax = plt.subplots(1, 3, figsize=(15, 3.6))
+            import os
             vmax = float(max(sim.max(), fc.max()))
-            for a, v, title in ((ax[0], sim, "simulation"), (ax[1], fc, "forecast")):
-                s = a.scatter(xy[:, 0], xy[:, 1], c=v, s=2, vmin=0, vmax=vmax, cmap="viridis")
-                a.set_title(f"CO2 above outdoor [ppm], {title}")
-            fig.colorbar(s, ax=ax[:2], shrink=0.8)
-            d = ax[2].scatter(xy[:, 0], xy[:, 1], c=fc - sim, s=2, cmap="coolwarm", vmin=-0.2 * vmax, vmax=0.2 * vmax)
-            ax[2].set_title("forecast minus simulation [ppm]")
-            fig.colorbar(d, ax=ax[2], shrink=0.8)
+            dmax = max(0.2 * vmax, 1e-6)
+            Vv = data.V[0].cpu().numpy()
+            name = os.path.splitext(os.path.basename(args.file))[0]
+            fig, ax = plt.subplots(1, 3, figsize=(17, 4.8), constrained_layout=True)
+            for a, v, title in ((ax[0], sim, "Simulation (reference)"), (ax[1], fc, "Forecast of the model")):
+                s = a.scatter(xy[:, 0], xy[:, 1], c=v, s=3, vmin=0, vmax=vmax, cmap="viridis")
+                a.set_title(title)
+            cb = fig.colorbar(s, ax=ax[:2], shrink=0.85, pad=0.02)
+            cb.set_label("CO2 above the outdoor level [ppm]")
+            d = ax[2].scatter(xy[:, 0], xy[:, 1], c=fc - sim, s=3, cmap="coolwarm", vmin=-dmax, vmax=dmax)
+            ax[2].set_title("Forecast minus simulation")
+            cb2 = fig.colorbar(d, ax=ax[2], shrink=0.85, pad=0.02)
+            cb2.set_label("difference [ppm] (red: forecast too high, blue: too low)")
             for a in ax:
                 a.set_aspect("equal")
                 a.set_xlabel("x [m]")
-            fig.suptitle(f"{args.file}, last map of the 3-minute forecast, t0 = {t0}")
-            fig.savefig(args.plot, dpi=130, bbox_inches="tight")
+                a.set_ylabel("y [m]")
+            fig.suptitle(
+                f"Scenario {name}: CO2 on the plane at 1.6 m height, 3 minutes ahead (history ends {t0 * F.DT / 60:.1f} min "
+                f"after the window change)\nwindow speeds {[float(v) for v in Vv[:8]]} m/s, doors {[int(v) for v in Vv[8:]]}"
+                f" (1 = open); error of this forecast {100 * rows[t0][0]:.2f} % (persistence {100 * rows[t0][1]:.2f} %); "
+                f"white spots = columns", fontsize=11)
+            fig.savefig(args.plot, dpi=130)
             print(f"figure saved: {args.plot}")
         except Exception as e:  # the figure is optional
             print(f"figure skipped: {e}")
