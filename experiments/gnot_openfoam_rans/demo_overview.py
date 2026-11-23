@@ -19,6 +19,33 @@ from forecast import PlaneData, predict_full, l2_rel, T_OUT, DT, H_IN
 from eval_history_change import load_models
 from plot_forecast import draw_room, room_legend, to_image, POINTS, OFF
 
+SCEN = os.path.join(os.path.dirname(os.path.abspath(__file__)), "scenarios_v4.txt")
+
+
+def pick_file(file, closed, data_dir):
+    """The transition file to use: --file, or the scenario of scenarios_v4.txt whose CLOSED windows (speed 0) are exactly
+    the given ones (an outlet window, speed -1, counts as open). Test scenarios (never seen in training) come first."""
+    if file:
+        return file
+    if closed is None or not data_dir:
+        raise SystemExit("give --file, or --closed (e.g. 4,5) together with --data-dir")
+    want = sorted(int(c) for c in closed.split(",") if c.strip())
+    rows = [l.split() for l in open(SCEN) if l.strip() and not l.startswith("#")]
+    hits = []
+    for r in rows:
+        v = [float(x) for x in r[2].split(",")]
+        if [i + 1 for i, x in enumerate(v) if x == 0] == want and os.path.isfile(os.path.join(data_dir, r[0] + ".npz")):
+            hits.append((r[0], r[1], r[2], r[3]))
+    if not hits:
+        raise SystemExit(f"no simulated scenario has exactly the windows {want} closed (we only have the 68 simulations)")
+    hits.sort(key=lambda h: h[1] != "test")
+    print(f"scenarios with exactly the windows {want} closed: " +
+          ", ".join(f"{n} ({sp})" for n, sp, _, _ in hits), flush=True)
+    name, split, speeds, doors = hits[0]
+    print(f"using {name}: window speeds {speeds} m/s (-1 = outlet window), doors {doors}"
+          + ("" if split == "test" else "  -- NOTE: this scenario was in the TRAINING set"), flush=True)
+    return os.path.join(data_dir, name + ".npz")
+
 
 def ens(models, data, t0, n_now, n_before):
     preds = [predict_full(m, data, 0, t0, n_now, n_before) for m in models]
@@ -27,7 +54,7 @@ def ens(models, data, t0, n_now, n_before):
 
 
 def make_figure(xy, V, name, n_now, n_before, t_map, truth_map, fc_map, tfull, full_pts, tt, pp, err, out,
-                title_prefix="Final model", marks=None, seat=None, show_points=None):
+                title_prefix="Final model", marks=None, seat=None, show_points=None, points=POINTS):
     """xy: plane points, V: 8 window speeds + 2 doors, t_map [min], truth_map / fc_map: CO2 at t_map (ppm, absolute),
     tfull / full_pts: simulated CO2 at the 4 points over time, tt / pp: forecasts made 3 min earlier,
     err: dict with the mean errors (paper / strict, model / persistence).
@@ -47,7 +74,7 @@ def make_figure(xy, V, name, n_now, n_before, t_map, truth_map, fc_map, tfull, f
         img, ext = to_image(xy, val)
         im = ax.imshow(img, origin="lower", extent=ext, cmap=cm, vmin=lim[0], vmax=lim[1])
         fig.colorbar(im, ax=ax, label=cl, fraction=0.04, pad=0.02)
-        draw_room(ax, V)
+        draw_room(ax, [abs(float(v)) for v in V])
         if marks is not None:
             ax.plot(marks[:, 0], marks[:, 1], "k*", ms=9, mfc="yellow", mew=0.8)
         ax.set_title(ttl, fontsize=10)
@@ -79,7 +106,7 @@ def make_figure(xy, V, name, n_now, n_before, t_map, truth_map, fc_map, tfull, f
         ax = fig.add_subplot(gs[1, 0:4])
     pl = fig.add_subplot(gs[1, 4:6])
     ax.axvspan(0, H_IN * DT / 60, color="0.9", label="first 6 min: history only, no forecast yet")
-    for j, (px, py) in enumerate(POINTS):
+    for j, (px, py) in enumerate(points):
         if show_points is not None and j not in show_points:
             continue
         line, = ax.plot(tfull, full_pts[:, j], "-", lw=2, label=f"point {j + 1} (x = {px:g} m, y = {py:g} m): simulation")
@@ -94,7 +121,7 @@ def make_figure(xy, V, name, n_now, n_before, t_map, truth_map, fc_map, tfull, f
                  " over the whole run: simulation (line) and 3-minute forecast (dots)", fontsize=10)
     ax.legend(fontsize=8.5, loc="best")
     ax.grid(alpha=0.3)
-    draw_room(pl, V)
+    draw_room(pl, [abs(float(v)) for v in V])
     if marks is not None:
         pl.plot(marks[:, 0], marks[:, 1], "k*", ms=9, mfc="yellow", mew=0.8)
     handles = room_legend()
@@ -123,11 +150,11 @@ def make_figure(xy, V, name, n_now, n_before, t_map, truth_map, fc_map, tfull, f
     plt.close(fig)
 
 
-def collect(models, data, n_now, n_before, map_t0_min=6.0):
+def collect(models, data, n_now, n_before, map_t0_min=6.0, points=POINTS):
     """Forecasts of all samples whose history is complete (t0 of data.t0s) for scenario 0 of data."""
     xy = data.xyz[:, :2].cpu().numpy()
     V = [float(v) for v in data.V[0].cpu().numpy()]
-    ip = [int(np.argmin((xy[:, 0] - px) ** 2 + (xy[:, 1] - py) ** 2)) for px, py in POINTS]
+    ip = [int(np.argmin((xy[:, 0] - px) ** 2 + (xy[:, 1] - py) ** 2)) for px, py in points]
     (x0, x1), (y0, y1), _ = common.SEAT_BOX
     sm = (xy[:, 0] >= x0) & (xy[:, 0] <= x1) & (xy[:, 1] >= y0) & (xy[:, 1] <= y1)
     full = (data.frames[0] * (n_now / data.N_ref[0]) + data.H[0] * (n_before / data.N_ref[0])).cpu().numpy() + OFF
@@ -156,7 +183,7 @@ def collect(models, data, n_now, n_before, map_t0_min=6.0):
             "ppm_model": float(np.mean(s_err_m)), "ppm_pers": float(np.mean(s_err_p))}
     return {"xy": xy, "V": V, "t_map": (t_map_idx + T_OUT) * DT / 60, "truth_map": truth_map, "fc_map": fc_map,
             "tfull": np.arange(full.shape[0]) * DT / 60, "full_pts": full[:, ip], "tt": np.array(tt), "pp": np.array(pp),
-            "err": err, "n_samples": len(t0s), "seat": seat}
+            "err": err, "n_samples": len(t0s), "seat": seat, "points_used": [tuple(map(float, xy[i])) for i in ip]}
 
 
 def print_errors(name, r):
@@ -172,7 +199,12 @@ def print_errors(name, r):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--ckpt", required=True, help="folder with member0.pth ... member4.pth of the final model")
-    ap.add_argument("--file", required=True, help="transition file of one scenario, e.g. demo/N14.npz")
+    ap.add_argument("--file", default=None, help="transition file of one scenario, e.g. demo/N14.npz")
+    ap.add_argument("--closed", default=None, help="instead of --file: the windows that are closed, e.g. 4,5 (finds the "
+                    "simulated scenario with exactly these windows closed; needs --data-dir)")
+    ap.add_argument("--data-dir", default=None, help="folder with the transition files, e.g. data_transitions_v4")
+    ap.add_argument("--xy", type=float, nargs=2, default=None, metavar=("X", "Y"),
+                    help="show the forecast at this point of the room [m] (x 0 to 15.5, y 0 to 9.2) instead of --point")
     ap.add_argument("--people", type=float, nargs=2, default=(40.0, 40.0), metavar=("NOW", "BEFORE"))
     ap.add_argument("--map-t0-min", type=float, default=6.0, help="the maps show the forecast for t0 + 3 min (default t0 = 6 min)")
     ap.add_argument("--point", type=int, default=2, choices=(0, 1, 2, 3, 4),
@@ -182,15 +214,20 @@ def main():
     args = ap.parse_args()
     dev = torch.device(args.device)
 
+    args.file = pick_file(args.file, args.closed, args.data_dir)
     data = PlaneData([args.file], dev, seed=0, z=1.6, transitions=True)
     models, hist_idx = load_models(args.ckpt, dev)
     assert torch.equal(hist_idx.cpu(), data.hist_idx.cpu()), "history points differ from the training"
     n_now, n_before = args.people
     name = os.path.splitext(os.path.basename(args.file))[0]
-    r = collect(models, data, n_now, n_before, args.map_t0_min)
+    points = [tuple(args.xy)] if args.xy else POINTS
+    show = (0,) if args.xy else (None if args.point == 0 else (args.point - 1,))
+    r = collect(models, data, n_now, n_before, args.map_t0_min, points=points)
+    print("point shown (nearest grid point): " + ", ".join(f"x = {x:.2f} m, y = {y:.2f} m" for x, y in
+                                                           [r["points_used"][i] for i in (show or range(len(points)))]))
     make_figure(r["xy"], r["V"], name, n_now, n_before, r["t_map"], r["truth_map"], r["fc_map"], r["tfull"],
                 r["full_pts"], r["tt"], r["pp"], r["err"], args.out, seat=r["seat"],
-                show_points=None if args.point == 0 else (args.point - 1,))
+                show_points=show, points=points)
     print_errors(name, r)
     print(f"figure saved: {args.out}")
 
