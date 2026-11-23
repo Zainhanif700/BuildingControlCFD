@@ -41,7 +41,7 @@ def main():
     marks = data.xyz[data.hist_idx, :2].cpu().numpy()      # the plane points where the sensor values come from
     D.make_figure(r["xy"], r["V"], name, n_now, n_before, r["t_map"], r["truth_map"], r["fc_map"], r["tfull"],
                   r["full_pts"], r["tt"], r["pp"], r["err"], args.out,
-                  title_prefix=f"Sensor model ({args.tag}, sees only the {len(marks)} stars)", marks=marks)
+                  title_prefix=f"Sensor model ({args.tag}, sees only the {len(marks)} stars)", marks=marks, seat=r["seat"])
     D.print_errors(name, r)
     print(f"figure saved: {args.out}")
 
