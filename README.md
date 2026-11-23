@@ -6,7 +6,7 @@ classroom of our university: I simulate the airflow and the CO₂ in the room, t
 results and forecast the CO₂ of the next 3 minutes from the last 6 minutes. A second model sees only the sensor
 stations of the room. **All results are from simulation; there is no real sensor data yet.**
 
-## Start here (version 2026-11-23b)
+## Start here (version 2026-11-23c)
 
 **Which version do I have?** Versions are named by their date (`v2026-11-23`; a second version on the same day gets a
 letter). [`CHANGELOG.md`](CHANGELOG.md) lists every change with its date, and a script that I changed has an "Updated"
@@ -85,7 +85,8 @@ temperature is not simulated. The data has **68 window settings** (52 for traini
 | "CO₂ stays as it is now" (persistence) | 1.77 % | 0.44 % |
 | Sensor model (8 stations), random splits | about 32 % | about 5–6 % |
 
-With a window change inside the history the final model has a strict error of 21.3 % (persistence 40.1 %). The warning of
+With a window change inside the history the final model has a strict error of 21.3 % (persistence 40.1 %); in the first
+minute after the change it is still weak (48 % against 100 %). The warning of
 the sensor model finds about 87–91 % of the real cases at 700 ppm with a margin of 30–40 ppm, with about 2–5 % false alarms.
 Details, tables and limits: `thesis/Thesis.pdf`. **Time** (measured): OpenFOAM for the first 150 s of one setting about
 2 h 15 min on 4 cores; a full 600 s run on one core 15–90 h; the CO₂ solver 1.25–4 h per setting on the GPU; training 5
@@ -113,8 +114,9 @@ cd ../gnot_openfoam_rans
 python3 train_forecast.py --data-dir data_transitions_v4 --transitions --scenarios scenarios_v4.txt \
     --tag v4_tr_tau09_long --z 1.6 --c-offset 400 --open-flags --pad-prob 0.9 --tau --iters 40000
 
-# 4. test with a window change inside the history
+# 4. test with a window change inside the history (and the bound of a simple mixing-box rule, no model, about 1 minute)
 python3 eval_history_change.py --ckpt checkpoints/v4_tr_tau09_long --data-dir data_transitions_v4 --scenarios scenarios_v4.txt
+python3 oracle_mean_bound.py --data-dir data_transitions_v4 --scenarios scenarios_v4.txt
 
 # 5. sensor model and warning (all scripts and tests: experiments/sensors/README.md)
 cd ../sensors

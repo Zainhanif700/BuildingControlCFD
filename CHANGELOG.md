@@ -3,6 +3,14 @@
 Versions are named by their date, `vYYYY-MM-DD`. The newest entry is on top. A script that was changed has an
 "Updated" line with the date in its first lines. Older changes: `git log`.
 
+## v2026-11-23c
+- `experiments/gnot_openfoam_rans/README_batch.md` rewritten in simpler words, with a table "Which script do I use?".
+- New short READMEs for the details that are no longer in the main README: `experiments/co2_sampling/README.md` (how the
+  dataset is made, `collect_v4.sh`, `server_run.sh`, `build_v3.py`) and `experiments/pinn/README.md`; the sensor README
+  lists the scripts `warning_rules.py`, `lecture_demo.py` and `diagnose_position.py` again.
+- `README.md`: two details put back (the weak first minute after a window change; `oracle_mean_bound.py` in step 4).
+  No code changed.
+
 ## v2026-11-23b
 - `README.md` restructured and shortened (from 261 to 143 lines): "Start here" with the three levels first, then
   what is where, the room and the data, the method, the results, how to run, limits. The instructions for reproducing the

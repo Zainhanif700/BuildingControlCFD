@@ -14,6 +14,11 @@ runs on simulated data; the real stations are not delivering data yet.
 | `train_sensor.py` | Trains it (5 members by default). |
 | `diagnose_sensor.py` | Errors per scenario, error in ppm, the warning test, error by time. |
 | `demo_chain.py` | The whole path: sensor file, reader, mapper, trained model, forecast, compared with the simulation. |
+| `sensor_forecast.py` | Forecast at any point of the room from a sensor file (input: the last 6 min of the 8 stations; output: the next 3 min); makes one overview image. |
+| `sensor_overview.py` | Overview image for a trained sensor model on one test setting (maps, seating-area average, one point). |
+| `warning_rules.py` | Found cases and false alarms for other warning rules (no training; uses trained sensor models). |
+| `lecture_demo.py` | A synthetic lecture (420 ppm start, students come and go) through the whole chain, with the warning. |
+| `diagnose_position.py` | How well a place in the room tells the average CO2 of the seating area (why one place gives no gain). |
 | `test_sensors.py` | Small tests with fake data. They run on a CPU in a few minutes. |
 | `run_*.sh` | The test series I ran (each script says what it does in its first lines). |
 
