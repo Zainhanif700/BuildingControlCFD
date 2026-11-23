@@ -26,10 +26,12 @@ def ens(models, data, t0, n_now, n_before):
             preds[0][2].cpu().numpy())
 
 
-def make_figure(xy, V, name, n_now, n_before, t_map, truth_map, fc_map, tfull, full_pts, tt, pp, err, out):
+def make_figure(xy, V, name, n_now, n_before, t_map, truth_map, fc_map, tfull, full_pts, tt, pp, err, out,
+                title_prefix="Final model", marks=None):
     """xy: plane points, V: 8 window speeds + 2 doors, t_map [min], truth_map / fc_map: CO2 at t_map (ppm, absolute),
     tfull / full_pts: simulated CO2 at the 4 points over time, tt / pp: forecasts made 3 min earlier,
-    err: dict with the mean errors (paper / strict, model / persistence)."""
+    err: dict with the mean errors (paper / strict, model / persistence).
+    marks: optional (n, 2) positions that are drawn as black stars (the sensors of the sensor model)."""
     fig = plt.figure(figsize=(17, 11), constrained_layout=True)
     gs = fig.add_gridspec(2, 6, height_ratios=[1, 1])
     vmin, vmax = float(np.nanmin(truth_map)), float(np.nanmax(truth_map))
@@ -44,6 +46,8 @@ def make_figure(xy, V, name, n_now, n_before, t_map, truth_map, fc_map, tfull, f
         im = ax.imshow(img, origin="lower", extent=ext, cmap=cm, vmin=lim[0], vmax=lim[1])
         fig.colorbar(im, ax=ax, label=cl, fraction=0.04, pad=0.02)
         draw_room(ax, V)
+        if marks is not None:
+            ax.plot(marks[:, 0], marks[:, 1], "k*", ms=9, mfc="yellow", mew=0.8)
         ax.set_title(ttl, fontsize=10)
         ax.set_xlabel("x: room length [m]")
         ax.set_ylabel("y: room width [m]")
@@ -63,19 +67,60 @@ def make_figure(xy, V, name, n_now, n_before, t_map, truth_map, fc_map, tfull, f
     ax.legend(fontsize=8.5, loc="lower right")
     ax.grid(alpha=0.3)
     draw_room(pl, V)
+    if marks is not None:
+        pl.plot(marks[:, 0], marks[:, 1], "k*", ms=9, mfc="yellow", mew=0.8)
     pl.set_title("positions of the four points (top view, 1.6 m)", fontsize=10)
     pl.set_xlabel("x [m]")
     pl.set_ylabel("y [m]")
-    pl.legend(handles=room_legend(), fontsize=8, loc="upper center", bbox_to_anchor=(0.5, -0.25), ncol=4, frameon=False)
+    handles = room_legend()
+    if marks is not None:
+        from matplotlib.lines import Line2D
+        handles.append(Line2D([], [], marker="*", ls="", markerfacecolor="yellow", markeredgecolor="black", ms=10,
+                              label="sensor"))
+    pl.legend(handles=handles, fontsize=8, loc="upper center", bbox_to_anchor=(0.5, -0.25), ncol=3, frameon=False)
 
     wins = [round(float(v), 2) for v in V[:8]]
     fig.suptitle(
-        f"Final model, test scenario {name}: forecast of the CO$_2$ in the whole room, {n_now:g} people (before the window change: "
+        f"{title_prefix}, test scenario {name}: forecast of the CO$_2$ in the whole room, {n_now:g} people (before the window change: "
         f"{n_before:g})\nwindow speeds {wins} m/s, doors {[int(v) for v in V[8:]]} (1 = open). Mean error over all samples "
         f"(paper definition / strict): model {100 * err['paper_model']:.2f} % / {100 * err['strict_model']:.2f} %, "
         f"persistence {100 * err['paper_pers']:.2f} % / {100 * err['strict_pers']:.2f} %", fontsize=11)
     fig.savefig(out, dpi=130)
     plt.close(fig)
+
+
+def collect(models, data, n_now, n_before, map_t0_min=6.0):
+    """Forecasts of all samples whose history is complete (t0 of data.t0s) for scenario 0 of data."""
+    xy = data.xyz[:, :2].cpu().numpy()
+    V = [float(v) for v in data.V[0].cpu().numpy()]
+    ip = [int(np.argmin((xy[:, 0] - px) ** 2 + (xy[:, 1] - py) ** 2)) for px, py in POINTS]
+    full = (data.frames[0] * (n_now / data.N_ref[0]) + data.H[0] * (n_before / data.N_ref[0])).cpu().numpy() + OFF
+    t0s = data.t0s[0]
+    t_map_idx = min(max(int(round(map_t0_min * 60 / DT)), t0s[0]), t0s[-1])
+    tt, pp, em, bm, es, bs = [], [], [], [], [], []
+    truth_map = fc_map = None
+    for t0 in t0s:
+        p, f, h = ens(models, data, t0, n_now, n_before)
+        tt.append((t0 + T_OUT) * DT / 60)
+        pp.append(p[ip, -1] + OFF)
+        base = np.repeat(h[:, -1:], T_OUT, 1)
+        em.append(float(l2_rel(torch.tensor(p + OFF), torch.tensor(f + OFF))))
+        bm.append(float(l2_rel(torch.tensor(base + OFF), torch.tensor(f + OFF))))
+        es.append(float(l2_rel(torch.tensor(p), torch.tensor(f))))
+        bs.append(float(l2_rel(torch.tensor(base), torch.tensor(f))))
+        if t0 == t_map_idx:
+            truth_map, fc_map = f[:, -1] + OFF, p[:, -1] + OFF
+    err = {"paper_model": np.mean(em), "paper_pers": np.mean(bm), "strict_model": np.mean(es), "strict_pers": np.mean(bs)}
+    return {"xy": xy, "V": V, "t_map": (t_map_idx + T_OUT) * DT / 60, "truth_map": truth_map, "fc_map": fc_map,
+            "tfull": np.arange(full.shape[0]) * DT / 60, "full_pts": full[:, ip], "tt": np.array(tt), "pp": np.array(pp),
+            "err": err, "n_samples": len(t0s)}
+
+
+def print_errors(name, r):
+    e = r["err"]
+    print(f"{name}: {r['n_samples']} samples; paper definition: model {100 * e['paper_model']:.3f} %, persistence "
+          f"{100 * e['paper_pers']:.3f} %; strict: model {100 * e['strict_model']:.2f} %, persistence "
+          f"{100 * e['strict_pers']:.2f} %")
 
 
 def main():
@@ -94,32 +139,10 @@ def main():
     assert torch.equal(hist_idx.cpu(), data.hist_idx.cpu()), "history points differ from the training"
     n_now, n_before = args.people
     name = os.path.splitext(os.path.basename(args.file))[0]
-    xy = data.xyz[:, :2].cpu().numpy()
-    V = [float(v) for v in data.V[0].cpu().numpy()]
-    ip = [int(np.argmin((xy[:, 0] - px) ** 2 + (xy[:, 1] - py) ** 2)) for px, py in POINTS]
-    full = (data.frames[0] * (n_now / data.N_ref[0]) + data.H[0] * (n_before / data.N_ref[0])).cpu().numpy() + OFF
-
-    t0s = data.t0s[0]                                   # all samples with the whole history after the window change
-    t_map_idx = min(max(int(round(args.map_t0_min * 60 / DT)), t0s[0]), t0s[-1])
-    tt, pp, em, bm, es, bs = [], [], [], [], [], []
-    truth_map = fc_map = None
-    for t0 in t0s:
-        p, f, h = ens(models, data, t0, n_now, n_before)
-        tt.append((t0 + T_OUT) * DT / 60)
-        pp.append(p[ip, -1] + OFF)
-        base = np.repeat(h[:, -1:], T_OUT, 1)
-        em.append(float(l2_rel(torch.tensor(p + OFF), torch.tensor(f + OFF))))
-        bm.append(float(l2_rel(torch.tensor(base + OFF), torch.tensor(f + OFF))))
-        es.append(float(l2_rel(torch.tensor(p), torch.tensor(f))))
-        bs.append(float(l2_rel(torch.tensor(base), torch.tensor(f))))
-        if t0 == t_map_idx:
-            truth_map, fc_map = f[:, -1] + OFF, p[:, -1] + OFF
-    err = {"paper_model": np.mean(em), "paper_pers": np.mean(bm), "strict_model": np.mean(es), "strict_pers": np.mean(bs)}
-    make_figure(xy, V, name, n_now, n_before, (t_map_idx + T_OUT) * DT / 60, truth_map, fc_map,
-                np.arange(full.shape[0]) * DT / 60, full[:, ip], np.array(tt), np.array(pp), err, args.out)
-    print(f"{name}: {len(t0s)} samples; paper definition: model {100 * err['paper_model']:.3f} %, persistence "
-          f"{100 * err['paper_pers']:.3f} %; strict: model {100 * err['strict_model']:.2f} %, persistence "
-          f"{100 * err['strict_pers']:.2f} %")
+    r = collect(models, data, n_now, n_before, args.map_t0_min)
+    make_figure(r["xy"], r["V"], name, n_now, n_before, r["t_map"], r["truth_map"], r["fc_map"], r["tfull"],
+                r["full_pts"], r["tt"], r["pp"], r["err"], args.out)
+    print_errors(name, r)
     print(f"figure saved: {args.out}")
 
 
