@@ -1,0 +1,89 @@
+\chapter{Practical workflow}
+\label{app:workflow}
+
+This appendix explains in which order I ran the code, so that somebody else can repeat the work. The steps are the
+same as in \fref{fig:pipeline}. The code is in my repository \url{https://github.com/Zainhanif700/BuildingControlCFD}. Its
+\texttt{README.md} starts with a short section ``Start here'', and the file \texttt{CHANGELOG.md} lists every change
+with its date. The versions are named by their date (for example \texttt{v2026-11-23}), and a script that I changed
+has an ``Updated'' line with the date in its first lines. With this, nobody has to guess whether a copy of the code is
+the current one.
+
+\section{Three levels}
+Repeating everything takes a long time. So I prepared three levels, from small to big (\tref{tab:levels}).
+
+\begin{table}[h]
+  \centering
+  \caption[Three levels to repeat the work.]{Three levels to repeat the work. The time of level 1 is measured on our lab
+  computer. The training time of level 2 is estimated from the times of the saved files, and the times of level 3 are rough
+  estimates.}
+  \label{tab:levels}
+  \small
+  \begin{tabular}{>{\raggedright\arraybackslash}p{1.9cm}>{\raggedright\arraybackslash}p{4.6cm}>{\raggedright\arraybackslash}p{3.0cm}>{\raggedright\arraybackslash}p{3.1cm}}
+    \toprule
+    Level & What you do & You need & Time\\
+    \midrule
+    1. Demo & The final model forecasts one test setting (nothing is trained), and OpenFOAM runs one setting for 20~s
+      & Python; OpenFOAM v2412 for the OpenFOAM part & OpenFOAM part about 10~minutes on 4 cores; the forecast is short\\
+    2. Model only & Train the final model again from the \cotwo{} data of the 68 settings and test it
+      & a GPU; the data of the 68 settings (about 1~GB) & training about 3~hours (5 networks)\\
+    3. Full repeat & All 68 OpenFOAM simulations, then the \cotwo{} on the GPU, then the training
+      & many CPU cores and a GPU & several days of OpenFOAM, then more days for the \cotwo{}\\
+    \bottomrule
+  \end{tabular}
+\end{table}
+
+\noindent Level 1 is one command, \texttt{bash run\_demo.sh}, in the folder
+\texttt{experiments/\allowbreak gnot\_\allowbreak openfoam\_\allowbreak rans}. The
+trained model and one test setting are in the folder \texttt{demo}. The two parts of the demo do not depend on each
+other: the 20~s OpenFOAM run does not feed the model. The demo prints the error of the forecast and the error of the simple
+guess that the \cotwo{} stays as it is now, and it saves a picture of the forecast.
+
+\section{The steps of the full workflow}
+\tref{tab:steps} shows the steps of level 3 in the order in which I ran them. The commands with all options are in the
+\texttt{README.md}.
+
+\begin{table}[h]
+  \centering
+  \caption[Steps of the full workflow.]{Steps of the full workflow. The times are the ones I measured, for one setting.}
+  \label{tab:steps}
+  \small
+  \begin{tabular}{p{0.6cm}p{3.7cm}p{4.0cm}p{4.2cm}}
+    \toprule
+    & What happens & Script & Time\\
+    \midrule
+    1 & Describe the window settings: one line per setting (name, train or test, speeds at the 8 windows, doors)
+      & \texttt{scenarios\_v4.txt} & --\\
+    2 & Simulate the airflow with OpenFOAM (CPU)
+      & \texttt{run\_full\_case.sh} & 15--90~h on one core, 2.7 times faster on 4 cores\\
+    3 & Compute the \cotwo{} for 30~minutes on the GPU (dataset file)
+      & \texttt{build\_v4.py} & 1.25--4~h on the GPU\\
+    4 & Build the transition files (a run starts from the \cotwo{} of another setting)
+      & \texttt{build\_v4.py} (with \texttt{--trans-out}) & minutes\\
+    5 & Train the forecast model (5 networks)
+      & \texttt{train\_forecast.py} & about 38~min per network on an RTX A2000\\
+    6 & Test the model, also with a window change inside the history
+      & \texttt{train\_forecast.py}, \texttt{eval\_history\_change.py} & minutes\\
+    7 & Sensor model: train, test, warning
+      & \texttt{train\_sensor.py}, \texttt{diagnose\_sensor.py} & see \cref{ch:sensors}\\
+    \bottomrule
+  \end{tabular}
+\end{table}
+
+\noindent Step 2 needs OpenFOAM v2412 from openfoam.com. The versions from openfoam.org (12, 13, 14) are a different
+program and do not work with my cases. Steps 3 to 7 need Python with PyTorch (the packages are in
+\texttt{requirements.txt}) and a GPU. For the OpenFOAM part there is also a Docker image (the file \texttt{Dockerfile}).
+The data files and the trained networks are large and are not in the repository, except the small demo.
+
+\section{Where I tested it}
+All steps run on our lab computer (Linux). The demo of level 1 was tested there in a clean copy of the repository. The
+OpenFOAM part also ran on a Mac and, in the Docker image, on a DGX Spark (the 20~s test of all 28 settings of the second
+setup).
+
+\section{If something goes wrong}
+\begin{itemize}
+  \item If an OpenFOAM script stops without a message, I start it again with \texttt{TRACE=1} in front of the command. The log
+        then shows every command with the time and the line.
+  \item A finished setting gets a file \texttt{done} and is skipped when the script is started again. A stopped run continues
+        where it stopped.
+  \item One finished case needs about 2--4~GB. For many settings it is best to run one setting per core.
+\end{itemize}

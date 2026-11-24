@@ -69,11 +69,12 @@ test samples.
 The value of $c$ can be defined in two ways. In the definition of the paper, $c$ is the total \cotwo{} in ppm,
 including the 400~ppm of the outdoor air. I checked this in the data of the paper: the values to forecast lie
 between 396 and 1,109~ppm. The second definition counts only the \cotwo{} above the outdoor level, so $c$ is
-the total value minus 400~ppm. The 400~ppm are always there and nobody has to forecast them, so the second
-definition is stricter and shows better what the model has learned.
+the total value minus 400~ppm. The 400~ppm are part of both the forecast and the simulated value, so they cannot
+cause an error. The second definition divides by the part that changes, so it is stricter and shows better what the
+model has learned.
 
-Both definitions use the same mistake in ppm, but they divide it by a different number. An example: the
-\cotwo{} will be 610~ppm, and the model says 609~ppm. The mistake is 1~ppm. In the definition of the paper
+Both definitions use the same difference in ppm, but they divide it by a different number. An example: the
+\cotwo{} will be 610~ppm, and the model says 609~ppm. The difference is 1~ppm. In the definition of the paper
 the error is $1/610 = 0.16\,\%$, and above the outdoor level it is $1/210 = 0.5\,\%$. So the paper's definition
 gives smaller percentages for every model. For my reproduction of the paper the two definitions give 11.46\,\%
 and 29.8\,\% (\cref{ch:repro}).
@@ -106,7 +107,7 @@ when the average \cotwo{} in the seating area really passes the limit within the
 \emph{false alarm}.
 
 \subsection*{What the errors mean}
-All errors in this thesis are measured against my simulated data. They show how well the model has learned the
-simulation. They do not show how close the simulation is to the real room, because I have no measurements from
-the room with the new sensors yet. I chose some settings of the sensor model on the first split, so I use the
-random splits as the fairer numbers.
+All errors in this thesis are measured against my simulated data. Because I have no measurements from the room with
+the new sensors yet, they show how well the model has learned the simulation, and the comparison with the real room
+is the next step. I chose some settings of the sensor model on the first split, so I use the random splits as the
+fairer numbers.
