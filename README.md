@@ -3,7 +3,7 @@
 <p align="center"><em>with a neural operator (GNOT), OpenFOAM simulations and sensor stations</em></p>
 
 <p align="center">
-  Version <b>v2026-11-24</b> &nbsp;·&nbsp; updated <b>24 November 2026</b> &nbsp;·&nbsp; <a href="CHANGELOG.md">changelog</a> &nbsp;·&nbsp; <a href="thesis/Thesis.pdf">thesis (PDF)</a>
+  Version <b>v2026-11-24b</b> &nbsp;·&nbsp; updated <b>24 November 2026</b> &nbsp;·&nbsp; <a href="CHANGELOG.md">changelog</a> &nbsp;·&nbsp; <a href="thesis/Thesis.pdf">thesis (PDF)</a>
 </p>
 
 <p align="center">
@@ -33,7 +33,8 @@ copy is older than the top entry, download it again.
 
 | Version | Date | Main change |
 |---|---|---|
-| **v2026-11-24** | 24 Nov 2026 | README redesigned; learning-curve script for the final setup |
+| **v2026-11-24b** | 24 Nov 2026 | code cleanup: 18 obsolete scripts removed, experiment runners moved into `runs/` folders |
+| v2026-11-24 | 24 Nov 2026 | README redesigned; learning-curve script for the final setup |
 | v2026-11-23c | 23 Nov 2026 | simpler READMEs for the batch scripts, the dataset and the sensor code |
 | v2026-11-23b | 23 Nov 2026 | README shortened, "Start here" with the three levels |
 | v2026-11-23 | 23 Nov 2026 | demo (`run_demo.sh`), `TRACE=1` option, changelog |
@@ -75,7 +76,10 @@ bash run_demo.sh            # both; they are independent, the 20 s run does not 
 experiments/gnot_openfoam_rans/   OpenFOAM cases, CO2 solver, forecast model, its training, the demo
 experiments/co2_sampling/         the final dataset: OpenFOAM with a save every second, CO2 build, server script
 experiments/sensors/              the sensor model, warning tests, forecast from a sensor file (see its README.md)
+experiments/*/runs/               the experiment runners that made the thesis results (training series, mesh study, tests)
 experiments/pinn/                 training without data (physics only): tried, not used
+experiments/gpu_lbm/              GPU lattice-Boltzmann solver: tried, not used
+experiments/openfoam_versions/    comparison of OpenFOAM versions
 thesis/                           LaTeX source of the thesis
 Dockerfile, requirements.txt      OpenFOAM v2412 + Python in a container; Python packages
 learning/ simulation/ control/ local/ scripts/   original code of the paper (see learning/README.md)
@@ -169,7 +173,7 @@ python3 diagnose_sensor.py --data-dir ../gnot_openfoam_rans/data_transitions_v4 
 ```
 
 The older `run_batch.sh` saves the flow only every 10 s and should not be used for new data. The learning curve of the final
-setup (13, 26 and 39 training settings) is `experiments/gnot_openfoam_rans/run_learning_curve_v4.sh`.
+setup (13, 26 and 39 training settings) is `experiments/gnot_openfoam_rans/runs/run_learning_curve_v4.sh`.
 
 ---
 

@@ -3,6 +3,15 @@
 Versions are named by their date, `vYYYY-MM-DD`. The newest entry is on top. A script that was changed has an
 "Updated" line with the date in its first lines. Older changes: `git log`.
 
+## v2026-11-24b (24 Nov 2026)
+- Cleanup of `experiments/`: 18 obsolete scripts removed (pilot checks of the first phase, the old dataset batch scripts,
+  one-off tests; they referred to pilot cases and folders that no longer exist). The tag `v2026-11-24` has them.
+- The experiment runners that made the thesis results moved into `runs/` folders: 10 in `experiments/gnot_openfoam_rans/runs/`
+  (for example `run_tau_final.sh`, `run_mesh_study.sh`, `run_learning_curve_v4.sh`) and 15 in `experiments/sensors/runs/`. They
+  change into the folder above, so the commands only get the prefix `runs/` (for example `bash runs/run_tau_final.sh`).
+- `README.md`: "What is where" now lists `runs/`, `gpu_lbm/` and `openfoam_versions/`.
+- `forecast.py`: the sensor model with the physics token runs again; `test_sensors.py` passes (the three tests of the README, step 0, pass).
+
 ## v2026-11-24 (24 Nov 2026)
 - Added `experiments/gnot_openfoam_rans/run_learning_curve_v4.sh`: the learning curve of the final setup (same training
   as the final model with 13, 26 and 39 of the 52 training settings, same 16 test settings).

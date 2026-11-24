@@ -20,7 +20,7 @@ runs on simulated data; the real stations are not delivering data yet.
 | `lecture_demo.py` | A synthetic lecture (420 ppm start, students come and go) through the whole chain, with the warning. |
 | `diagnose_position.py` | How well a place in the room tells the average CO2 of the seating area (why one place gives no gain). |
 | `test_sensors.py` | Small tests with fake data. They run on a CPU in a few minutes. |
-| `run_*.sh` | The test series I ran (each script says what it does in its first lines). |
+| `runs/run_*.sh` | The test series I ran (each script says what it does in its first lines; start them as `bash runs/run_final.sh <data dir> <scenario file>`). |
 
 ## Quick start
 ```
@@ -33,4 +33,4 @@ The data files and the trained models are not in the repository (they are large)
 `experiments/co2_sampling/run_full_case.sh` (OpenFOAM with a save every second, then my CO2 solver).
 
 ## Results so far (simulation only)
-See the thesis chapter on the sensors (chapter 9). The tests in `run_*.sh` give the numbers.
+See the thesis chapter on the sensors (chapter 9). The tests in `runs/run_*.sh` give the numbers.

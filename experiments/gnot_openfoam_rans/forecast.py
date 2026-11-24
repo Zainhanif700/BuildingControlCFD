@@ -124,7 +124,7 @@ class ForecastGNOT(nn.Module):
         f = self.ff(xyz.reshape(-1, 3)).reshape(B, M, -1)
         last = hist[..., -1:]
         parts = [f, last / self.c_scale, (hist[..., :-1] - last) / self.d_scale]
-        if self.physics:
+        if self.physics and ceq is not None:       # the sensor model has its own physics token and passes no ceq
             parts.append((ceq.reshape(B, 1, 1) - last) / self.c_scale)
         return torch.cat(parts, -1)
 

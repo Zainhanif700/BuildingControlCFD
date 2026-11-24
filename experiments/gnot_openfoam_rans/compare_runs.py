@@ -1,5 +1,5 @@
 """
-Compares the runs of speed_test.sh: wall time and the difference of U, nut and CO2 (s) to a reference run.
+Compares the runs of runs/speed_test.sh: wall time and the difference of U, nut and CO2 (s) to a reference run.
 Usage: python3 compare_runs.py speedtest/N12 current_1
 """
 import argparse
