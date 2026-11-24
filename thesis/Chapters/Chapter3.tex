@@ -87,33 +87,30 @@ The model is simpler than the real room in some points:
   \item When a door is closed, the small gap under it is ignored.
   \item The temperature is not simulated, so warm air does not rise in the model. \citet{bian2025} also assume
         a constant air density and leave out buoyancy, because the air that is pushed in by the ventilation is much
-        stronger. For open windows on a
-        cold day it can matter more.
+        stronger.
 \end{itemize}
 
 \section{Mesh study}
 In the very first setup I used a mesh with 10~cm cells. To check if this is good enough for our model, I
 simulated two different scenarios with 15, 10 and 8~cm cells and compared the results at 600~s with the 8~cm
 mesh (\tref{tab:mesh}). The table below shows the difference of the velocity in the whole room and of the
-\cotwo{} at 1.6~m height. I checked the \cotwo{} with two numbers. The first one uses only the \cotwo{} above
-the outdoor level. The second one is the same as in the paper, which includes the 400~ppm of the outdoor air as
-well, which is why the error is smaller. The last column is the total \cotwo{} in the room divided by the value
-of the 8~cm mesh. The 8~cm mesh is the reference, so its differences are zero and its total is 1.
+\cotwo{} at 1.6~m height. I checked the \cotwo{} with two numbers. The first one is the same as in the paper,
+which includes the 400~ppm of the outdoor air. The second one uses only the \cotwo{} above the outdoor level,
+which is why its error is larger. The last column is the total \cotwo{} in the room divided by the value
+of the 8~cm mesh. The 8~cm mesh (856,284 cells) is the reference, so it is not in the table.
 
 \begin{table}[h]
   \centering
-  \caption{Mesh study, difference to the 8~cm mesh.}
+  \caption{Mesh study, difference to the 8~cm mesh (856,284 cells).}
   \label{tab:mesh}
   \begin{tabular}{llrrrrr}
     \toprule
-    Scenario & Mesh & Cells & Velocity & \cotwo{} at 1.6~m & Paper metric & Total \cotwo{}\\
+    Scenario & Mesh & Cells & Velocity & Paper metric & \cotwo{} at 1.6~m & Total \cotwo{}\\
     \midrule
-    S02 & 15~cm & 132,258 & 25.8\,\% & 47.3\,\% & 5.47\,\% & 1.004\\
-        & 10~cm & 438,929 & 22.7\,\% & 42.4\,\% & 4.91\,\% & 0.931\\
-        & 8~cm & 856,284 & -- & -- & -- & 1.000\\
-    S08 & 15~cm & 132,258 & 28.6\,\% & 36.7\,\% & 1.54\,\% & 0.749\\
-        & 10~cm & 438,929 & 40.4\,\% & 38.3\,\% & 1.60\,\% & 0.697\\
-        & 8~cm & 856,284 & -- & -- & -- & 1.000\\
+    S02 & 15~cm & 132,258 & 25.8\,\% & 5.47\,\% & 47.3\,\% & 1.004\\
+        & 10~cm & 438,929 & 22.7\,\% & 4.91\,\% & 42.4\,\% & 0.931\\
+    S08 & 15~cm & 132,258 & 28.6\,\% & 1.54\,\% & 36.7\,\% & 0.749\\
+        & 10~cm & 438,929 & 40.4\,\% & 1.60\,\% & 38.3\,\% & 0.697\\
     \bottomrule
   \end{tabular}
 \end{table}

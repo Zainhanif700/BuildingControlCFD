@@ -18,7 +18,8 @@ equations, which describe how air moves under pressure and friction.
 
 The air that comes through an open window is turbulent, so it has many small eddies. These eddies are much
 smaller than the cells of the mesh and cannot be calculated directly. A RANS model calculates only the mean
-flow and describes the eddies with a turbulent viscosity $\nu_t$. I use the k-$\omega$ SST model of
+flow and describes the eddies with a turbulent viscosity $\nu_t$. This is not a property of the air: it is a number
+for each cell that says how strongly the eddies mix the air there. I use the k-$\omega$ SST model of
 \citet{menter1994}, like \citet{bian2025}. It is a common model for indoor airflow. It has two more equations,
 one for the turbulent kinetic energy $k$ and one for the dissipation rate $\omega$, and $\nu_t$ is calculated
 from these two.
@@ -39,7 +40,10 @@ and the people act as a \cotwo{} source. This is described by
   \label{eq:co2}
 \end{equation}
 where $c$ is the \cotwo{} above the outdoor level in ppm, $\mathbf{u}$ the air velocity, $D$ the diffusivity
-of \cotwo{} in air, $\mathrm{Sc}_t$ the turbulent Schmidt number and $S$ the \cotwo{} from the people. Two
+of \cotwo{} in air, $\nu_t$ the turbulent viscosity from the flow model (it is large where the air is turbulent, for
+example behind an open window, and almost zero where the air is calm), $\mathrm{Sc}_t$ the turbulent Schmidt number
+and $S$ the \cotwo{} from the people. The term $\nu_t/\mathrm{Sc}_t$ is the extra mixing of the \cotwo{} by the eddies.
+It is added to the normal diffusion $D$. Two
 things in this equation are important for my work. The \cotwo{} is proportional to the number of people, so
 one simulation with 20 people is enough for any number of people. And the \cotwo{} does not change the
 airflow, so I can calculate the airflow first and the \cotwo{} after it.

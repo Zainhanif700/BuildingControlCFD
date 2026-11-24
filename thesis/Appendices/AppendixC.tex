@@ -1,83 +1,235 @@
 \chapter{Practical workflow}
 \label{app:workflow}
+\begingroup\emergencystretch=3em
 
-This appendix explains in which order I ran the code, so that somebody else can repeat the work. The steps are the
-same as in \fref{fig:pipeline}. The code is in my repository \url{https://github.com/Zainhanif700/BuildingControlCFD}. Its
-\texttt{README.md} starts with a short section ``Start here'', and the file \texttt{CHANGELOG.md} lists every change
-with its date. The versions are named by their date (for example \texttt{v2026-11-23}), and a script that I changed
-has an ``Updated'' line with the date in its first lines. With this, nobody has to guess whether a copy of the code is
-the current one.
+This appendix explains step by step how the code works and how the steps are connected, so that somebody else can
+repeat the work. The steps are the same as in \fref{fig:pipeline}. Here I add the names of the scripts and of the
+files that go from one step to the next. The code is in my repository
+\url{https://github.com/Zainhanif700/BuildingControlCFD}. Its \texttt{README.md} has the commands with all options, and the
+file \texttt{CHANGELOG.md} lists every change with its date. The versions are named by their date (for example
+\texttt{v2026-11-23}), and a script that I changed has an ``Updated'' line with the date in its first lines. With this,
+nobody has to guess whether a copy of the code is the current one. The reasons for the choices in the steps are given in the
+chapters: the room and the airflow simulations in \cref{ch:room}, the \cotwo{} solver and the dataset in \cref{ch:dataset},
+the forecast model in \cref{ch:model}, the results in \cref{ch:results}, the computing times in \cref{ch:notused} and
+the sensor model in \cref{ch:sensors}.
 
-\section{Three levels}
-Repeating everything takes a long time. So I prepared three levels, from small to big (\tref{tab:levels}).
+\section{The idea: every step reads files and writes files}
+The whole work is a chain. Every script reads the files that the step before it has written, and it writes the files for
+the next step. The steps are connected only through these files. Because of this, a step can be started again alone
+(for example the training with other options) without repeating the steps before it, and every result can be traced back to
+the file with the window settings. \fref{fig:codeflow} shows the chain. The blue boxes are programs, the green boxes are
+files or folders.
 
+\begin{figure}[h]
+  \centering
+  \includegraphics[width=\textwidth]{code_flow.png}
+  \caption[Code flow: scripts and files.]{Code flow. Blue: programs. Green: the files and folders that one program writes and
+  the next one reads. The upper two rows are the data (once for every window setting), the right column is the
+  forecast model, and the lower left row is the sensor model, which is trained on the same transition files.}
+  \label{fig:codeflow}
+\end{figure}
+
+\noindent The folders are in my repository: the OpenFOAM cases, the CO$_2$ solver, the forecast model and its training are in
+\texttt{experiments/\allowbreak gnot\_\allowbreak openfoam\_\allowbreak rans}, the scripts that make the dataset are in
+\texttt{experiments/\allowbreak co2\_\allowbreak sampling}, and the sensor model is in \texttt{experiments/\allowbreak sensors}.
+The test series of the thesis (mesh study, comparison of the inputs, learning curve and others) are scripts in the
+folders \texttt{runs}. Each of them says in its first lines what it does.
+
+\section{Step 1: the window settings}
+A ``setting'' is one combination of open windows and doors. The file \texttt{scenarios\_v4.txt} has one line per setting:
+the name, whether it is for training or for testing, the air speed at each of the 8 windows (a positive number is air
+coming in, 0 is a closed window, $-1$ is a window that lets air out) and the state of the two doors. There are 68 settings:
+N01--N28 (only the windows W1, W3 and W6) and A01--A40 (all windows and both doors); 52 are for training and 16 for testing.
+The settings are drawn by the small program \texttt{scenarios\_v4.py}. The choice of the settings is described in \cref{ch:room}. Everything that follows is done for the names in this
+file. Two older files, \texttt{scenarios.txt} and \texttt{scenarios\_v2.txt}, are the first and the second setup; each file
+says in its first line which setup it is.
+
+\begin{lstlisting}[breaklines=true,postbreak=\space]
+cd experiments/gnot_openfoam_rans
+python3 scenarios_v4.py        # writes scenarios_v4.txt
+\end{lstlisting}
+
+
+\section{Step 2: the airflow (OpenFOAM)}
+\textbf{In:} the name of one setting and the number of cores. \textbf{Out:} a folder \texttt{cases/\allowbreak <name>ws1\_\allowbreak dx0.08} with the
+air velocity saved over time, and an empty file \texttt{done} when everything has finished.
+
+The script first lets \texttt{make\_rans\_case.py} write the OpenFOAM case for this setting: the room, the $k$-$\omega$ SST
+turbulence model, the cells of 8~cm, and the seated people as the source of CO$_2$. Then \texttt{run\_rans\_case.sh} makes the
+mesh (\texttt{blockMesh}, the columns are cut out of the room, the windows and doors become boundary patches, the seating
+zone is marked), checks it with \texttt{checkMesh}, splits it over the cores, runs the solver \texttt{pimpleFoam} and joins the
+result again. The first 150~s are saved every second, because this is the real start-up of the flow. Then the script
+\texttt{continue\_case.sh} continues the same run up to 600~s and saves every 10~s. The first part is marked with the file
+\texttt{done150}, and the whole case with \texttt{done}. If the script is started again, it skips what is finished and
+continues a stopped run where it stopped. This is the longest step: 15--90 hours on one core for 600~s (measured), 2.7 times
+faster on 4 cores (see \cref{ch:notused}). The room, the mesh and the boundary conditions are described in
+\cref{ch:room}. The command for one setting on 4 cores:
+
+\begin{lstlisting}[breaklines=true,postbreak=\space]
+cd experiments/co2_sampling
+bash run_full_case.sh N01 4            # writes cases/N01ws1_dx0.08/ and the file done
+TRACE=1 bash run_full_case.sh N01 4     # the same, with every command in the log (if it stops without a message)
+\end{lstlisting}
+
+
+\section{Step 3: the CO$_2$ on the GPU}
+\textbf{In:} the case folder of step 2. \textbf{Out:} the file \texttt{data\_v4/<name>.npz}.
+
+OpenFOAM gives the air velocity, and my own CO$_2$ solver (\texttt{fv\_cons.py}, written in PyTorch) computes from it how the CO$_2$ moves.
+It uses the real flow for the first 150~s and then the mean flow of the time from 150 to 600~s. It computes 30~minutes and
+saves the CO$_2$ in the whole room every 30~s. The program also compares its CO$_2$ with the CO$_2$ that OpenFOAM computed itself,
+at 150~s and at 600~s, as a check. One setting takes 1.25--4 hours on the GPU. The file also has the window settings, because
+the model needs them as input. Why the \cotwo{} is computed separately, why the flow is saved every second for the first 150~s
+and why the mean flow is used afterwards, is explained in \cref{ch:dataset}.
+
+The first 28 settings (N01--N28) were made in two stages, because I found the problem of the save interval only after the first
+dataset (\cref{ch:dataset}, section ``The corrected dataset''). First OpenFOAM ran for 600~s with a save every 10~s
+(\texttt{run\_batch.sh}) and the first dataset was built from it. Then OpenFOAM ran again for the first 150~s with a save every
+second, and \texttt{build\_v3.py} built the corrected dataset: the real flow for 0--150~s, then the mean flow of the first
+dataset. The method is the same as in \texttt{build\_v4.py}. The settings A01--A40 were run in one go with
+\texttt{run\_full\_case.sh}, because the problem was already known.
+
+The command for one setting (it builds the dataset file and, in the same call, the transition file of step 4):
+
+\begin{lstlisting}[breaklines=true,postbreak=\space]
+cd experiments/co2_sampling
+python3 build_v4.py --name A01 --case cases/A01ws1_dx0.08 --out data_v4 \
+    --scen ../gnot_openfoam_rans/scenarios_v4.txt --trans-out data_transitions_v4
+\end{lstlisting}
+
+
+\section{Step 4: the transition files}
+\textbf{In:} the file of step 3 and the file of a second setting (the ``partner'', drawn from all 68 settings with a fixed
+random seed). \textbf{Out:} the file \texttt{data\_transitions\_v4/<name>.npz}.
+
+The transition runs are explained in \cref{ch:model}. As in the paper, a transition run starts from the CO$_2$ of another setting: the window setting is changed, the people are
+switched off, and the new flow carries the CO$_2$ away. The program takes the 30-minute CO$_2$ of the partner as the start and lets
+my CO$_2$ solver run on the flow of this setting. The result is the kind of data the model has to learn: how the CO$_2$ changes
+after the windows have changed. The CO$_2$ equation is linear, so the number of people can be chosen freely when the model
+is trained. This step needs only the dataset files, no OpenFOAM case, and takes minutes. The script \texttt{collect\_v4.sh} does
+steps 3 and 4 automatically for all finished cases, which is useful when the cases ran on several computers. The transition file alone (the dataset files already exist):
+
+\begin{lstlisting}[breaklines=true,postbreak=\space]
+python3 build_v4.py --name A01 --out data_v4 --scen ../gnot_openfoam_rans/scenarios_v4.txt \
+    --trans-out data_transitions_v4 --only-transition
+\end{lstlisting}
+
+
+\section{Step 5: training the model}
+\textbf{In:} the transition files, the file \texttt{scenarios\_v4.txt} (it says which setting is for training and which for
+testing). \textbf{Out:} the folder \texttt{checkpoints/<tag>/} with the five trained networks \texttt{member0.pth} to \texttt{member4.pth}.
+
+The model and its input are described in \cref{ch:model}. The program cuts the transition files into samples: the CO$_2$ maps of 6~minutes (12 maps) go in, the maps of the next
+3~minutes (6 maps) come out. The final model is trained with the options \texttt{-{}-transitions -{}-open-flags -{}-pad-prob 0.9
+-{}-tau -{}-iters 40000 -{}-z 1.6 -{}-c-offset 400}. They mean: use the transition files, give the model the open windows and
+doors as extra input, let 90~\% of the samples have a window change inside the 6~minutes (and tell the model the time since
+this change), train 40,000 steps, use the maps at 1.6~m height and add the 400~ppm of the outdoor air. A network needs about
+38~minutes on an RTX A2000, and the five networks are averaged. The program prints the error on the 16 test settings at the
+end. It does not overwrite old results: a \texttt{<tag>} that is already used stops the program. The command of the final model:
+
+\begin{lstlisting}[breaklines=true,postbreak=\space]
+cd experiments/gnot_openfoam_rans
+python3 train_forecast.py --data-dir data_transitions_v4 --transitions \
+    --scenarios scenarios_v4.txt --tag v4_tr_tau09_long --z 1.6 --c-offset 400 \
+    --open-flags --pad-prob 0.9 --tau --iters 40000
+\end{lstlisting}
+
+
+\section{Step 6: testing the model}
+\textbf{In:} the folder of the networks and the transition files. \textbf{Out:} printed errors (and pictures).
+
+The results are in \cref{ch:results} (the window change inside the history in \cref{sec:winchange}).
+\texttt{eval\_history\_change.py} builds test samples in which the window setting changes inside the 6-minute history, because
+in a real room a window can be opened at any time. It prints the error of the model and of the simple guess that the CO$_2$ stays as
+it is now. \texttt{oracle\_mean\_bound.py} computes in about one minute what a simple mixing-box rule without any model can
+reach, as a reference. The small programs \texttt{test\_fv\_cons.py}, \texttt{test\_forecast.py} and \texttt{test\_sensors.py}
+test the solver and the models with small examples and run on a CPU in a few minutes. I run them first when I change the code.
+
+\begin{lstlisting}[breaklines=true,postbreak=\space]
+python3 eval_history_change.py --ckpt checkpoints/v4_tr_tau09_long --data-dir data_transitions_v4 \
+    --scenarios scenarios_v4.txt
+python3 oracle_mean_bound.py --data-dir data_transitions_v4 --scenarios scenarios_v4.txt
+python3 test_fv_cons.py && python3 test_forecast.py     # small tests, CPU, a few minutes
+\end{lstlisting}
+
+
+\section{Step 7: the sensor model}
+The sensor model is described in \cref{ch:sensors}. It forecasts the whole room from the 8 sensor stations only. It is trained on the \emph{same} transition files as
+the final model, and the simulated CO$_2$ at the station positions plays the role of the sensor values. The files have
+the following tasks.
+\begin{itemize}
+  \item \texttt{stations.py}: the 8 stations (6 windows, 2 doors) with their assumed positions.
+  \item \texttt{synthetic.py}: makes a sensor file in the format of the sensor server from one simulation file, with noise.
+  \item \texttt{readers.py}: reads such a file (server export, older CSV or database).
+  \item \texttt{mapper.py}: turns the records into the model input: 12 CO$_2$ values per station (6~minutes, every 30~s), the 8 window
+        speeds and the 2 door states.
+  \item \texttt{train\_sensor.py}: trains the sensor model (5 networks, noise of 10~ppm added to the station values) and
+        writes the networks to \texttt{sensors/checkpoints/<tag>/}.
+  \item \texttt{diagnose\_sensor.py}: prints the errors, also for the simple guesses (``stays as it is now'', ``the whole room at the
+        mean of the stations''), near and far from a station.
+  \item \texttt{sensor\_forecast.py}: the whole chain in one program: sensor file $\rightarrow$ reader $\rightarrow$ mapper $\rightarrow$ sensor model
+        $\rightarrow$ forecast of the whole room $\rightarrow$ the CO$_2$ at a point that I choose. It draws one overview picture.
+        When the real stations deliver data, only the first step (the reader of the file) changes.
+  \item \texttt{warning\_rules.py} and \texttt{lecture\_demo.py}: the warning at 700 and 800~ppm, and a synthetic lecture through the whole chain.
+\end{itemize}
+
+\begin{lstlisting}[breaklines=true,postbreak=\space]
+cd experiments/sensors
+python3 train_sensor.py --data-dir ../gnot_openfoam_rans/data_transitions_v4 --transitions \
+    --scenarios ../gnot_openfoam_rans/scenarios_v4.txt --tag my_run --noise 10
+python3 diagnose_sensor.py --data-dir ../gnot_openfoam_rans/data_transitions_v4 --transitions \
+    --scenarios ../gnot_openfoam_rans/scenarios_v4.txt --tag my_run
+python3 sensor_forecast.py --tag st_lecture --sim ../gnot_openfoam_rans/data_v4/N24.npz --xy 7.8 4.6
+\end{lstlisting}
+
+
+\section{Using the trained model}
+To forecast, the model needs the CO$_2$ maps of the last 6~minutes, the window speeds, the open windows and doors and the number
+of people (final model), or the station values, speeds and doors (sensor model). It returns the CO$_2$ of the next 3~minutes with an
+uncertainty. In the repository, the small folder \texttt{demo} contains the trained final model and one test setting (N14). The command
+\texttt{bash run\_demo.sh forecast}, in \texttt{experiments/\allowbreak gnot\_\allowbreak openfoam\_\allowbreak rans},
+runs the forecast, prints its error next to the error of the simple guess, and saves a picture. The command
+\texttt{bash run\_demo.sh openfoam} runs step 2 for one setting for only 20~s (about 10~minutes on 4 cores), as a test of the OpenFOAM
+installation. The two parts do not depend on each other.
+
+\begin{lstlisting}[breaklines=true,postbreak=\space]
+cd experiments/gnot_openfoam_rans
+bash setup_env.sh              # once: installs the packages, prints python OK and OpenFOAM OK
+bash run_demo.sh forecast        # forecast with the final model, error against "stays as it is now", picture
+bash run_demo.sh openfoam        # OpenFOAM, N01, 20 s, 4 cores
+\end{lstlisting}
+
+\section{Overview of the files}
 \begin{table}[h]
   \centering
-  \caption[Three levels to repeat the work.]{Three levels to repeat the work. The time of level 1 is measured on our lab
-  computer. The training time of level 2 is estimated from the times of the saved files, and the times of level 3 are rough
-  estimates.}
-  \label{tab:levels}
-  \small
-  \begin{tabular}{>{\raggedright\arraybackslash}p{1.9cm}>{\raggedright\arraybackslash}p{4.6cm}>{\raggedright\arraybackslash}p{3.0cm}>{\raggedright\arraybackslash}p{3.1cm}}
+  \caption[Files that go from step to step.]{Files that go from step to step. The times are the ones I measured, for one setting.}
+  \label{tab:flowfiles}
+  \footnotesize
+  \begin{tabular}{p{0.4cm}p{2.9cm}p{3.2cm}p{3.2cm}p{2.4cm}}
     \toprule
-    Level & What you do & You need & Time\\
+    & Script & Reads & Writes & Time\\
     \midrule
-    1. Demo & The final model forecasts one test setting (nothing is trained), and OpenFOAM runs one setting for 20~s
-      & Python; OpenFOAM v2412 for the OpenFOAM part & OpenFOAM part about 10~minutes on 4 cores; the forecast is short\\
-    2. Model only & Train the final model again from the \cotwo{} data of the 68 settings and test it
-      & a GPU; the data of the 68 settings (about 1~GB) & training about 3~hours (5 networks)\\
-    3. Full repeat & All 68 OpenFOAM simulations, then the \cotwo{} on the GPU, then the training
-      & many CPU cores and a GPU & several days of OpenFOAM, then more days for the \cotwo{}\\
+    1 & \texttt{scenarios\_\allowbreak v4.py} & -- & \texttt{scenarios\_\allowbreak v4.txt} & --\\
+    2 & \texttt{run\_\allowbreak full\_\allowbreak case.sh} & name of the setting & \texttt{cases/\allowbreak <name>ws1\_\allowbreak dx0.08} & 15--90~h, 1 core\\
+    3 & \texttt{build\_v4.py} & the case folder & \texttt{data\_v4/\allowbreak <name>.npz} & 1.25--4~h, GPU\\
+    4 & \texttt{build\_v4.py} \texttt{-{}-trans-out} & files of step 3 & \texttt{data\_\allowbreak transitions\_\allowbreak v4/\allowbreak <name>.npz} & minutes\\
+    5 & \texttt{train\_\allowbreak forecast.py} & transition files, settings & \texttt{checkpoints/\allowbreak <tag>/\allowbreak member0-4.pth} & 38~min per network\\
+    6 & \texttt{eval\_\allowbreak history\_\allowbreak change.py} & networks, transition files & printed errors & minutes\\
+    7 & \texttt{train\_\allowbreak sensor.py}, \texttt{diagnose\_\allowbreak sensor.py} & transition files, settings & \texttt{sensors/\allowbreak checkpoints/\allowbreak <tag>/}, printed errors & see \cref{ch:sensors}\\
     \bottomrule
   \end{tabular}
 \end{table}
 
-\noindent Level 1 is one command, \texttt{bash run\_demo.sh}, in the folder
-\texttt{experiments/\allowbreak gnot\_\allowbreak openfoam\_\allowbreak rans}. The
-trained model and one test setting are in the folder \texttt{demo}. The two parts of the demo do not depend on each
-other: the 20~s OpenFOAM run does not feed the model. The demo prints the error of the forecast and the error of the simple
-guess that the \cotwo{} stays as it is now, and it saves a picture of the forecast.
-
-\section{The steps of the full workflow}
-\tref{tab:steps} shows the steps of level 3 in the order in which I ran them. The commands with all options are in the
-\texttt{README.md}.
-
-\begin{table}[h]
-  \centering
-  \caption[Steps of the full workflow.]{Steps of the full workflow. The times are the ones I measured, for one setting.}
-  \label{tab:steps}
-  \small
-  \begin{tabular}{p{0.6cm}p{3.7cm}p{4.0cm}p{4.2cm}}
-    \toprule
-    & What happens & Script & Time\\
-    \midrule
-    1 & Describe the window settings: one line per setting (name, train or test, speeds at the 8 windows, doors)
-      & \texttt{scenarios\_v4.txt} & --\\
-    2 & Simulate the airflow with OpenFOAM (CPU)
-      & \texttt{run\_full\_case.sh} & 15--90~h on one core, 2.7 times faster on 4 cores\\
-    3 & Compute the \cotwo{} for 30~minutes on the GPU (dataset file)
-      & \texttt{build\_v4.py} & 1.25--4~h on the GPU\\
-    4 & Build the transition files (a run starts from the \cotwo{} of another setting)
-      & \texttt{build\_v4.py} (with \texttt{--trans-out}) & minutes\\
-    5 & Train the forecast model (5 networks)
-      & \texttt{train\_forecast.py} & about 38~min per network on an RTX A2000\\
-    6 & Test the model, also with a window change inside the history
-      & \texttt{train\_forecast.py}, \texttt{eval\_history\_change.py} & minutes\\
-    7 & Sensor model: train, test, warning
-      & \texttt{train\_sensor.py}, \texttt{diagnose\_sensor.py} & see \cref{ch:sensors}\\
-    \bottomrule
-  \end{tabular}
-\end{table}
-
-\noindent Step 2 needs OpenFOAM v2412 from openfoam.com. The versions from openfoam.org (12, 13, 14) are a different
-program and do not work with my cases. Steps 3 to 7 need Python with PyTorch (the packages are in
-\texttt{requirements.txt}) and a GPU. For the OpenFOAM part there is also a Docker image (the file \texttt{Dockerfile}).
-The data files and the trained networks are large and are not in the repository, except the small demo.
+\section{What is needed}
+Step 2 needs OpenFOAM v2412 from openfoam.com. The versions from openfoam.org (12, 13, 14) are a different program and do not
+work with my cases. The other steps need Python with PyTorch (the packages are in \texttt{requirements.txt}; \texttt{setup\_env.sh}
+installs them and checks that Python and OpenFOAM are found) and, for the CO$_2$ solver and the training, a GPU. For the
+OpenFOAM part there is also a Docker image (the file \texttt{Dockerfile}). The data files and the trained networks are large and are not
+in the repository, except the small demo.
 
 \section{Where I tested it}
-All steps run on our lab computer (Linux). The demo of level 1 was tested there in a clean copy of the repository. The
-OpenFOAM part also ran on a Mac and, in the Docker image, on a DGX Spark (the 20~s test of all 28 settings of the second
-setup).
+All steps run on our lab computer (Linux). The demo was tested there in a clean copy of the repository. The OpenFOAM part also ran on a
+Mac and, in the Docker image, on a DGX Spark (the 20~s test of all 28 settings of the second setup).
 
 \section{If something goes wrong}
 \begin{itemize}
@@ -87,3 +239,4 @@ setup).
         where it stopped.
   \item One finished case needs about 2--4~GB. For many settings it is best to run one setting per core.
 \end{itemize}
+\endgroup

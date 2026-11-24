@@ -101,10 +101,21 @@ As reference I use persistence, which says that the \cotwo{} stays as it is now.
 With the eight real stations the error is about 5 to 6\,\% in the definition of the paper (5.3 to 6.5\,\% on the
 three random splits). The error of the average \cotwo{} in the seating area is about 20 to 26~ppm, where the
 average level is about 520~ppm. In the stricter measure of \cref{ch:model}, which counts only the \cotwo{} above
-the outdoor level, the error over the plane at 1.6~m is about 32\,\% on the three random splits (44\,\% on the first
-split). For the model of the paper, which I reproduced, the same measure gives 29.8\,\% (\cref{ch:repro}). The sensor
+the outdoor level, the error over the plane at 1.6~m is about 32\,\% on the three random splits. For the model of the paper, which I reproduced, the same measure gives 29.8\,\% (\cref{ch:repro}). The sensor
 model has a larger error than the model with the full map (0.40\,\%), because the stations stand at the walls, where the
 air is mostly fresh, and they hardly see the middle of the room, where the people sit.
+
+\fref{fig:sensorN14} shows the sensor model for the test scenario N14, where the windows W1, W3 and W6 and door~1
+are open. The model only gets the \cotwo{} at the eight stations, which are the stars. The maps at the top show the
+\cotwo{} at 1.6~m height after 9~minutes. The forecast has the same shape as the simulation, and the difference is
+at most about 15~ppm. The average \cotwo{} in the seating area is forecast with a mean error of 0.5~ppm.
+
+\begin{figure}[htbp]
+  \centering
+  \includegraphics[width=\textwidth]{sensor_overview_N14.png}
+  \caption{Sensor model, test scenario N14: forecast of the \cotwo{} in the whole room from the eight stations.}
+  \label{fig:sensorN14}
+\end{figure}
 
 \tref{tab:compare} puts the numbers next to each other. Both definitions are shown, because the 400~ppm of outdoor
 air makes the errors in the definition of the paper much smaller. In the strict definition the paper does not give
@@ -165,11 +176,17 @@ to 0.87 at the other four places. The existing sensor stands next to the project
 \cotwo{} plus noise; the real sensor will show how large its noise is.
 
 \section{Warning}
-\tref{tab:warning} shows the warning test on three random splits (58 real cases at 700~ppm and 33 at 800~ppm).
-Without a margin the model finds 71\,\% of the cases at 700~ppm and 70\,\% at 800~ppm. With a margin of 50~ppm it
-finds 91\,\% and 88\,\%, with more false alarms. The margin should not be chosen on the data it is tested on.
-When I chose it on two splits and counted on the third, the model found 88\,\% at 700~ppm and 79\,\% at 800~ppm.
-The best margin differs between the splits, so it has to be checked with real data.
+The warning answers one question: will the average \cotwo{} in the seating area pass 700~ppm (or 800~ppm) within the
+next 3~minutes? The model warns when its forecast reaches the limit minus a margin. The margin is a safety gap: with
+a margin of 50~ppm at the limit of 800~ppm, the model already warns when it forecasts 750~ppm. A case is a
+moment in a test scenario at which the \cotwo{} in the seating area really passes the limit within the next
+3~minutes. A false alarm is a warning at a moment without a real case.
+
+\tref{tab:warning} shows the result on three random splits, with 58 cases at 700~ppm and 33 at 800~ppm. Without a
+margin the model finds 71\,\% of the cases at 700~ppm and 70\,\% at 800~ppm. With a margin of 50~ppm it finds
+91\,\% and 88\,\%, but it also gives more false alarms. The margin should not be chosen on the same data that is
+tested. When I chose it on two splits and counted on the third, the model found 88\,\% at 700~ppm and 79\,\% at
+800~ppm. The best margin is different on each split, so it has to be checked again with real data.
 
 \begin{table}[h]
   \centering
@@ -191,16 +208,16 @@ The best margin differs between the splits, so it has to be checked with real da
 \end{table}
 
 The counts above are small, so I also counted every 30-second step of the test scenarios on the three random
-splits: 242 steps with a real case at 700~ppm and 1,870 without it, and 118 and 1,994 at 800~ppm. \tref{tab:rate}
-shows the share of the real cases that the model finds and the share of the other steps with a warning. Without a
-margin the model finds about 70\,\% of the cases and gives few false alarms. With a margin it finds about 87 to
-92\,\%, and the false alarms rise by about 2 to 3 percentage points. So for 20 more real cases found out of 100,
-about 2 to 3 more steps out of 100 have a false alarm.
-
-I also tried a rule that uses the disagreement between the five networks (forecast plus 1.5 times the spread). At
-700~ppm and 87\,\% found it has 2.6\,\% false alarms instead of 3.4\,\%. Everywhere else it was not better than
-the margin. The margins are chosen on the same samples that are counted, so these numbers are better than what to
-expect with new data.
+splits. A run of 30~minutes has 61 \cotwo{} maps, one every 30~s. One step needs 6~minutes of history and
+3~minutes of future, which are 18 maps, so a run gives $61-18+1=44$ steps (\cref{ch:dataset}). The 16 test
+scenarios of one split give $16\times44=704$ steps, and the three splits together give 2,112 steps. For each step I
+look at the simulation and check if the average \cotwo{} in the seating area passes the limit within the next
+3~minutes. At 700~ppm this is true in 242 steps, which are the real cases, and not true in the other 1,870 steps.
+At 800~ppm the numbers are 118 and 1,994. The model should warn in the first group and stay quiet in the second.
+\tref{tab:rate} shows the share of the real cases that the model finds and the share of the other steps
+with a false alarm. Without a margin the model finds about 70\,\% of the cases and gives few false alarms. With a
+margin it finds about 87 to 92\,\%, and the false alarms rise by about 2 to 3 percentage points. So for 20 more
+real cases found out of 100, about 2 to 3 more steps out of 100 have a false alarm.
 
 \begin{table}[h]
   \centering
@@ -221,18 +238,25 @@ expect with new data.
   \end{tabular}
 \end{table}
 
-In the real room, W5 and W8 stay closed. Many of my hard test scenarios open these windows. On the test
-scenarios in which they are closed, the error is about 5\,\% in the definition of the paper, and with a margin of 50~ppm
-the warning finds 92\,\% of the cases at 700~ppm and 87\,\% at 800~ppm.
+The margins in \tref{tab:rate} are chosen on the same samples that are counted, so these numbers are better than
+what to expect with new data.
 
-\fref{fig:lectures} shows the synthetic lecture described above for three test scenarios. N28 has the smallest
-forecast error, N23 has a typical error and N24 has the largest error. In N28 and N23 the \cotwo{} stays below
-700~ppm, and the model gives no warning and no false alarm. In N24 the warning for 700~ppm
-starts 3.5~minutes before the \cotwo{} passes this level, and the model found all 24 time steps with a real case,
-with one false alarm. The warning for 800~ppm comes although the \cotwo{} stays below it (the peak is
-769~ppm). This is the effect of the safety margin: the model warns from a forecast of 750~ppm, and the real peak
-is close to it. In N24 the forecast is too low while the students arrive and too high after some leave, because
-the model does not know the number of people.
+I also tried another rule instead of the margin. It looks at how much the five networks disagree and warns when
+the forecast plus 1.5 times this spread reaches the limit. At 700~ppm and 87\,\% found it has 2.6\,\% false alarms
+instead of 3.4\,\% with the margin. In all other cases it was not better than the margin.
+
+In the real room the windows W5 and W8 stay closed, but many of my hard test scenarios open them. In the test
+scenarios where they are closed, the error is about 5\,\% in the definition of the paper, and with a margin of
+50~ppm the warning finds 92\,\% of the cases at 700~ppm and 87\,\% at 800~ppm.
+
+\fref{fig:lectures} shows the synthetic lecture from above for three test scenarios. N28 has the smallest forecast
+error, N23 has a typical error and N24 has the largest error. In N28 and N23 the \cotwo{} stays below 700~ppm, and
+the model gives no warning and no false alarm. In N24 the warning for 700~ppm starts 3.5~minutes before the
+\cotwo{} passes this level. The model found all 24 time steps with a real case, with one false alarm. The warning
+for 800~ppm comes although the \cotwo{} stays below it (the peak is 769~ppm). This is the effect of the safety
+margin: the model warns from a forecast of 750~ppm, and the real peak is close to it. In N24 the forecast is too
+low while the students arrive and too high after some leave. A likely reason is that the model does not know the
+number of people.
 
 \begin{figure}[p]
   \centering
@@ -272,7 +296,7 @@ not have.
     N19 & 486 & 14.4 & 5.4 & none\\
     N20 & 474 & 21.9 & 4.4 & none\\
     N23 & 625 & 17.5 & 16.4 & none\\
-    N24 & 769 & 38.6 & 26.8 & 700~ppm: 3.5~min before, 1 false alarm; 800~ppm: 16 false alarms\\
+    N24 & 769 & 38.6 & 26.8 & 700~ppm: 3.5~min before, 1 false alarm; 800~ppm: 16 false alarms (of 44 steps)\\
     N27 & 500 & 9.1 & 6.6 & none\\
     N28 & 482 & 6.8 & 5.0 & none\\
     A24 & 531 & 29.8 & 8.9 & none\\
@@ -297,16 +321,9 @@ not have.
         mistake that I fixed: outlet windows were treated as closed.
 \end{itemize}
 
-\section{Limits}
-\begin{itemize}
-  \item All results are from simulation. There is no real sensor data yet, and the number of people and the times
-        in the lecture are my assumptions.
-  \item My \cotwo{} data has a known limit after 150~s (\cref{ch:dataset}): the \cotwo{} is computed on the mean
-        flow, and it changes abruptly when the calculation switches to it. This shows up as small steps in the
-        lecture curve. The models learned on this data.
-  \item The test sets are small, with 16 scenarios per split, and neighbouring time steps are not independent. I
-        chose some settings on the first split, so I use the three random splits as the fairer numbers.
-  \item In the real room the windows are often only tilted in winter, and my simulations hardly cover so little
-        ventilation. The old data of the \cotwo{} sensor in the middle of the room show levels above 1000~ppm
-        much more often than my simulated scenarios.
-\end{itemize}
+\section{Next steps}
+All results of this chapter are from simulated data. The real stations do not deliver data yet.
+
+The next step is to use the data of the real stations. In winter the windows of the real room are often only tilted,
+and the old data of the \cotwo{} sensor in the middle of the room show levels above 1000~ppm much more often than
+my simulated scenarios. So I would add scenarios with tilted windows and little ventilation.
