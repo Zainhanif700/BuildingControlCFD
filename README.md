@@ -3,7 +3,7 @@
 <p align="center"><em>with a neural operator (GNOT), OpenFOAM simulations and sensor stations</em></p>
 
 <p align="center">
-  Version <b>v2026-11-24b</b> &nbsp;·&nbsp; updated <b>24 November 2026</b> &nbsp;·&nbsp; <a href="CHANGELOG.md">changelog</a> &nbsp;·&nbsp; <a href="thesis/Thesis.pdf">thesis (PDF)</a>
+  Version <b>v2026-11-24c</b> &nbsp;·&nbsp; updated <b>24 November 2026</b> &nbsp;·&nbsp; <a href="CHANGELOG.md">changelog</a> &nbsp;·&nbsp; <a href="thesis/Thesis.pdf">thesis (PDF)</a>
 </p>
 
 <p align="center">
@@ -33,7 +33,8 @@ copy is older than the top entry, download it again.
 
 | Version | Date | Main change |
 |---|---|---|
-| **v2026-11-24b** | 24 Nov 2026 | code cleanup: 18 obsolete scripts removed, experiment runners moved into `runs/` folders |
+| **v2026-11-24c** | 24 Nov 2026 | one-line setup comment in each scenario file; `compare_datasets.py` moved to `runs/` |
+| v2026-11-24b | 24 Nov 2026 | code cleanup: 18 obsolete scripts removed, experiment runners moved into `runs/` folders |
 | v2026-11-24 | 24 Nov 2026 | README redesigned; learning-curve script for the final setup |
 | v2026-11-23c | 23 Nov 2026 | simpler READMEs for the batch scripts, the dataset and the sensor code |
 | v2026-11-23b | 23 Nov 2026 | README shortened, "Start here" with the three levels |

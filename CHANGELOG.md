@@ -3,6 +3,12 @@
 Versions are named by their date, `vYYYY-MM-DD`. The newest entry is on top. A script that was changed has an
 "Updated" line with the date in its first lines. Older changes: `git log`.
 
+## v2026-11-24c (24 Nov 2026)
+- The three scenario files (`scenarios.txt`, `scenarios_v2.txt`, `scenarios_v4.txt`) now start with one line that says which
+  setup they are (first, second, final); the current pipeline uses `scenarios_v4.txt`. The scripts that write them
+  (`scenarios.py`, `scenarios_v2.py`, `scenarios_v4.py`) write the same line; the files are otherwise unchanged.
+- `compare_datasets.py` moved to `experiments/gnot_openfoam_rans/runs/` (`python3 runs/compare_datasets.py ...`).
+
 ## v2026-11-24b (24 Nov 2026)
 - Cleanup of `experiments/`: 18 obsolete scripts removed (pilot checks of the first phase, the old dataset batch scripts,
   one-off tests; they referred to pilot cases and folders that no longer exist). The tag `v2026-11-24` has them.

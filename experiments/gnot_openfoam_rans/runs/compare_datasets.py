@@ -1,13 +1,17 @@
 """
 Compares two dataset files of the same window setting (e.g. the same case with two OpenFOAM settings):
 mean flow, CO2 over the 30 min and on the breathing plane, as relative l2 differences.
-Usage: python3 compare_datasets.py data_v2/N12.npz data_check/N12mc2.npz
+Usage: python3 runs/compare_datasets.py data_v2/N12.npz data_check/N12mc2.npz
+Updated 2026-11-24: moved to runs/ (it was used for the comparison of the first and the corrected dataset).
 """
 import argparse
+import os
+import sys
 
 import numpy as np
 
-import common
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
+import common  # noqa: E402
 
 
 def rel(a, b):
