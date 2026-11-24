@@ -103,7 +103,7 @@ three random splits). The error of the average \cotwo{} in the seating area is a
 average level is about 520~ppm. In the stricter measure of \cref{ch:model}, which counts only the \cotwo{} above
 the outdoor level, the error over the plane at 1.6~m is about 32\,\% on the three random splits (44\,\% on the first
 split). For the model of the paper, which I reproduced, the same measure gives 29.8\,\% (\cref{ch:repro}). The sensor
-model is much worse than the model with the full map (0.40\,\%), because the stations stand at the walls, where the
+model has a larger error than the model with the full map (0.40\,\%), because the stations stand at the walls, where the
 air is mostly fresh, and they hardly see the middle of the room, where the people sit.
 
 \tref{tab:compare} puts the numbers next to each other. Both definitions are shown, because the 400~ppm of outdoor
@@ -132,8 +132,8 @@ and not as a direct comparison.
 
 I also tried to improve the sensor model. I used a longer history (12 and 20~minutes), spread the station values
 over the whole room, changed the loss, used smaller networks, added more noise and gave the model physical
-numbers such as the fresh-air flow. This gave no clear gain, at best about one percentage point. Training with
-more scenarios did not help either. The numbers of these tests are in Appendix~\ref{app:sensortests}.
+numbers such as the fresh-air flow. These changes gave at most about one percentage point. More training scenarios
+gave the same result. The numbers of these tests are in Appendix~\ref{app:sensortests}.
 
 \section{A sensor in the middle of the room}
 To test this, I added virtual sensors in the seating area to the simulation. \tref{tab:virtual} shows the result.
@@ -162,7 +162,7 @@ place hardly matters. A sensor in the middle, on the door side, on the window si
 area gave about the same result. Only one place on the blackboard side gave no gain. The \cotwo{} there follows the average of the
 seating area poorly: over all 68 scenarios the squared correlation with the seating average is 0.35, against 0.76
 to 0.87 at the other four places. The existing sensor stands next to the projector. The virtual sensors read the exact simulated
-\cotwo{} plus noise, so a real sensor can be less clean.
+\cotwo{} plus noise; the real sensor will show how large its noise is.
 
 \section{Warning}
 \tref{tab:warning} shows the warning test on three random splits (58 real cases at 700~ppm and 33 at 800~ppm).

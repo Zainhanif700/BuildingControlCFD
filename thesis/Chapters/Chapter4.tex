@@ -66,7 +66,7 @@ OpenFOAM computes the \cotwo{} itself on its own flow. I use this as the referen
 the outdoor level in the whole room (strict), and in the metric of \citet{bian2025}, which includes the
 400~ppm of the outdoor air and is evaluated on the planes at 1.1 and 1.6~m.
 
-In the first setup the checks showed two weaknesses: the total amount of \cotwo{} was not kept exactly, and
+In the first setup the checks showed two points to improve: the total amount of \cotwo{} was not kept exactly, and
 the mean flow mixed the \cotwo{} too little, because the averaging removes the fluctuations. After making the
 solver mass-conserving and using a turbulent Schmidt number of $\mathrm{Sc}_t=0.3$ instead of 0.7
 \citep{tominaga2007}, the difference in the paper's metric fell from 6--9\,\% to 1--4\,\%. In one scenario
@@ -162,9 +162,9 @@ Neither alternative works for both scenarios. In the fast scenario the fixed mea
 \cotwo{}, while the real, fluctuating flow flushes them. Repeating the real flow in a loop helps there, but in
 the calm scenario it is much worse, probably because the slow flow keeps changing and the first part is not
 typical for the later part. A turbulent Schmidt number of 0.7 is right while the real flow is used
-(1.9\,\% at 150~s instead of 25.6\,\% in N01), but with the mean flow 0.3 is better. I therefore keep the mean
-flow after 150~s and treat its error as a known limitation. The only way to remove it would be to simulate
-the full 30~minutes in OpenFOAM.
+(1.9\,\% at 150~s instead of 25.6\,\% in N01), but with the mean flow 0.3 is better. I therefore use the mean
+flow after 150~s, and \tref{tab:after150} shows its effect. The only way to remove this effect would be to
+simulate the full 30~minutes in OpenFOAM.
 
 \section{The corrected dataset}
 Based on these tests I rebuilt the dataset (data~v3) in the same way for all 28 scenarios:
