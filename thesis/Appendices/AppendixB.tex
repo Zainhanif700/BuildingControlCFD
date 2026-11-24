@@ -1,13 +1,14 @@
 \chapter{Details of the sensor tests}
 \label{app:sensortests}
 
-The errors in this appendix are all in the strict definition (\cref{ch:model}), because it shows the
-differences between settings better. The tests start from one basic setting: the eight real
-stations, 5,000 training steps and 3 networks. This setting has an error of 44.1\,\% on the first test split, and the
-changes in \tref{tab:tried} are compared with this value. The last column gives the difference to it in percentage
-points, and a minus sign means a lower error. The sensor in the middle of the room is not part of the basic setting,
-because its exact position is not known yet. I tested it as a virtual sensor in the simulation (last rows of the
-table). The reproduction of the paper has 29.8\,\% in this definition (see the end of this appendix).
+The errors in this appendix are given in the definition of the paper (first number) and in the strict
+definition (second number, \cref{ch:model}). The strict one shows the differences between settings better. The tests
+start from one basic setting: the eight real stations, 5,000 training steps and 3 networks. This setting has an
+error of about 6\,\% in the definition of the paper and 44.1\,\% in the strict definition on the first test split,
+and the changes in \tref{tab:tried} and \tref{tab:tried2} are compared with these values. A dash means that I did not
+measure the value. The sensor in the middle of the room is not part of the basic setting,
+because its exact position is not known yet. I tested it as a virtual sensor in the simulation (first rows of
+\tref{tab:tried}). The reproduction of the paper has 29.8\,\% in this definition (see the end of this appendix).
 
 Some settings need a short explanation:
 \begin{itemize}
@@ -26,24 +27,37 @@ Some settings need a short explanation:
 \section{What I tried}
 \begin{table}[h]
   \centering
-  \caption[Changes to the sensor model.]{Changes to the sensor model and the error above the outdoor level.}
+  \caption[Changes that helped.]{Changes to the sensor model that lowered the error (paper and strict definition).}
   \label{tab:tried}
   \small
-  \begin{tabular}{>{\raggedright}p{5.3cm}>{\raggedright}p{4.3cm}r}
+  \begin{tabular}{>{\raggedright}p{5.3cm}>{\raggedright}p{3.2cm}>{\raggedright\arraybackslash}p{4.4cm}}
     \toprule
-    Change & Result & Difference to 44.1\,\%\\
+    Change & Paper definition & Strict definition\\
     \midrule
-    Door 2 as the eighth station & 7 stations 44.2\,\%, 8 stations 44.5\,\% & none\\
-    Anchoring & 44.4\,\% & none\\
-    Longer station history (6, 12 and 20~min) & 40.9, 38.6 and 43.1\,\% & no trend\\
-    Shorter training & 44.1\,\% instead of 44.2 to 44.5\,\% & none\\
-    Relative loss & 38.8\,\% & $-5$ points\\
-    Relative loss and smaller network & 35.1\,\% & $-9$ points\\
-    More noise, station dropout, stronger weight decay & 39.7, 40.0 and 42.5\,\% & $-2$ to $-4$ points\\
-    Physics input & about 1 point better on all four splits & $-1$ point\\
-    One virtual sensor in the middle & 28.8\,\% & $-15$ points\\
-    Four virtual sensors & 27.7\,\% & $-16$ points\\
-    A grid of 16 virtual sensors & 21.3\,\% & $-23$ points\\
+    A grid of 16 virtual sensors & 3.6\,\% & 21.3\,\%\\
+    Four virtual sensors & 4.6\,\% & 27.7\,\%\\
+    One virtual sensor in the middle & 5.0\,\% & 28.8\,\%\\
+    Relative loss and smaller network & 6.0\,\% & 35.1\,\%\\
+    Relative loss & 6.0\,\% & 38.8\,\%\\
+    More noise, station dropout, stronger weight decay & -- & 39.7, 40.0 and 42.5\,\%\\
+    Physics input & 0.0 to 0.1 points better on three splits & about 1 point better on all four splits\\
+    \bottomrule
+  \end{tabular}
+\end{table}
+
+\begin{table}[h]
+  \centering
+  \caption[Changes without a clear effect.]{Other changes to the sensor model, which made no clear difference.}
+  \label{tab:tried2}
+  \small
+  \begin{tabular}{>{\raggedright}p{5.3cm}>{\raggedright}p{3.2cm}>{\raggedright\arraybackslash}p{4.4cm}}
+    \toprule
+    Change & Paper definition & Strict definition\\
+    \midrule
+    Door 2 as the eighth station & 7 stations 6.2\,\%, 8 stations 6.1\,\% & 7 stations 44.2\,\%, 8 stations 44.5\,\%\\
+    Anchoring & -- & 44.4\,\%\\
+    Longer station history (6, 12 and 20~min) & -- & 40.9, 38.6 and 43.1\,\%\\
+    Shorter training & -- & 44.1\,\% instead of 44.2 to 44.5\,\%\\
     \bottomrule
   \end{tabular}
 \end{table}
@@ -54,30 +68,37 @@ side gave no gain (43.2\,\%). Training with 13, 26, 39 and 52 scenarios gave 44.
 more scenarios of the same kind did not help.
 
 \section{Stability on four test splits}
-\begin{table}[h]
+\begin{table}[!htbp]
   \centering
-  \caption[Four test splits.]{Error above the outdoor level on four test splits. The first split is the fixed one,
-  the others are random.}
+  \caption[Four test splits.]{Error on four test splits (paper and strict definition). The first split is the fixed
+  one, the others are random.}
   \label{tab:splits}
-  \small
-  \begin{tabular}{lrrr}
+  \footnotesize
+  \setlength{\tabcolsep}{3pt}
+  \begin{tabular}{>{\raggedright}p{3.2cm}rrrrrr}
     \toprule
-    Test split & Default & Tuned & Tuned with physics input\\
+     & \multicolumn{2}{c}{Default} & \multicolumn{2}{c}{Tuned} & \multicolumn{2}{c}{Tuned with physics}\\
+    \cmidrule(lr){2-3}\cmidrule(lr){4-5}\cmidrule(lr){6-7}
+    Test split & Paper & Strict & Paper & Strict & Paper & Strict\\
     \midrule
-    First split & 44.1\,\% & 35.1\,\% & 34.8\,\%\\
-    Random split 1 & 32.3\,\% & 32.5\,\% & 30.7\,\%\\
-    Random split 2 & 30.4\,\% & 31.8\,\% & 31.7\,\%\\
-    Random split 3 & 32.3\,\% & 31.3\,\% & 30.2\,\%\\
-    Mean of the four & 34.8\,\% & 32.7\,\% & 31.8\,\%\\
+    First split & 6.3\,\% & 44.1\,\% & 6.0\,\% & 35.1\,\% & 6.1\,\% & 34.8\,\%\\
+    Random split 1 & 5.6\,\% & 32.3\,\% & 5.8\,\% & 32.5\,\% & 5.7\,\% & 30.7\,\%\\
+    Random split 2 & 5.3\,\% & 30.4\,\% & 5.7\,\% & 31.8\,\% & 5.7\,\% & 31.7\,\%\\
+    Random split 3 & 6.5\,\% & 32.3\,\% & 6.8\,\% & 31.3\,\% & 6.7\,\% & 30.2\,\%\\
+    Mean of random splits & 5.8\,\% & 31.7\,\% & 6.1\,\% & 31.9\,\% & 6.0\,\% & 30.9\,\%\\
+    Mean of the four & 5.9\,\% & 34.8\,\% & 6.1\,\% & 32.7\,\% & 6.1\,\% & 31.8\,\%\\
     \bottomrule
   \end{tabular}
 \end{table}
 
-On the random splits all settings reach about 30 to 32\,\%. So the first split was a hard one, and the gain of the
-tuning mostly does not repeat. When the tuned model is trained for 20,000 steps with 5 networks, the error is
-40.0\,\% instead of 35.1\,\%, because the model learns the training scenarios better the longer it trains. The
-model with the physics input is lower than the tuned model on all four splits, but only by about one point.
+On the random splits all settings reach 5.3 to 6.8\,\% in the definition of the paper and about 30 to 32\,\% in
+the strict definition. So the first split was a hard one, and the gain of the tuning mostly does not repeat on the
+random splits. When I train the tuned model for 20,000 steps with 5 networks, the error in the definition of the
+paper stays at 6.0\,\%, and the strict error is 40.0\,\% instead of 35.1\,\%. The model then fits the training
+scenarios better the longer it trains. In the definition of the paper the model with the physics input and the tuned
+model are within 0.1 points. In the strict definition the model with the physics input is lower than the tuned
+model on all four splits, but only by about one point.
 
-For comparison, my reproduction of the paper has 29.8\,\% on the test set in the same definition
-(\cref{ch:repro}), and the full-map model has 0.40\,\% (\cref{ch:results}). The problems are different, so these
-numbers are only for orientation.
+For comparison, my reproduction of the paper has 11.5\,\% on the test set in the definition of the paper and
+29.8\,\% in the strict definition (\cref{ch:repro}). The full-map model has 0.14\,\% and 0.40\,\%
+(\cref{ch:results}). The problems are different, so these numbers are only for orientation.

@@ -28,7 +28,9 @@ door as comes in through the windows. Without this correction \cotwo{} would be 
 
 Then it moves the \cotwo{} with the air. I use an upwind scheme with a limiter, which makes sure that the
 \cotwo{} never becomes negative and that the total amount only changes through the people and through the air
-that leaves the room. The mixing of the \cotwo{} is $D+\nu_t/\mathrm{Sc}_t$ as in \eref{eq:co2}.
+that leaves the room. The upwind scheme takes the \cotwo{} from the cell that the air comes from. The limiter keeps
+the result sharp without letting it overshoot, which is where negative values would come from. The mixing of the
+\cotwo{} is $D+\nu_t/\mathrm{Sc}_t$ as in \eref{eq:co2}.
 
 The solver goes forward in small time steps with a Runge--Kutta scheme with three stages. The time step is
 chosen so that the air moves at most half a cell in one step. Fresh air comes in with 0~ppm above the outdoor
@@ -42,15 +44,20 @@ I checked the solver with five tests (\tref{tab:solvertests}).
   \label{tab:solvertests}
   \begin{tabular}{>{\raggedright}p{7cm}>{\raggedright\arraybackslash}p{6.7cm}}
     \toprule
-    Test & Result\\
+    What I checked & Result\\
     \midrule
-    no flow: same result as my first \cotwo{} solver & largest difference 0\\
-    flow correction: divergence-free, and the air through the door equals the air through the windows
-      & largest relative divergence $1.2\times10^{-11}$; 2.8823 in and 2.8822 out
-        (expected 2.8822~m\textsuperscript{3}/s)\\
-    uniform \cotwo{} in a closed room with a swirling flow & stays uniform, largest deviation $4.5\times10^{-10}$\\
-    closed room with a source & \cotwo{} amount = start amount + added amount (ratio 1.0000)\\
-    no negative values (limiter) & smallest value $2.3\times10^{-3}$ in the test case\\
+    Without flow, the new solver gives the same \cotwo{} as my first solver
+      & The same result (largest difference 0)\\
+    After the flow correction, no air is created or lost in the room, and as much air goes out through the door as
+      comes in through the windows
+      & Air in 2.8823~m\textsuperscript{3}/s, air out 2.8822~m\textsuperscript{3}/s (expected 2.8822); the air balance is
+        correct to about $10^{-11}$\\
+    In a closed room with the same \cotwo{} everywhere, a swirling flow must not change anything
+      & The \cotwo{} stays the same everywhere (largest deviation $4.5\times10^{-10}$)\\
+    In a closed room with a \cotwo{} source, the \cotwo{} is the start amount plus what the source adds
+      & Ratio 1.0000\\
+    The \cotwo{} never becomes negative (limiter)
+      & The smallest value is $2.3\times10^{-3}$, so it stays above zero\\
     \bottomrule
   \end{tabular}
 \end{table}
@@ -62,9 +69,9 @@ negative values.
 
 \section{Checks against OpenFOAM}
 OpenFOAM computes the \cotwo{} itself on its own flow. I use this as the reference and compare it with my
-\cotwo{} at the last OpenFOAM time, in two ways: as the relative $\ell_2$ difference of the \cotwo{} above
-the outdoor level in the whole room (strict), and in the metric of \citet{bian2025}, which includes the
-400~ppm of the outdoor air and is evaluated on the planes at 1.1 and 1.6~m.
+\cotwo{} at the last OpenFOAM time, in two ways: in the metric of \citet{bian2025}, which includes the
+400~ppm of the outdoor air and is evaluated on the planes at 1.1 and 1.6~m, and as the relative $\ell_2$
+difference of the \cotwo{} above the outdoor level in the whole room (strict).
 
 In the first setup the checks showed two points to improve: the total amount of \cotwo{} was not kept exactly, and
 the mean flow mixed the \cotwo{} too little, because the averaging removes the fluctuations. After making the
@@ -94,10 +101,10 @@ height. The values 0.25 and 0.35 are both clearly better than 0.7, so I took 0.3
 
 \section{Reproducibility and simulated time}
 To check that the data can be reproduced, I simulated scenario N10 a second time
-and built its dataset again. The \cotwo{} of both runs differs by 1.1\,\% over all points and times, and by
-at most 0.15\,\% in the paper's metric. Using only the first 450~s of the OpenFOAM run instead of 600~s
-changes the \cotwo{} by 3.1\,\% (paper's metric at most 0.48\,\%) and would make the simulations about
-1.33 times faster.
+and built its dataset again. The \cotwo{} of both runs differs by at most 0.15\,\% in the paper's metric, and by
+1.1\,\% over all points and times (strict). Using only the first 450~s of the OpenFOAM run instead of 600~s
+changes the \cotwo{} by at most 0.48\,\% in the paper's metric (3.1\,\% strict) and would make the simulations
+about 1.33 times faster.
 
 \section{The save interval of the flow}
 Comparing all 28 scenarios with OpenFOAM's \cotwo{} showed large differences in some scenarios with high
@@ -141,18 +148,18 @@ which is the best that is possible with this solver.
 \begin{table}[h]
   \centering
   \caption[Methods for the time after 150~s.]{Methods for the time after 150~s (difference to OpenFOAM
-  at 450~s, in brackets the paper's metric at 1.1~m).}
+  at 450~s: the paper's metric at 1.1~m, in brackets the strict difference in the whole room).}
   \label{tab:after150}
   \small
   \begin{tabular}{>{\raggedright}p{8.2cm}rr}
     \toprule
     Method & N28 (fast) & N01 (calm)\\
     \midrule
-    10~s saves to 150~s, then mean flow, $\mathrm{Sc}_t=0.3$ (first dataset) & 106.9\,\% (3.4\,\%) & 32.8\,\% (10.1\,\%)\\
-    1~s saves to 150~s, then mean flow, $\mathrm{Sc}_t=0.3$ & 100.7\,\% (3.2\,\%) & 33.1\,\% (10.2\,\%)\\
-    1~s saves to 150~s, then mean flow, $\mathrm{Sc}_t=0.7$ & 143.6\,\% (5.6\,\%) & 35.2\,\% (11.9\,\%)\\
-    real flow to 300~s, then the 150--300~s flow in a loop, $\mathrm{Sc}_t=0.7$ & 42.2\,\% (1.5\,\%) & 76.0\,\% (31.6\,\%)\\
-    real flow to 450~s (upper limit), $\mathrm{Sc}_t=0.7$ & 1.9\,\% (0.1\,\%) & 1.4\,\% (0.3\,\%)\\
+    10~s saves to 150~s, then mean flow, $\mathrm{Sc}_t=0.3$ (first dataset) & 3.4\,\% (106.9\,\%) & 10.1\,\% (32.8\,\%)\\
+    1~s saves to 150~s, then mean flow, $\mathrm{Sc}_t=0.3$ & 3.2\,\% (100.7\,\%) & 10.2\,\% (33.1\,\%)\\
+    1~s saves to 150~s, then mean flow, $\mathrm{Sc}_t=0.7$ & 5.6\,\% (143.6\,\%) & 11.9\,\% (35.2\,\%)\\
+    real flow to 300~s, then the 150--300~s flow in a loop, $\mathrm{Sc}_t=0.7$ & 1.5\,\% (42.2\,\%) & 31.6\,\% (76.0\,\%)\\
+    real flow to 450~s (upper limit), $\mathrm{Sc}_t=0.7$ & 0.1\,\% (1.9\,\%) & 0.3\,\% (1.4\,\%)\\
     \bottomrule
   \end{tabular}
 \end{table}
@@ -173,8 +180,8 @@ Based on these tests I rebuilt the dataset (data~v3) in the same way for all 28 
   \item for 0--150~s my solver uses this flow with $\mathrm{Sc}_t=0.7$, as OpenFOAM;
   \item after 150~s it uses the mean flow of the first dataset with $\mathrm{Sc}_t=0.3$.
 \end{itemize}
-At 150~s the new dataset matches OpenFOAM's \cotwo{} within 1.0--2.2\,\% in the scenarios I have checked so far (paper's
-metric at most 0.1\,\%), compared with up to 45\,\% before.
+At 150~s the new dataset matches OpenFOAM's \cotwo{} within 0.1\,\% in the paper's metric and within 1.0--2.2\,\%
+in the strict measure in the scenarios I have checked so far, compared with up to 45\,\% (strict) before.
 
 \tref{tab:v3v2} shows how much the data changed. The differences are in the first minutes, when the fresh air
 spreads into the room. After about 10~minutes both datasets become the same, because they use the same mean

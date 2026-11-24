@@ -8,8 +8,8 @@ the outdoor level. The text says which is which. Persistence is the forecast tha
 \section{First setup}
 In the first setup the windows were opened in three groups, both doors were open and the mesh had 10~cm
 cells. I trained the model on the transition runs of 31 scenarios and tested it on the other 8. The test error
-is 0.11\,\% of the \cotwo{} above the outdoor level. Persistence has 0.39\,\%, so the model is about 4 times
-better. In the paper's metric the values are 0.01\,\% and 0.05\,\%. I also trained the model with only 5, 10
+is 0.01\,\% in the paper's metric, and persistence has 0.05\,\%. When only the \cotwo{} above the outdoor level
+counts, the values are 0.11\,\% and 0.39\,\%, so the model is about 4 times better. I also trained the model with only 5, 10
 and 20 of the training scenarios. \fref{fig:lc1} shows that the error goes down fast at the beginning and
 changes only a little between 20 and 31 scenarios.
 
@@ -43,12 +43,13 @@ maps show that the forecast and the simulation look the same, and the difference
 \section{Second setup}
 In the second setup the windows W1, W3 and W6 can be opened, and the mesh has 8~cm cells. There are 20
 scenarios for training and 8 for testing. With the first dataset and the transition runs the test error is
-0.61\,\% and persistence has 2.74\,\%, so the model is 4.5 times better. \tref{tab:lc} shows the test error
+0.240\,\% in the paper's metric and 0.61\,\% above the outdoor level, and persistence has 2.74\,\% above the
+outdoor level, so the model is 4.5 times better. \tref{tab:lc} shows the test error
 for fewer training scenarios. With 15 scenarios the result is almost the same as with 20.
 
 \begin{table}[h]
   \centering
-  \caption{Learning curve of the second setup.}
+  \caption{Learning curve of the second setup (error above the outdoor level).}
   \label{tab:lc}
   \begin{tabular}{lrrrr}
     \toprule
@@ -65,22 +66,22 @@ see what this means for the forecast, I trained the model two times in exactly t
 trained on the first dataset and model B on the corrected dataset. Then I tested both models on the test
 scenarios of both datasets.
 
-\tref{tab:ab} shows the result for the direct runs. On the corrected data model B has an error of 0.33\,\%
-and model A 0.37\,\%. Both are about 10 times better than persistence. On the first data both models are
-equally good.
+\tref{tab:ab} shows the result for the direct runs. On the corrected data model B has an error of 0.046\,\% in the
+paper's metric (0.33\,\% above the outdoor level) and model A 0.049\,\% (0.37\,\%). Both are about 9 to 10 times
+better than persistence. On the first data both models are equally good.
 
 \begin{table}[h]
   \centering
-  \caption[Models A and B, direct runs.]{Test error of models A and B for the direct runs (in brackets the
-  paper's metric).}
+  \caption[Models A and B, direct runs.]{Test error of models A and B for the direct runs in the paper's metric
+  (in brackets the error above the outdoor level).}
   \label{tab:ab}
   \begin{tabular}{lrr}
     \toprule
      & Tested on first data & Tested on corrected data\\
     \midrule
-    Model A (trained on first data) & 0.30\,\% (0.043\,\%) & 0.37\,\% (0.049\,\%)\\
-    Model B (trained on corrected data) & 0.30\,\% (0.044\,\%) & 0.33\,\% (0.046\,\%)\\
-    Persistence & 3.15\,\% (0.420\,\%) & 3.20\,\% (0.421\,\%)\\
+    Model A (trained on first data) & 0.043\,\% (0.30\,\%) & 0.049\,\% (0.37\,\%)\\
+    Model B (trained on corrected data) & 0.044\,\% (0.30\,\%) & 0.046\,\% (0.33\,\%)\\
+    Persistence & 0.420\,\% (3.15\,\%) & 0.421\,\% (3.20\,\%)\\
     \bottomrule
   \end{tabular}
 \end{table}
@@ -92,7 +93,7 @@ models are the same.
 \begin{table}[h]
   \centering
   \caption[Test error per test scenario.]{Test error per test scenario on the corrected data in \%
-  (direct runs).}
+  (direct runs, counting only the \cotwo{} above the outdoor level).}
   \label{tab:ab_cases}
   \footnotesize
   \begin{tabular}{lrrrrrrrr}
@@ -107,21 +108,21 @@ models are the same.
 \end{table}
 
 I did the same comparison with the transition runs (\tref{tab:abtr}). Here the difference between the two
-models is smaller. On the corrected data model B has 0.64\,\% and model A 0.67\,\%, and persistence has
-2.57\,\%. Model A on the first data gives 0.61\,\% again, the same value as in the section before.
+models is smaller. On the corrected data model B has 0.239\,\% in the paper's metric (0.64\,\% above the outdoor
+level) and model A 0.247\,\% (0.67\,\%), and persistence has 2.57\,\% above the outdoor level. Model A on the
+first data gives 0.240\,\% (0.61\,\%) again, the same value as in the section before.
 
 \begin{table}[h]
   \centering
-  \caption[Models A and B, transition runs.]{Test error of models A and B for the transition runs (in
-  brackets the paper's metric).}
+  \caption[Models A and B, transition runs.]{Test error of models A and B for the transition runs in the paper's
+  metric (in brackets the error above the outdoor level).}
   \label{tab:abtr}
   \begin{tabular}{lrr}
     \toprule
      & Tested on first data & Tested on corrected data\\
     \midrule
-    Model A (trained on first data) & 0.61\,\% (0.240\,\%) & 0.67\,\% (0.247\,\%)\\
-    Model B (trained on corrected data) & 0.60\,\% (0.235\,\%) & 0.64\,\% (0.239\,\%)\\
-    Persistence & 2.74\,\% & 2.57\,\%\\
+    Model A (trained on first data) & 0.240\,\% (0.61\,\%) & 0.247\,\% (0.67\,\%)\\
+    Model B (trained on corrected data) & 0.235\,\% (0.60\,\%) & 0.239\,\% (0.64\,\%)\\
     \bottomrule
   \end{tabular}
 \end{table}
@@ -161,8 +162,8 @@ of the paper, and about a quarter above the outdoor level. For the direct runs i
   \end{tabular}
 \end{table}
 
-The error depends little on the number of people. In the transition runs and counting only the \cotwo{} above the
-outdoor level, it is 0.71\,\% with 10 people (persistence 4.05\,\%) and 0.35\,\% with 80 people (persistence
+The model is better than persistence for different numbers of people. In the transition runs and counting only the
+\cotwo{} above the outdoor level, the error is 0.71\,\% with 10 people (persistence 4.05\,\%) and 0.35\,\% with 80 people (persistence
 1.51\,\%).
 
 \tref{tab:final_cases} shows the error of each test scenario. The model is better than persistence in all 16
@@ -202,6 +203,19 @@ still better (0.04 to 0.14\,\%).
     \bottomrule
   \end{tabular}
 \end{table}
+
+\fref{fig:finalN14} shows the final model for the test scenario N14. The windows W1, W3 and W6 are open and
+door~1 is open. The maps at the top show the \cotwo{} at 1.6~m height after 9~minutes. The forecast, which was
+made 3~minutes earlier, looks the same as the simulation, and the difference is less than 1~ppm. The two graphs
+below show the average \cotwo{} in the seating area and the \cotwo{} at four points over the whole run. The
+lines are the simulation and the dots are the forecasts. This figure was made with 40 people.
+
+\begin{figure}[htbp]
+  \centering
+  \includegraphics[width=\textwidth]{final_overview_N14.png}
+  \caption{Final model, test scenario N14: forecast of the \cotwo{} in the whole room.}
+  \label{fig:finalN14}
+\end{figure}
 
 In the second setup the test error was 0.61\,\% against 2.74\,\% for persistence (transition runs, counting only the
 \cotwo{} above the outdoor level). The test scenarios are different, so I do not compare the numbers directly, but
