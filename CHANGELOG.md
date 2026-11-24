@@ -3,6 +3,10 @@
 Versions are named by their date, `vYYYY-MM-DD`. The newest entry is on top. A script that was changed has an
 "Updated" line with the date in its first lines. Older changes: `git log`.
 
+## v2026-11-24
+- Added `experiments/gnot_openfoam_rans/run_learning_curve_v4.sh`: the learning curve of the final setup (same training
+  as the final model with 13, 26 and 39 of the 52 training settings, same 16 test settings).
+
 ## v2026-11-23c
 - `experiments/gnot_openfoam_rans/README_batch.md` rewritten in simpler words, with a table "Which script do I use?".
 - New short READMEs for the details that are no longer in the main README: `experiments/co2_sampling/README.md` (how the
