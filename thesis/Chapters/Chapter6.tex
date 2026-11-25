@@ -166,6 +166,21 @@ The model is better than persistence for different numbers of people. In the tra
 \cotwo{} above the outdoor level, the error is 0.71\,\% with 10 people (persistence 4.05\,\%) and 0.35\,\% with 80 people (persistence
 1.51\,\%).
 
+\fref{fig:lcfinal} shows the learning curve of the final model. I trained the model again with 13, 26 and 39 of
+the 52 training scenarios and tested it on the same 16 test scenarios. In the definition of the paper the error is
+0.21\,\% with 13 scenarios, 0.15\,\% with 26 and 0.14\,\% with 39. With all 52 scenarios it is also 0.14\,\%, and
+persistence has 0.44\,\%. Counting only the \cotwo{} above the outdoor level, the error is 0.63\,\%, 0.46\,\%,
+0.41\,\% and 0.40\,\% (persistence 1.77\,\%). So the model is better than persistence already with 13 scenarios,
+and from 39 scenarios on more scenarios change little.
+
+\begin{figure}[htbp]
+  \centering
+  \includegraphics[width=0.95\textwidth]{learning_curve_final.png}
+  \caption{Learning curve of the final model: test error in the definition of the paper (left) and counting only
+  the \cotwo{} above the outdoor level (right).}
+  \label{fig:lcfinal}
+\end{figure}
+
 \tref{tab:final_cases} shows the error of each test scenario. The model is better than persistence in all 16
 scenarios, in both kinds of runs. The weakest case is N24, where only W3 is open with 0.55~m/s and door~1 is open
 (3.48\,\% against 5.31\,\% for persistence in the transition runs, counting only the \cotwo{} above the outdoor
